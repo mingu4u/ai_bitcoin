@@ -786,7 +786,7 @@ if __name__ == "__main__":
             trading_in_progress = True
             ai_trading()
         except Exception as e:
-            logger.error(f"An error occured: {e}")
+            logger.error(f"An error occured from job: {e}")
         finally:
             trading_in_progress = False
 
@@ -794,11 +794,10 @@ if __name__ == "__main__":
     # job()
 
 
-
-while True:
-    try:
-        job()
-        time.sleep(60 * 10)  # 2분마다 실행
-    except Exception as e:
-        logger.error(f"An error occurred: {e}")
-        time.sleep(60 * 3)  # 오류 발생 시 30초 후 재시도
+    while True:
+        try:
+            job()
+            time.sleep(60 * 10)  # 2분마다 실행
+        except Exception as e:
+            logger.error(f"An error occurred from while: {e}")
+            time.sleep(60 * 3)  # 오류 발생 시 30초 후 재시도
