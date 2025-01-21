@@ -102,3 +102,4 @@ wsproto
 youtube-transcript-api==0.6.3
 zope.event==5.0
 zope.interface==7.2
+schedule
