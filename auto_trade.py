@@ -775,7 +775,7 @@ if __name__ == "__main__":
 while True:
     try:
         job()
-        time.sleep(60 * 2)  # 2분마다 실행
+        time.sleep(60 * 10)  # 10분마다 실행
     except Exception as e:
         logger.error(f"An error occurred: {e}")
-        time.sleep(60)  # 오류 발생 시 30초 후 재시도
+        time.sleep(60 * 3)  # 오류 발생 시 3분 후 재시도
