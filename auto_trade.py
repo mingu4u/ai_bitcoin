@@ -50,6 +50,29 @@ class TradingDecision(BaseModel):
     percentage: int
     reason: str
 
+# DataFrame을 안전하게 JSON으로 변환하는 함수 추가
+def prepare_dataframe_for_json(df):
+    """DataFrame을 안전하게 JSON으로 변환"""
+    try:
+        # datetime 인덱스를 문자열로 변환
+        df.index = df.index.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # NaN 값을 None으로 변환
+        df = df.where(pd.notnull(df), None)
+        
+        # DataFrame을 records 형식의 리스트로 변환
+        records = []
+        for idx, row in df.iterrows():
+            record = {'datetime': idx}
+            for column in df.columns:
+                record[column] = row[column]
+            records.append(record)
+            
+        return records
+    except Exception as e:
+        logger.error(f"Error converting DataFrame to JSON: {e}")
+        return []
+
 # SQLite 데이터베이스 초기화 함수 - 거래 내역을 저장할 테이블을 생성
 def init_db():
     conn = sqlite3.connect('bitcoin_trades.db')
@@ -636,11 +659,11 @@ def ai_trading():
                             {
                                 "type": "text",
                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
-                Orderbook: {json.dumps(orderbook)}
-                Daily OHLCV with indicators (30 days): {df_daily.to_json()}
-                Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
-                Recent news headlines: {json.dumps(news_headlines)}
-                Fear and Greed Index: {json.dumps(fear_greed_index)}"""
+                                        Orderbook: {json.dumps(orderbook)}
+                                        Daily OHLCV with indicators (30 days): {json.dumps(prepare_dataframe_for_json(df_daily))}
+                                        Hourly OHLCV with indicators (24 hours): {json.dumps(prepare_dataframe_for_json(df_hourly))}
+                                        Recent news headlines: {json.dumps(news_headlines)}
+                                        Fear and Greed Index: {json.dumps(fear_greed_index)}"""
                             },
                             {
                                 "type": "image_url",
@@ -775,7 +798,7 @@ if __name__ == "__main__":
 while True:
     try:
         job()
-        time.sleep(60 * 10)  # 10분마다 실행
+        time.sleep(60 * 10)  # 2분마다 실행
     except Exception as e:
         logger.error(f"An error occurred: {e}")
-        time.sleep(60 * 3)  # 오류 발생 시 3분 후 재시도
+        time.sleep(60 * 3)  # 오류 발생 시 30초 후 재시도
