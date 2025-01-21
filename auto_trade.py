@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from openai import OpenAI
 import sqlite3
 from datetime import datetime, timedelta
+import pickle
 
 class TradingDecision(BaseModel):
     decision: str
@@ -184,11 +185,21 @@ def get_bitcoin_news():
 def setup_chrome_options():
     chrome_options = Options()
     chrome_options.add_argument("--start-maximized")
-    chrome_options.add_argument("--headless")  # 디버깅을 위해 헤드리스 모드 비활성화
+    chrome_options.add_argument("--headless=new")  # 디버깅을 위해 헤드리스 모드 비활성화
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
+
+    # WebGL 경고 메시지 제거를 위한 추가 옵션들
+    chrome_options.add_argument("--enable-unsafe-webgl")
+    chrome_options.add_argument("--enable-unsafe-swiftshader")
+    chrome_options.add_argument('--disable-web-security')
+    chrome_options.add_argument('--allow-running-insecure-content')
+    chrome_options.add_argument('--disable-software-rasterizer')
+
+    # 로깅 레벨 조정
+    chrome_options.add_argument('--log-level=3')
     return chrome_options
 
 def create_driver():
@@ -196,6 +207,54 @@ def create_driver():
     service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=setup_chrome_options())
     return driver
+
+def check_login_status(driver):
+    """로그인 상태 확인"""
+    try:
+        WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.CLASS_NAME, "logged-in-user-menu-button")))
+        return True
+    except:
+        return False
+
+def load_cookies(driver, filename="tradingview_cookies.pkl"):
+   """쿠키 로드"""
+   # 현재 작업 디렉토리에서 파일 로드
+   current_dir = os.getcwd()
+   file_path = os.path.join(current_dir, filename)
+   
+   if os.path.exists(file_path):
+       with open(file_path, 'rb') as cookiesfile:
+           cookies = pickle.load(cookiesfile)
+           for cookie in cookies:
+               driver.add_cookie(cookie)
+       print(f"쿠키를 로드했습니다: {file_path}")
+       return True
+   print(f"쿠키 파일을 찾을 수 없습니다: {file_path}")
+   return False
+
+def login_with_cookies():
+    try:
+        driver = create_driver()
+        cookies_path = "my_cookies.pkl"
+        
+        # 먼저 도메인에 접속 (쿠키 설정을 위해 필요)
+        driver.get("https://www.tradingview.com/accounts/signin/")
+        time.sleep(2)
+        
+        # 저장된 쿠키가 있다면 로드
+        if load_cookies(driver, cookies_path):
+            driver.refresh()  # 쿠키 적용을 위한 새로고침
+            time.sleep(3)
+            
+            # 로그인 상태 확인
+            if check_login_status(driver):
+                logger.info("쿠키를 통한 로그인 성공")
+                return driver
+        return driver
+        
+    except Exception as e:
+        print(f"로그인 중 예외 발생: {e}")  # logger 대신 print 사용
+        return None
 
 def click_element_by_xpath(driver, xpath, element_name, wait_time=10):
     try:
@@ -229,11 +288,19 @@ def perform_chart_actions(driver):
     )
     
     # 1시간 옵션 선택
+    # click_element_by_xpath(
+    #     driver,
+    #     "/html/body/div[1]/div[2]/div[3]/span/div/div/div[1]/div/div/cq-menu[1]/cq-menu-dropdown/cq-item[8]",
+    #     "1시간 옵션"
+    # )
+
+    # 5분 옵션 선택
     click_element_by_xpath(
         driver,
-        "/html/body/div[1]/div[2]/div[3]/span/div/div/div[1]/div/div/cq-menu[1]/cq-menu-dropdown/cq-item[8]",
-        "1시간 옵션"
+        "/html/body/div[1]/div[2]/div[3]/span/div/div/div[1]/div/div/cq-menu[1]/cq-menu-dropdown/cq-item[4]",
+        "5분 옵션"
     )
+
     
     # 지표 메뉴 클릭
     click_element_by_xpath(
@@ -249,7 +316,50 @@ def perform_chart_actions(driver):
         "볼린저 밴드 옵션"
     )
 
-def capture_and_encode_screenshot(driver):
+    # 지표 메뉴 클릭
+    click_element_by_xpath(
+        driver,
+        "/html/body/div[1]/div[2]/div[3]/span/div/div/div[1]/div/div/cq-menu[3]",
+        "지표 메뉴"
+    )
+
+
+    # 스크롤 컨테이너 찾기
+    # logger.info("스크롤 컨테이너 찾는 중...")
+    scroll_container = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "cq-scroll"))
+    )
+
+    # Volume OSC 찾을 때까지 천천히 스크롤
+    # print("Volume OSC 찾는 중...")
+    found = False
+    for i in range(15):  # 스크롤 시도 횟수 증가
+        driver.execute_script(
+            "arguments[0].scrollTop += 80;",  # 스크롤 간격 줄임
+            scroll_container
+        )
+        time.sleep(0.5)  # 대기 시간 증가
+        
+        try:
+            click_element_by_xpath(
+                driver,
+                "/html/body/div[1]/div[2]/div[3]/span/div/div/div[1]/div/div/cq-menu[3]/cq-menu-dropdown/cq-scroll/cq-studies/cq-studies-content/cq-item[108]",
+                "Vol OSC"
+            )
+            # print("Volume OSC 클릭 성공!")
+            found = True
+            # screenshot_path = os.path.join(os.getcwd(), "upbit_screenshot.png")
+            # driver.save_screenshot(screenshot_path)
+            # logger.info(f"업비트 스크린샷 저장 위치: {screenshot_path}")
+            break
+        except:
+            continue
+
+    if not found:
+        logger.info("Volume OSC를 찾지 못했습니다.")
+
+        
+def capture_and_encode_screenshot(driver, type, save="no"):
     try:
         # 스크린샷 캡처
         png = driver.get_screenshot_as_png()
@@ -262,7 +372,7 @@ def capture_and_encode_screenshot(driver):
         
         # 현재 시간을 파일명에 포함
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"upbit_chart_{current_time}.png"
+        filename = f"{type}_chart_{current_time}.png"
         
         # 현재 스크립트의 경로를 가져옴
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -271,8 +381,9 @@ def capture_and_encode_screenshot(driver):
         file_path = os.path.join(script_dir, filename)
         
         # 이미지 파일로 저장
-        img.save(file_path)
-        logger.info(f"스크린샷이 저장되었습니다: {file_path}")
+        if save == "yes":
+            img.save(file_path)
+            logger.info(f"스크린샷이 저장되었습니다: {file_path}")
         
         # 이미지를 바이트로 변환
         buffered = io.BytesIO()
@@ -324,26 +435,67 @@ def ai_trading():
     news_headlines = get_bitcoin_news()
 
     # 6. YouTube 자막 데이터 가져오기
-    youtube_transcript = get_combined_transcript("3XbtEX3jUv4")  # 여기에 실제 비트코인 관련 YouTube 영상 ID를 넣으세요
+    # youtube_transcript = get_combined_transcript("3XbtEX3jUv4")  # 여기에 실제 비트코인 관련 YouTube 영상 ID를 넣으세요
+
+    f = open("strategy.txt", "r", encoding="utf-8")
+    youtube_transcript = f.read()
+    f.close()
+
+    f2 = open("strategy2.txt", "r", encoding="utf-8")
+    youtube_transcript2 = f2.read()
+    f2.close()    
 
     # Selenium으로 차트 캡처
     driver = None
+    # try:
+    #     driver = create_driver()
+    #     driver.get("https://upbit.com/full_chart?code=CRIX.UPBIT.KRW-BTC")
+    #     logger.info("페이지 로드 완료")
+    #     time.sleep(30)  # 페이지 로딩 대기 시간 증가
+    #     logger.info("차트 작업 시작")
+    #     perform_chart_actions(driver)
+    #     logger.info("차트 작업 완료")
+    #     chart_image, saved_file_path = capture_and_encode_screenshot(driver)
+    #     logger.info(f"스크린샷 캡처 완료. 저장된 파일 경로: {saved_file_path}")
+    # except WebDriverException as e:
+    #     logger.error(f"WebDriver 오류 발생: {e}")
+    #     chart_image, saved_file_path = None, None
+    # except Exception as e:
+    #     logger.error(f"차트 캡처 중 오류 발생: {e}")
+    #     chart_image, saved_file_path = None, None
+    # finally:
+    #     if driver:
+    #         driver.quit()
     try:
         driver = create_driver()
+        
+        # Upbit 차트 캡처
         driver.get("https://upbit.com/full_chart?code=CRIX.UPBIT.KRW-BTC")
-        logger.info("페이지 로드 완료")
-        time.sleep(30)  # 페이지 로딩 대기 시간 증가
-        logger.info("차트 작업 시작")
+        logger.info("Upbit 페이지 로드 완료")
+        time.sleep(5)
+        logger.info("Upbit 차트 작업 시작")
         perform_chart_actions(driver)
-        logger.info("차트 작업 완료")
-        chart_image, saved_file_path = capture_and_encode_screenshot(driver)
-        logger.info(f"스크린샷 캡처 완료. 저장된 파일 경로: {saved_file_path}")
+        logger.info("Upbit 차트 작업 완료")
+        chart_image, saved_file_path = capture_and_encode_screenshot(driver, "upbit", save="no")
+        logger.info(f"Upbit 스크린샷 캡처 완료. 저장된 파일 경로: {saved_file_path}")
+        driver.quit()
+
+        # TradingView 차트 캡처
+        driver = login_with_cookies()
+        driver.get("https://kr.tradingview.com/chart/QYZJBUKS/?symbol=BITHUMB%3ABTCKRW")
+        logger.info("TradingView 페이지 로드 완료")
+        time.sleep(5)
+        chart_image2, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
+        logger.info(f"TradingView 스크린샷 캡처 완료. 저장된 파일 경로: {saved_file_path2}")
+        
     except WebDriverException as e:
         logger.error(f"WebDriver 오류 발생: {e}")
         chart_image, saved_file_path = None, None
+        chart_image2, saved_file_path2 = None, None
     except Exception as e:
         logger.error(f"차트 캡처 중 오류 발생: {e}")
         chart_image, saved_file_path = None, None
+        chart_image2, saved_file_path2 = None, None
     finally:
         if driver:
             driver.quit()
@@ -370,15 +522,27 @@ def ai_trading():
     reflection = generate_reflection(recent_trades, current_market_data)
     
     # AI 모델에 반성 내용 제공
+    # You are an expert in Bitcoin investing. Analyze the provided data and determine whether to buy, sell, or hold at the current moment. Consider the following in your analysis:
+                # - Technical indicators and market data
+                # - Recent news headlines and their potential impact on Bitcoin price
+                # - The Fear and Greed Index and its implications
+                # - Overall market sentiment
+                # - Patterns and trends visible in the chart image
+                # - Recent trading performance and reflection
+    
     response = client.chat.completions.create(
         model="gpt-4o-2024-08-06",
         messages=[
             {
                 "role": "system",
-                "content": f"""You are an expert in Bitcoin investing. Analyze the provided data and determine whether to buy, sell, or hold at the current moment. Consider the following in your analysis:
-
-                - Technical indicators and market data
-                - Recent news headlines and their potential impact on Bitcoin price
+                "content": f"""You are an expert Bitcoin day trader specializing in short-term trading based on 5-minute candlestick charts. Your trading style focuses on identifying quick market movements and opportunities using technical analysis on the 5-minute timeframe, while still considering wider market context. Analyze the provided data and determine whether to buy, sell, or hold at the current moment. Consider the following in your analysis
+                
+                - Technical indicators and market data, with primary focus on 5-minute chart patterns and movements
+                - Short-term price action and momentum
+                - Volume analysis on 5-minute timeframes
+                - Quick trend reversals and continuation patterns
+                - Support and resistance levels visible on 5-minute charts
+                - Recent news headlines and their immediate impact on Bitcoin price
                 - The Fear and Greed Index and its implications
                 - Overall market sentiment
                 - Patterns and trends visible in the chart image
@@ -391,6 +555,14 @@ def ai_trading():
 
                 {youtube_transcript}
 
+                You can also refer to the trading methods below to help you assess your current situation and make trading decisions.
+
+                {youtube_transcript2}
+
+                You can find the BlackFlag FTS and UT Bot Alerts indicators from the TradingView chart screenshot provided in the second image of the user message. 
+                and Volume Oscillator can be found in the upbit chart screenshot provided in the first image of the user message. 
+                These technical indicators are essential for following the trading strategy outlined above.
+
                 Based on this trading method, analyze the current market situation and make a judgment by synthesizing it with the provided data and recent performance reflection.
 
                 Response format:
@@ -398,7 +570,7 @@ def ai_trading():
                 2. If the decision is 'buy', provide a percentage (1-100) of available KRW to use for buying.
                 If the decision is 'sell', provide a percentage (1-100) of held BTC to sell.
                 If the decision is 'hold', set the percentage to 0.
-                3. Reason for your decision
+                3. Reason for your decision (it should include not only market situation and chart status, but also recent status or change of BlackFlag FTS, UT Bot Alerts, Volume Oscillator)
 
                 Ensure that the percentage is an integer between 1 and 100 for buy/sell decisions, and exactly 0 for hold decisions.
                 Your percentage should reflect the strength of your conviction in the decision based on the analyzed data."""
@@ -419,6 +591,12 @@ def ai_trading():
                         "type": "image_url",
                         "image_url": {
                             "url": f"data:image/png;base64,{chart_image}"
+                        }
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{chart_image2}"
                         }
                     }
                 ]
@@ -495,7 +673,7 @@ def ai_trading():
 while True:
     try:
         ai_trading()
-        time.sleep(3600 * 4)  # 4시간마다 실행
+        time.sleep(60 * 2)  # 2분마다 실행
     except Exception as e:
         logger.error(f"An error occurred: {e}")
-        time.sleep(300)  # 오류 발생 시 5분 후 재시도
+        time.sleep(60)  # 오류 발생 시 30초 후 재시도
