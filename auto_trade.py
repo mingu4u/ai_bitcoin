@@ -50,29 +50,6 @@ class TradingDecision(BaseModel):
     percentage: int
     reason: str
 
-# DataFrame을 안전하게 JSON으로 변환하는 함수 추가
-def prepare_dataframe_for_json(df):
-    """DataFrame을 안전하게 JSON으로 변환"""
-    try:
-        # datetime 인덱스를 문자열로 변환
-        df.index = df.index.strftime('%Y-%m-%d %H:%M:%S')
-        
-        # NaN 값을 None으로 변환
-        df = df.where(pd.notnull(df), None)
-        
-        # DataFrame을 records 형식의 리스트로 변환
-        records = []
-        for idx, row in df.iterrows():
-            record = {'datetime': idx}
-            for column in df.columns:
-                record[column] = row[column]
-            records.append(record)
-            
-        return records
-    except Exception as e:
-        logger.error(f"Error converting DataFrame to JSON: {e}")
-        return []
-
 # SQLite 데이터베이스 초기화 함수 - 거래 내역을 저장할 테이블을 생성
 def init_db():
     conn = sqlite3.connect('bitcoin_trades.db')
@@ -659,11 +636,11 @@ def ai_trading():
                             {
                                 "type": "text",
                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
-                                        Orderbook: {json.dumps(orderbook)}
-                                        Daily OHLCV with indicators (30 days): {json.dumps(prepare_dataframe_for_json(df_daily))}
-                                        Hourly OHLCV with indicators (24 hours): {json.dumps(prepare_dataframe_for_json(df_hourly))}
-                                        Recent news headlines: {json.dumps(news_headlines)}
-                                        Fear and Greed Index: {json.dumps(fear_greed_index)}"""
+                Orderbook: {json.dumps(orderbook)}
+                Daily OHLCV with indicators (30 days): {df_daily.to_json()}
+                Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
+                Recent news headlines: {json.dumps(news_headlines)}
+                Fear and Greed Index: {json.dumps(fear_greed_index)}"""
                             },
                             {
                                 "type": "image_url",
@@ -786,7 +763,7 @@ if __name__ == "__main__":
             trading_in_progress = True
             ai_trading()
         except Exception as e:
-            logger.error(f"An error occured from job: {e}")
+            logger.error(f"An error occured: {e}")
         finally:
             trading_in_progress = False
 
@@ -794,10 +771,26 @@ if __name__ == "__main__":
     # job()
 
 
+    # 활발한 거래 시간대 (21:00-02:00): 10분 간격
+    for hour in [21, 22, 23, 0, 1]:
+        for minute in range(0, 60, 10):
+            schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
+    
+    # 02:00에 마지막 실행
+    schedule.every().day.at("02:00").do(job)
+
+    # 나머지 시간대 (02:30-20:30): 30분 간격
+    for hour in range(2, 21):
+        for minute in [30, 0]:
+            if hour == 2 and minute == 0:  # 02:00는 이미 추가되었으므로 스킵
+                continue
+            schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
+    
+    # 20:30 마지막 실행 후 21:00부터 다시 시작
+    schedule.every().day.at("20:30").do(job)
+
+    # 스케줄러 실행
     while True:
-        try:
-            job()
-            time.sleep(60 * 10)  # 2분마다 실행
-        except Exception as e:
-            logger.error(f"An error occurred from while: {e}")
-            time.sleep(60 * 3)  # 오류 발생 시 30초 후 재시도
+        schedule.run_pending()
+        time.sleep(1)
+        
