@@ -17,7 +17,7 @@ def load_data():
 
 # 메인 함수
 def main():
-    st.title('Bitcoin Trades Viewer')
+    st.title("Ming9's Bitcoin Trading AI BOT!! 😊")
 
     # 데이터 로드
     df = load_data()
