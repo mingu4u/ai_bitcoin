@@ -773,43 +773,43 @@ if __name__ == "__main__":
 
     logger.info("Hello, Mingu !!")
     logger.info("Starting trading bot ...")
-    # try:
-
-    # 시작할 때도 크롬 프로세스 한번 정리
-    cleanup_chrome_processes()
-
-
-    # 프로그램 시작 시 핸들러 등록
-    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
-    signal.signal(signal.SIGTERM, signal_handler)  # 종료 시그널
-    atexit.register(cleanup_handler)              # 정상 종료 시
-
-
-    # 데이터베이스 초기화
-    init_db()
-
-
-    # 중복 실행 방지를 위한 변수
-    trading_in_progress = False
+    try:
     
-    # 트레이딩 작업을 수행하는 함수
-    def job():
-        global trading_in_progress
-        if trading_in_progress:
-            logger.warning("Trading job is already in progress, skipping this run ")
-            return
-        try:
-            trading_in_progress = True
-            ai_trading()
-        except Exception as e:
-            logger.error(f"An error occured: {e}")
-        finally:
-            trading_in_progress = False
+        # 시작할 때도 크롬 프로세스 한번 정리
+        cleanup_chrome_processes()
+    
+    
+        # 프로그램 시작 시 핸들러 등록
+        signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+        signal.signal(signal.SIGTERM, signal_handler)  # 종료 시그널
+        atexit.register(cleanup_handler)              # 정상 종료 시
+    
+    
+        # 데이터베이스 초기화
+        init_db()
+    
+    
+        # 중복 실행 방지를 위한 변수
+        trading_in_progress = False
+        
+        # 트레이딩 작업을 수행하는 함수
+        def job():
+            global trading_in_progress
+            if trading_in_progress:
+                logger.warning("Trading job is already in progress, skipping this run ")
+                return
+            try:
+                trading_in_progress = True
+                ai_trading()
+            except Exception as e:
+                logger.error(f"An error occured: {e}")
+            finally:
+                trading_in_progress = False
+    
+        ## 테스트용 바로 실행
+        # job()
 
-    ## 테스트용 바로 실행
-    job()
 
-'''
         # 활발한 거래 시간대 (21:00-02:00): 10분 간격
         for hour in [21, 22, 23, 0, 1]:
             for minute in range(0, 60, 10):
@@ -839,4 +839,3 @@ if __name__ == "__main__":
     finally:
         cleanup_chrome_processes()
 
-'''
