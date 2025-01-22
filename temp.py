@@ -1,3 +1,4 @@
+import sys
 import os
 from dotenv import load_dotenv
 import pyupbit
@@ -28,6 +29,9 @@ import sqlite3
 from datetime import datetime, timedelta
 import pickle
 import schedule
+import signal
+import atexit
+
 
 # .env 파일에 저장된 환경 변수를 불러오기 (API 키 등)
 load_dotenv()
@@ -57,6 +61,18 @@ def cleanup_chrome_processes():
         time.sleep(2)  # 프로세스들이 완전히 종료되기를 기다림
     except Exception as e:
         logger.error(f"Chrome processes cleanup failed: {e}")
+
+# 종료 시 정리 작업을 수행하는 함수
+def cleanup_handler():
+    logger.info("Cleaning up chrome processes before exit...")
+    cleanup_chrome_processes()
+
+# 시그널 핸들러 함수
+def signal_handler(signum, frame):
+    logger.info(f"Signal {signum} received. Performing cleanup...")
+    cleanup_handler()
+    sys.exit(0)
+
 
 # SQLite 데이터베이스 초기화 함수 - 거래 내역을 저장할 테이블을 생성
 def init_db():
@@ -754,52 +770,71 @@ def ai_trading():
 
 # Main loop
 if __name__ == "__main__":
-    # 데이터베이스 초기화
-    init_db()
+
+    logger.info("Hello, Mingu !!")
+    logger.info("Starting trading bot ...")
+    try:
+
+        # 시작할 때도 크롬 프로세스 한번 정리
+        cleanup_chrome_processes()
 
 
-    # 중복 실행 방지를 위한 변수
-    trading_in_progress = False
-    
-    # 트레이딩 작업을 수행하는 함수
-    def job():
-        global trading_in_progress
-        if trading_in_progress:
-            logger.warning("Trading job is already in progress, skipping this run ")
-            return
-        try:
-            trading_in_progress = True
-            ai_trading()
-        except Exception as e:
-            logger.error(f"An error occured: {e}")
-        finally:
-            trading_in_progress = False
+        # 프로그램 시작 시 핸들러 등록
+        signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+        signal.signal(signal.SIGTERM, signal_handler)  # 종료 시그널
+        atexit.register(cleanup_handler)              # 정상 종료 시
 
-    ## 테스트용 바로 실행
-    job()
 
-'''
-    # 활발한 거래 시간대 (21:00-02:00): 10분 간격
-    for hour in [21, 22, 23, 0, 1]:
-        for minute in range(0, 60, 10):
-            schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
-    
-    # 02:00에 마지막 실행
-    schedule.every().day.at("02:00").do(job)
+        # 데이터베이스 초기화
+        init_db()
 
-    # 나머지 시간대 (02:30-20:30): 30분 간격
-    for hour in range(2, 21):
-        for minute in [30, 0]:
-            if hour == 2 and minute == 0:  # 02:00는 이미 추가되었으므로 스킵
-                continue
-            schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
-    
-    # 20:30 마지막 실행 후 21:00부터 다시 시작
-    schedule.every().day.at("20:30").do(job)
 
-    # 스케줄러 실행
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+        # 중복 실행 방지를 위한 변수
+        trading_in_progress = False
         
-'''
+        # 트레이딩 작업을 수행하는 함수
+        def job():
+            global trading_in_progress
+            if trading_in_progress:
+                logger.warning("Trading job is already in progress, skipping this run ")
+                return
+            try:
+                trading_in_progress = True
+                ai_trading()
+            except Exception as e:
+                logger.error(f"An error occured: {e}")
+            finally:
+                trading_in_progress = False
+
+        ## 테스트용 바로 실행
+        # job()
+
+
+        # 활발한 거래 시간대 (21:00-02:00): 10분 간격
+        for hour in [21, 22, 23, 0, 1]:
+            for minute in range(0, 60, 10):
+                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
+        
+        # 02:00에 마지막 실행
+        schedule.every().day.at("02:00").do(job)
+
+        # 나머지 시간대 (02:30-20:30): 30분 간격
+        for hour in range(2, 21):
+            for minute in [30, 0]:
+                if hour == 2 and minute == 0:  # 02:00는 이미 추가되었으므로 스킵
+                    continue
+                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
+        
+        # 20:30 마지막 실행 후 21:00부터 다시 시작
+        schedule.every().day.at("20:30").do(job)
+
+        # 스케줄러 실행
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
+            
+    except Exception as e:
+        logger.error(f"Critical error occurred: {e}")
+        cleanup_chrome_processes()
+    finally:
+        cleanup_chrome_processes()
