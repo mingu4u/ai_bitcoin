@@ -855,9 +855,9 @@ if __name__ == "__main__":
         while True:
             schedule.run_pending()
             time.sleep(1)
-        
-        except Exception as e:
-            logger.error(f"Critical error occurred: {e}")
-            cleanup_chrome_processes()
-        finally:
-            cleanup_chrome_processes()
+    
+    except Exception as e:
+        logger.error(f"Critical error occurred: {e}")
+        cleanup_chrome_processes()
+    finally:
+        cleanup_chrome_processes()
