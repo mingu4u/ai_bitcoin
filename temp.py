@@ -810,32 +810,54 @@ if __name__ == "__main__":
         # job()
 
 
-        # 활발한 거래 시간대 (21:00-02:00): 10분 간격
+    #     # 활발한 거래 시간대 (21:00-02:00): 10분 간격
+    #     for hour in [21, 22, 23, 0, 1]:
+    #         for minute in range(0, 60, 10):
+    #             schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
+        
+    #     # 02:00에 마지막 실행
+    #     schedule.every().day.at("02:00").do(job)
+
+    #     # 나머지 시간대 (02:30-20:30): 30분 간격
+    #     for hour in range(2, 21):
+    #         for minute in [30, 0]:
+    #             if hour == 2 and minute == 0:  # 02:00는 이미 추가되었으므로 스킵
+    #                 continue
+    #             schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
+        
+    #     # 20:30 마지막 실행 후 21:00부터 다시 시작
+    #     schedule.every().day.at("20:30").do(job)
+
+    #     # 스케줄러 실행
+    #     while True:
+    #         schedule.run_pending()
+    #         time.sleep(1)
+            
+    # except Exception as e:
+    #     logger.error(f"Critical error occurred: {e}")
+    #     cleanup_chrome_processes()
+    # finally:
+    #     cleanup_chrome_processes()
+
+        # 활발한 거래 시간대 (21:00-02:00): 30분 간격
         for hour in [21, 22, 23, 0, 1]:
-            for minute in range(0, 60, 10):
+            for minute in [0, 30]:
                 schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
         
         # 02:00에 마지막 실행
         schedule.every().day.at("02:00").do(job)
-
-        # 나머지 시간대 (02:30-20:30): 30분 간격
-        for hour in range(2, 21):
-            for minute in [30, 0]:
-                if hour == 2 and minute == 0:  # 02:00는 이미 추가되었으므로 스킵
-                    continue
-                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
         
-        # 20:30 마지막 실행 후 21:00부터 다시 시작
-        schedule.every().day.at("20:30").do(job)
-
+        # 나머지 시간대 (03:00-20:00): 1시간 간격
+        for hour in range(3, 21):
+            schedule.every().day.at(f"{hour:02d}:00").do(job)
+        
         # 스케줄러 실행
         while True:
             schedule.run_pending()
             time.sleep(1)
-            
-    except Exception as e:
-        logger.error(f"Critical error occurred: {e}")
-        cleanup_chrome_processes()
-    finally:
-        cleanup_chrome_processes()
-
+        
+        except Exception as e:
+            logger.error(f"Critical error occurred: {e}")
+            cleanup_chrome_processes()
+        finally:
+            cleanup_chrome_processes()
