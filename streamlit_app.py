@@ -84,8 +84,9 @@ def paginate_dataframe(df, page_size=30):
 def main():
     st.title("Ming9's Bitcoin Trading AI BOT!! 😊")
 
-    # 데이터 로드
+    # 데이터 로드 및 시간 역순 정렬
     df = load_data()
+    df = df.sort_values('timestamp', ascending=False).reset_index(drop=True)
 
     # 기본 통계
     st.header('Basic Statistics')
