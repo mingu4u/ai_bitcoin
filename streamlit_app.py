@@ -93,8 +93,8 @@ def main():
     st.write(f"Total number of trades: {len(df)}")
     st.write(f"First trade date: {df['timestamp'].min()}")
     st.write(f"Last trade date: {df['timestamp'].max()}")
-    st.write(f"Recent trade reflection: {df.loc[:,'reflection'].head(1)}")
-    
+    st.write(f"Recent trade reflection: ")
+    st.write(f"{df.loc[0,'reflection']}")   
     # 거래 내역 표시 (페이지네이션 적용)
     st.header('Trade History')
     
