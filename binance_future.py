@@ -751,10 +751,10 @@ def ai_trading():
     try:
         # TradingView 차트 캡처
         driver = login_with_cookies()
-        driver.get("https://kr.tradingview.com/chart/QYZJBUKS/?symbol=BITHUMB%3ABTCKRW")
+        driver.get("https://kr.tradingview.com/chart/QYZJBUKS/?symbol=BINANCE%3ABTCUSDT")
         logger.info("TradingView 페이지 로드 완료")
-        time.sleep(5)
-        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
+        time.sleep(3)
+        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="yes")
         logger.info(f"TradingView 스크린샷 캡처 완료.")
     except WebDriverException as e:
         logger.error(f"캡쳐시 WebDriver 오류 발생: {e}")
@@ -765,7 +765,7 @@ def ai_trading():
     finally:
         if driver:
             driver.quit()
-            cleanup_chrome_processes()
+            # cleanup_chrome_processes()
 
     ### AI에게 데이터 제공하고 판단 받기
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
