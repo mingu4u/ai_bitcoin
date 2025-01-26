@@ -93,7 +93,8 @@ def main():
     st.write(f"Total number of trades: {len(df)}")
     st.write(f"First trade date: {df['timestamp'].min()}")
     st.write(f"Last trade date: {df['timestamp'].max()}")
-
+    st.write(f"Recent trade reflection: {df['reflection'][-1]}")
+    
     # 거래 내역 표시 (페이지네이션 적용)
     st.header('Trade History')
     
@@ -120,14 +121,19 @@ def main():
     fig = px.line(df, x='timestamp', y='btc_balance', title='BTC Balance')
     st.plotly_chart(fig)
 
-    # KRW 잔액 변화
-    st.header('KRW Balance Over Time')
-    fig = px.line(df, x='timestamp', y='krw_balance', title='KRW Balance')
+    # USDT 잔액 변화
+    st.header('USDT Balance Over Time')
+    fig = px.line(df, x='timestamp', y='usdt_balance', title='USDT Balance')
+    st.plotly_chart(fig)
+
+    # 바이낸스 총 자산 변화
+    st.header('total Assets Over Time')
+    fig = px.line(df, x='timestamp', y='total_assets', title='Total Assets')
     st.plotly_chart(fig)
 
     # BTC 가격 변화
     st.header('BTC Price Over Time')
-    fig = px.line(df, x='timestamp', y='btc_krw_price', title='BTC Price (KRW)')
+    fig = px.line(df, x='timestamp', y='btc_current_price', title='BTC Price')
     st.plotly_chart(fig)
 
 if __name__ == "__main__":
