@@ -8,7 +8,7 @@ A Buy signal from UT Bot Alerts.
 When the Volume Oscillator is above 0%.
 Enter a long position when these conditions are met.
 
-Stop Loss Line: Bottom of the last green cloud.
+Stop Loss Line: The bottom of the deepest green part of the last green cloud band.
 Take Profit line: set to 1:1.3~1:2 P&L ratio.
 
 Short position (sell)
@@ -17,5 +17,5 @@ When a Sell signal from UT Bot Alerts is triggered.
 When the Volume Oscillator is above 0%.
 Enter a short position when these conditions are met.
 
-Stop Loss Line: The top of the last red cloud.
+Stop Loss Line: The top of the deepest red part of the last red cloud band.
 Take Profit line: set to 1:1.3~1:2 P&L ratio.
