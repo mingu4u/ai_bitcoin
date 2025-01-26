@@ -229,7 +229,8 @@ class BinanceFuturesTrader:
                 type='TAKE_PROFIT_MARKET',
                 side=tp_side,
                 amount=quantity,
-                params={'stopPrice': tp_price}
+                params={'stopPrice': tp_price,
+                       'reduceOnly': True}
             )
 
             sl_order = self.exchange.create_order(
@@ -237,7 +238,8 @@ class BinanceFuturesTrader:
                 type='STOP_MARKET', 
                 side=tp_side,
                 amount=quantity,
-                params={'stopPrice': sl_price}
+                params={'stopPrice': sl_price.
+                        'reduceOnly': True}
             )
 
             return {
