@@ -47,7 +47,7 @@ class BinanceFuturesTrader:
         })
         # self.setup_logging()
         self.symbol = "BTC/USDT"
-        self.leverage = 2  # 기본 레버리지 설정
+        self.leverage = 10  # 기본 레버리지 설정
         self.logger = logger
         self.exchange.load_markets()
 
@@ -102,7 +102,8 @@ class BinanceFuturesTrader:
                 type='TAKE_PROFIT_MARKET',
                 side='sell' if side == 'buy' else 'buy',
                 amount=position_size,
-                params={'stopPrice': tp_price}
+                params={'stopPrice': tp_price,
+                        'reduceOnly': True}
             )
 
             # Set stop loss order
@@ -111,7 +112,8 @@ class BinanceFuturesTrader:
                 type='STOP_MARKET',
                 side='sell' if side == 'buy' else 'buy',
                 amount=position_size,
-                params={'stopPrice': sl_price}
+                params={'stopPrice': sl_price,
+                        'reduceOnly': True}
             )
 
             self.logger.info(f"{side.upper()} position opened: Size={position_size}, Entry={entry_price}, TP={tp_price}, SL={sl_price}")
@@ -303,7 +305,7 @@ if not api_key or not secret_key:
 trader = BinanceFuturesTrader(api_key, secret_key, logger)
 
 # 레버리지 설정 
-trader.setup_leverage_and_margin(2)  # 2배 레버리지
+trader.setup_leverage_and_margin(10)  # 10배 레버리지
 
 # OpenAI 구조화된 출력 체크용 클래스
 class TradingDecision(BaseModel):
@@ -754,7 +756,7 @@ def ai_trading():
         driver.get("https://kr.tradingview.com/chart/QYZJBUKS/?symbol=BINANCE%3ABTCUSDT")
         logger.info("TradingView 페이지 로드 완료")
         time.sleep(3)
-        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="yes")
+        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
         logger.info(f"TradingView 스크린샷 캡처 완료.")
     except WebDriverException as e:
         logger.error(f"캡쳐시 WebDriver 오류 발생: {e}")
