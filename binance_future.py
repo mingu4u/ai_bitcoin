@@ -60,9 +60,15 @@ class BinanceFuturesTrader:
             # 포지션이 있는지 확인
             if positions:
                 for position in positions:
-                    if float(position['contracts']) != 0:
+                    position_size = float(position.get('contracts', 0) or 0)
+                    if position_size != 0:
                         has_open_position = True
-                        current_leverage = int(position['leverage'])
+                        # leverage 값이 None인 경우 기본값 사용
+                        try:
+                            current_leverage = int(position.get('leverage', leverage))
+                        except (TypeError, ValueError):
+                            current_leverage = leverage
+                            
                         self.leverage = current_leverage  # 현재 레버리지 유지
                         self.logger.warning(f"Open position detected. Keeping current leverage at {current_leverage}x")
                         break
@@ -76,7 +82,9 @@ class BinanceFuturesTrader:
                 
         except Exception as e:
             self.logger.error(f"Error setting up leverage and margin: {e}")
-            raise 
+            # 에러 발생 시 기본 레버리지 설정
+            self.leverage = leverage
+            raise    
 
     async def get_position_size(self, usdt_amount: float) -> float:
         try:
