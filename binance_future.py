@@ -181,9 +181,6 @@ class BinanceFuturesTrader:
             ticker = self.exchange.fetch_ticker(self.symbol)
             current_price = ticker['last']
             
-            # 증거금 필요량 계산 (최소 필요 증거금 + 수수료)
-            margin_needed = buy_amount / self.leverage + (buy_amount * 0.0004)  # 0.04% 수수료
-            
             # 가용 자금 조회
             balance = self.exchange.fetch_balance()
             available_balance = float(balance['USDT']['free'])
@@ -193,14 +190,21 @@ class BinanceFuturesTrader:
                 self.logger.error(f"Insufficient balance. Available: {available_balance} USDT")
                 return None
                 
-            # 증거금 부족 시 거래 금액 조정
-            if margin_needed > available_balance:
-                adjusted_amount = (available_balance * self.leverage) * 0.9996
-                self.logger.warning(f"Margin required ({margin_needed} USDT) exceeds available balance. Adjusting order amount from {buy_amount} to {adjusted_amount} USDT")
-                buy_amount = adjusted_amount
-                
-            # 수량 계산
-            quantity = buy_amount / current_price
+            # 안전 마진을 고려한 최대 사용 가능 금액 계산 (가용 자금의 65%까지만 사용)
+            max_safe_amount = available_balance * 0.65
+            
+            # 요청된 주문 금액이 최대 안전 금액을 초과하는 경우 조정
+            if buy_amount > max_safe_amount:
+                original_amount = buy_amount
+                buy_amount = max_safe_amount
+                self.logger.warning(
+                    f"Requested order amount ({original_amount} USDT) exceeds safe limit. "
+                    f"Adjusted to {buy_amount} USDT (65% of available balance)"
+                )
+            
+            # 레버리지를 고려한 실제 주문 수량 계산
+            leveraged_amount = buy_amount * self.leverage
+            quantity = leveraged_amount / current_price
             
             # 최소 주문 수량 확인
             market_limits = self.exchange.markets[self.symbol]['limits']
@@ -230,7 +234,7 @@ class BinanceFuturesTrader:
                 side=tp_side,
                 amount=quantity,
                 params={'stopPrice': tp_price,
-                       'reduceOnly': True}
+                    'reduceOnly': True}
             )
 
             sl_order = self.exchange.create_order(
@@ -238,16 +242,20 @@ class BinanceFuturesTrader:
                 type='STOP_MARKET', 
                 side=tp_side,
                 amount=quantity,
-                params={'stopPrice': sl_price.
+                params={'stopPrice': sl_price,
                         'reduceOnly': True}
             )
+
+            self.logger.info(f"Order executed - Side: {side}, Amount: {buy_amount} USDT, Leverage: {self.leverage}x")
+            self.logger.info(f"Quantity: {quantity} BTC, Entry: {current_price}, TP: {tp_price}, SL: {sl_price}")
+            self.logger.info(f"Available balance after order: {available_balance - buy_amount} USDT")
 
             return {
                 'entry': order,
                 'tp': tp_order,
                 'sl': sl_order
             }
-        
+    
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
             raise
@@ -755,7 +763,7 @@ def ai_trading():
     try:
         # TradingView 차트 캡처
         driver = login_with_cookies()
-        driver.get("https://kr.tradingview.com/chart/QYZJBUKS/?symbol=BINANCE%3ABTCUSDT")
+        driver.get("https://kr.tradingview.com/chart/QYZJBUKS/?symbol=BINANCE%3ABTCUSDT.P")
         logger.info("TradingView 페이지 로드 완료")
         time.sleep(3)
         chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
