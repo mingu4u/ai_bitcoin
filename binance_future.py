@@ -52,14 +52,31 @@ class BinanceFuturesTrader:
         self.exchange.load_markets()
 
     def setup_leverage_and_margin(self, leverage: int):
-            try:
+        try:
+            # 현재 포지션 확인
+            positions = self.exchange.fetch_positions([self.symbol])
+            has_open_position = False
+            
+            # 포지션이 있는지 확인
+            if positions:
+                for position in positions:
+                    if float(position['contracts']) != 0:
+                        has_open_position = True
+                        current_leverage = int(position['leverage'])
+                        self.leverage = current_leverage  # 현재 레버리지 유지
+                        self.logger.warning(f"Open position detected. Keeping current leverage at {current_leverage}x")
+                        break
+            
+            # 열린 포지션이 없을 때만 레버리지 설정
+            if not has_open_position:
                 self.exchange.set_leverage(leverage, self.symbol)
                 self.exchange.set_margin_mode('isolated', self.symbol)
-                self.leverage = leverage  # leverage 속성 업데이트
+                self.leverage = leverage
                 self.logger.info(f"Leverage set to {leverage}x and margin mode set to isolated")
-            except Exception as e:
-                self.logger.error(f"Error setting up leverage and margin: {e}")
-                raise
+                
+        except Exception as e:
+            self.logger.error(f"Error setting up leverage and margin: {e}")
+            raise 
 
     async def get_position_size(self, usdt_amount: float) -> float:
         try:
