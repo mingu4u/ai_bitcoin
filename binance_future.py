@@ -453,7 +453,7 @@ def generate_reflection(trades_df, current_market_data):
     
     # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
     response = client.chat.completions.create(
-        model="gpt-4o-2024-08-06",
+        model="gpt-4o-2024-11-20",
         messages=[
             {
                 "role": "system",
@@ -1088,14 +1088,14 @@ if __name__ == "__main__":
         schedule.every().day.at("02:00").do(job)
 
         # 활발한 거래 시간대 (04:00-07:00): 15분 간격
-        for hour in [4, 5, 6, 7]:
+        for hour in [4, 5, 6]:
             for minute in range(0, 60, 15):
                 schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
-        # 07:00에 마지막 실행
+        # 08:00에 마지막 실행
         schedule.every().day.at("07:00").do(job)
 
         # 새로 추가된 15:00-18:00 시간대: 15분 간격
-        for hour in [15, 16, 17, 18]:
+        for hour in [15, 16, 17]:
             for minute in range(0, 60, 15):
                 schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
         # 18:00에 마지막 실행
