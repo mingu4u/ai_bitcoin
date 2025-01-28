@@ -148,58 +148,7 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error opening position: {e}")
             raise
 
-    # async def market_order_with_tp_sl(self, 
-    #                       side: str,           # 'buy' or 'sell'
-    #                       buy_amount: float,   # USDT 투자금액
-    #                       pl_ratio: float,   # 손익비 
-    #                       sl_price: float):  # SL 가격
-   
-    #     # 현재가 조회
-    #     ticker = self.exchange.fetch_ticker(self.symbol)
-    #     current_price = ticker['last']
-        
-    #     # 수량 계산 (USDT 금액 / 현재가)
-    #     quantity = buy_amount / current_price
-        
-    #     # TP/SL 가격 계산
-    #     if side == 'buy':
-    #         tp_price = current_price + round(pl_ratio,2)*(current_price-sl_price)
-    #         sl_price = sl_price
-    #     else:
-    #         tp_price = current_price - round(pl_ratio,2)*(sl_price-current_price) 
-    #         sl_price = sl_price
 
-    #     # 시장가 주문 실행
-    #     order = self.exchange.create_market_order(
-    #         symbol=self.symbol,
-    #         side=side,
-    #         amount=quantity
-    #     )
-
-    #     # TP/SL 주문
-    #     tp_side = 'sell' if side == 'buy' else 'buy'
-        
-    #     tp_order = self.exchange.create_order(
-    #         symbol=self.symbol,
-    #         type='TAKE_PROFIT_MARKET',
-    #         side=tp_side,
-    #         amount=quantity,
-    #         params={'stopPrice': tp_price}
-    #     )
-
-    #     sl_order = self.exchange.create_order(
-    #         symbol=self.symbol,
-    #         type='STOP_MARKET',
-    #         side=tp_side,
-    #         amount=quantity,
-    #         params={'stopPrice': sl_price}
-    #     )
-
-    #     return {
-    #         'entry': order,
-    #         'tp': tp_order, 
-    #         'sl': sl_order
-    #     }
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         try:
             # 현재가 조회
@@ -213,7 +162,7 @@ class BinanceFuturesTrader:
                 if float(pos.get('contracts', 0) or 0) != 0:
                     current_position = pos
                     break
-
+    
             # 반대 방향 주문이 들어온 경우 포지션 축소/청산
             if current_position:
                 position_side = current_position['side']
@@ -255,7 +204,7 @@ class BinanceFuturesTrader:
                         'tp': None,  # 포지션 축소/청산시에는 TP/SL 주문 불필요
                         'sl': None
                     }
-
+    
             # 새로운 포지션 진입 또는 같은 방향 추가 진입
             # 가용 자금 조회
             balance = self.exchange.fetch_balance()
@@ -300,12 +249,10 @@ class BinanceFuturesTrader:
                 side=side,
                 amount=quantity
             )
-
-            # 주문의 clientOrderId 생성 (TP와 SL을 연결하기 위한 고유 식별자)
-            base_client_order_id = f"order_{int(time.time()*1000)}"
-            tp_client_order_id = f"{base_client_order_id}_tp"
-            sl_client_order_id = f"{base_client_order_id}_sl"
-
+    
+            # TP/SL 주문을 위한 공통 clientOrderId 생성
+            client_order_id = f"order_{int(time.time()*1000)}"
+    
             # TP/SL 주문
             tp_side = 'sell' if side == 'buy' else 'buy'
             tp_order = self.exchange.create_order(
@@ -316,12 +263,11 @@ class BinanceFuturesTrader:
                 params={
                     'stopPrice': tp_price,
                     'reduceOnly': True,
-                    'clientOrderId': tp_client_order_id,
-                    'autoClose': True,  # 이 주문이 실행되면 연결된 다른 주문 취소
-                    'closeOnTrigger': True  # 이 주문이 트리거되면 연결된 포지션 정리
+                    'clientOrderId': client_order_id,
+                    'autoClose': True
                 }
             )
-
+    
             sl_order = self.exchange.create_order(
                 symbol=self.symbol,
                 type='STOP_MARKET', 
@@ -330,111 +276,26 @@ class BinanceFuturesTrader:
                 params={
                     'stopPrice': sl_price,
                     'reduceOnly': True,
-                    'clientOrderId': sl_client_order_id,
-                    'autoClose': True,  # 이 주문이 실행되면 연결된 다른 주문 취소
-                    'closeOnTrigger': True  # 이 주문이 트리거되면 연결된 포지션 정리
+                    'clientOrderId': client_order_id,
+                    'autoClose': True
                 }
             )
-
-            # 주문 ID들을 데이터베이스나 파일에 저장하여 나중에 참조할 수 있도록 함
-            self.save_order_ids(base_client_order_id, tp_order['id'], sl_order['id'])
-
+    
             action_type = "Position increased" if current_position else "New position opened"
             self.logger.info(f"{action_type} - Side: {side}, Amount: {buy_amount} USDT, Leverage: {self.leverage}x")
             self.logger.info(f"Quantity: {quantity} BTC, Entry: {current_price}, TP: {tp_price}, SL: {sl_price}")
             self.logger.info(f"Available balance after order: {available_balance - buy_amount} USDT")
-
+    
             return {
                 'entry': order,
                 'tp': tp_order,
-                'sl': sl_order,
-                'base_client_order_id': base_client_order_id
+                'sl': sl_order
             }
         
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
             raise
-
-    def save_order_ids(self, base_id, tp_id, sl_id):
-        """주문 ID들을 저장하는 함수"""
-        try:
-            order_data = {
-                'base_id': base_id,
-                'tp_id': tp_id,
-                'sl_id': sl_id,
-                'timestamp': time.time()
-            }
             
-            orders_file = 'active_orders.json'
-            
-            # 기존 데이터 로드
-            try:
-                with open(orders_file, 'r') as f:
-                    orders = json.load(f)
-            except FileNotFoundError:
-                orders = []
-            
-            # 새 주문 데이터 추가
-            orders.append(order_data)
-            
-            # 파일에 저장
-            with open(orders_file, 'w') as f:
-                json.dump(orders, f)
-                
-            self.logger.info(f"Order IDs saved: {order_data}")
-            
-        except Exception as e:
-            self.logger.error(f"Error saving order IDs: {e}")
-
-    def check_and_cancel_linked_orders(self):
-        """주기적으로 실행되어 TP/SL 주문 상태를 확인하고 필요시 취소하는 함수"""
-        try:
-            orders_file = 'active_orders.json'
-            
-            # 파일이 없으면 종료
-            if not os.path.exists(orders_file):
-                return
-                
-            with open(orders_file, 'r') as f:
-                orders = json.load(f)
-            
-            # 아직 활성화된 주문이 있는지 확인
-            active_orders = []
-            for order_data in orders:
-                tp_id = order_data['tp_id']
-                sl_id = order_data['sl_id']
-                
-                try:
-                    # TP와 SL 주문 상태 확인
-                    tp_order = self.exchange.fetch_order(tp_id, self.symbol)
-                    sl_order = self.exchange.fetch_order(sl_id, self.symbol)
-                    
-                    # TP가 실행되었고 SL이 아직 열려있으면
-                    if tp_order['status'] == 'closed' and sl_order['status'] == 'open':
-                        self.exchange.cancel_order(sl_id, self.symbol)
-                        self.logger.info(f"TP executed, cancelling SL order: {sl_id}")
-                        continue
-                        
-                    # SL이 실행되었고 TP가 아직 열려있으면
-                    elif sl_order['status'] == 'closed' and tp_order['status'] == 'open':
-                        self.exchange.cancel_order(tp_id, self.symbol)
-                        self.logger.info(f"SL executed, cancelling TP order: {tp_id}")
-                        continue
-                        
-                    # 둘 다 아직 활성화 상태면 리스트에 유지
-                    if tp_order['status'] == 'open' and sl_order['status'] == 'open':
-                        active_orders.append(order_data)
-                        
-                except Exception as e:
-                    self.logger.error(f"Error checking order status: {e}")
-            
-            # 활성화된 주문만 파일에 다시 저장
-            with open(orders_file, 'w') as f:
-                json.dump(active_orders, f)
-                
-        except Exception as e:
-            self.logger.error(f"Error in check_and_cancel_linked_orders: {e}")
-
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
             position = await self.exchange.fetch_positions(self.symbol)
