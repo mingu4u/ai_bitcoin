@@ -162,7 +162,7 @@ class BinanceFuturesTrader:
                 if float(pos.get('contracts', 0) or 0) != 0:
                     current_position = pos
                     break
-    
+
             # 반대 방향 주문이 들어온 경우 포지션 축소/청산
             if current_position:
                 position_side = current_position['side']
@@ -171,8 +171,12 @@ class BinanceFuturesTrader:
                     position_notional = float(current_position['notional'])
                     self.logger.info(f"Reducing/Closing {position_side} position of {position_size} contracts")
                     
+                    # 레버리지를 고려한 실제 주문 수량 계산
+                    leveraged_amount = buy_amount * self.leverage
+                    calculated_quantity = leveraged_amount / current_price
+                    
                     # 청산하려는 금액이 현재 포지션보다 큰 경우 전량 청산
-                    if buy_amount >= abs(position_notional):
+                    if leveraged_amount >= abs(position_notional):
                         quantity = abs(position_size)
                         self.logger.info(f"Closing entire position of {quantity} contracts")
                         
@@ -187,7 +191,7 @@ class BinanceFuturesTrader:
                         
                     else:
                         # 부분 청산
-                        quantity = (buy_amount / current_price)
+                        quantity = calculated_quantity
                         self.logger.info(f"Partially reducing position by {quantity} contracts")
                     
                     # 포지션 축소/청산 주문
@@ -204,7 +208,7 @@ class BinanceFuturesTrader:
                         'tp': None,  # 포지션 축소/청산시에는 TP/SL 주문 불필요
                         'sl': None
                     }
-    
+
             # 새로운 포지션 진입 또는 같은 방향 추가 진입
             # 가용 자금 조회
             balance = self.exchange.fetch_balance()
@@ -249,10 +253,10 @@ class BinanceFuturesTrader:
                 side=side,
                 amount=quantity
             )
-    
+
             # TP/SL 주문을 위한 공통 clientOrderId 생성
             client_order_id = f"order_{int(time.time()*1000)}"
-    
+
             # TP/SL 주문
             tp_side = 'sell' if side == 'buy' else 'buy'
             tp_order = self.exchange.create_order(
@@ -267,7 +271,7 @@ class BinanceFuturesTrader:
                     'autoClose': True
                 }
             )
-    
+
             sl_order = self.exchange.create_order(
                 symbol=self.symbol,
                 type='STOP_MARKET', 
@@ -280,12 +284,12 @@ class BinanceFuturesTrader:
                     'autoClose': True
                 }
             )
-    
+
             action_type = "Position increased" if current_position else "New position opened"
             self.logger.info(f"{action_type} - Side: {side}, Amount: {buy_amount} USDT, Leverage: {self.leverage}x")
             self.logger.info(f"Quantity: {quantity} BTC, Entry: {current_price}, TP: {tp_price}, SL: {sl_price}")
             self.logger.info(f"Available balance after order: {available_balance - buy_amount} USDT")
-    
+
             return {
                 'entry': order,
                 'tp': tp_order,
@@ -294,8 +298,8 @@ class BinanceFuturesTrader:
         
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
-            raise
-            
+            raise  
+                
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
             position = await self.exchange.fetch_positions(self.symbol)
