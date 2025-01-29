@@ -999,7 +999,7 @@ def ai_trading():
                                 "stop_loss_price": {"type": "integer"},
                                 "pl_ratio": {"type": "number"}
                             },
-                            "required": ["decision", "percentage", "reason", "stop_loss_price", "pl_ratio"], # XXX : claer !! || (25-01-24) TP/SL 설정 마저 완료해야함. 추후, 업비트로 남아있는 코드 바이낸스 형식으로 바꿔야.
+                            "required": ["decision", "percentage", "reason", "stop_loss_price", "pl_ratio"],
                             "additionalProperties": False
                         }
                     }
