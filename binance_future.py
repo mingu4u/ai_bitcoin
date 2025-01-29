@@ -51,7 +51,7 @@ class BinanceFuturesTrader:
         })
         # self.setup_logging()
         self.symbol = "BTC/USDT"
-        self.leverage = 10  # 기본 레버리지 설정
+        self.leverage = 20  # 기본 레버리지 설정
         self.logger = logger
         self.exchange.load_markets()
 
@@ -428,7 +428,7 @@ if not api_key or not secret_key:
 trader = BinanceFuturesTrader(api_key, secret_key, logger)
 
 # 레버리지 설정 
-trader.setup_leverage_and_margin(10)  # 10배 레버리지
+trader.setup_leverage_and_margin(20)  # 20배 레버리지
 
 # OpenAI 구조화된 출력 체크용 클래스
 class TradingDecision(BaseModel):
@@ -928,6 +928,7 @@ def ai_trading():
                         "role": "system",
                         "content": f"""You are a Bitcoin futures day trader who specializes in short-term trading based on 5-minute candlestick charts. You are trading two-way positions based on coin futures trading and focus on analyzing 5-minute timeframes to identify quick market moves and opportunities while also considering the broader market conditions. You analyze the data provided to determine whether to take a buy, sell, or hold position at the current time. Consider the following when analyzing
                         
+                        - Manage risk by only investing up to 40 percent of your assets in a single order
                         - Technical indicators and market data
                         - Focus on 5-minute chart patterns and movements for primary analysis, but use 60-minute data for medium-term trends
                         - Short-term price action and momentum
