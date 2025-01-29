@@ -473,7 +473,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS trades
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   timestamp TEXT,
-                  trade_type TEXT,  # 'AI' 또는 'MANUAL'
+                  trade_type TEXT,
                   decision TEXT,
                   percentage INTEGER,
                   reason TEXT,
@@ -870,7 +870,7 @@ def ai_trading():
     fear_greed_index = get_fear_and_greed_index()
 
     # 5. 뉴스 헤드라인 가져오기
-    # news_headlines = get_bitcoin_news()
+    news_headlines = get_bitcoin_news()
 
     # 6. YouTube 자막 데이터 가져오기
     f2 = open("strategy2.txt", "r", encoding="utf-8")
@@ -912,6 +912,7 @@ def ai_trading():
             # 현재 시장 데이터 수집 (기존 코드에서 가져온 데이터 사용)
             current_market_data = {
                 "fear_greed_index": fear_greed_index,
+                "news_headlines": news_headlines,
                 "orderbook": orderbook,
                 "5min_ohlcv": df_5min.to_dict(),     # 2.5시간치 5분봉 데이터 추가
                 "hourly_ohlcv": df_hourly.to_dict()  # 12시간치 60분봉 데이터 추가
@@ -933,6 +934,7 @@ def ai_trading():
                         - Volume analysis on 5-minute timeframes
                         - Quick trend reversals and continuation patterns
                         - Support and resistance levels visible on 5-minute charts
+                        - Recent news headlines and their immediate impact on Bitcoin price
                         - The Fear and Greed Index and its implications
                         - Overall market sentiment
                         - Patterns and trends visible in the chart image
