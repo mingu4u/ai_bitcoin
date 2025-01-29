@@ -35,6 +35,10 @@ import time
 import logging
 from typing import Optional, Dict, Any
 
+
+
+
+
 class BinanceFuturesTrader:
     def __init__(self, api_key: str, api_secret: str, logger):
         self.exchange = ccxt.binance({
@@ -50,6 +54,75 @@ class BinanceFuturesTrader:
         self.leverage = 10  # 기본 레버리지 설정
         self.logger = logger
         self.exchange.load_markets()
+
+
+
+    # 수동 거래 모니터링
+    def monitor_manual_trades(self):
+        try:
+            # 최근 거래 내역 조회 (최근 5분)
+            since = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)
+            trades = self.exchange.fetch_my_trades(self.symbol, since)
+            
+            # DB 연결
+            conn = sqlite3.connect('bitcoin_trades.db')
+            
+            # 가장 최근 기록된 거래의 timestamp 조회
+            c = conn.cursor()
+            c.execute("SELECT MAX(timestamp) FROM trades WHERE trade_type = 'MANUAL'")
+            last_recorded = c.fetchone()[0]
+            last_recorded_time = datetime.fromisoformat(last_recorded) if last_recorded else datetime.min
+            
+            # 포지션 정보 조회
+            positions = self.exchange.fetch_positions([self.symbol])
+            current_position = None
+            for pos in positions:
+                if float(pos.get('contracts', 0) or 0) != 0:
+                    current_position = pos
+                    break
+                    
+            # 잔고 정보 조회
+            balance = self.exchange.fetch_balance()
+            usdt_balance = balance['USDT']
+            free_usdt = usdt_balance['free']
+            used_usdt = usdt_balance['used']
+            total_usdt = usdt_balance['total']
+            
+            # BTC 현재가 조회
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            current_btc_price = ticker['last']
+
+            for trade in trades:
+                trade_time = datetime.fromtimestamp(trade['timestamp'] / 1000)
+                
+                # 이미 기록된 거래는 건너뛰기
+                if trade_time <= last_recorded_time:
+                    continue
+                    
+                # 거래 방향 결정
+                decision = 'buy' if trade['side'] == 'buy' else 'sell'
+                
+                # 거래 비율 계산 (총 자산 대비)
+                trade_percentage = (abs(trade['cost']) / total_usdt) * 100
+                
+                # 거래 이유 (수동 거래는 reason을 'Manual Trade'로 기록)
+                reason = "Manual Trade"
+                
+                # 평균 진입가격
+                btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
+
+                # DB에 거래 기록
+                log_trade(conn, 'MANUAL', decision, int(trade_percentage), reason,
+                        used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price)
+                
+                self.logger.info(f"Manual trade recorded: {decision.upper()} at {current_btc_price}")
+                
+            conn.close()
+            
+        except Exception as e:
+            self.logger.error(f"Error monitoring manual trades: {e}")
+            if conn:
+                conn.close()
 
     def setup_leverage_and_margin(self, leverage: int):
         try:
@@ -366,6 +439,7 @@ class TradingDecision(BaseModel):
     pl_ratio: float
 
 
+
 # 모든 크롬 프로세스 종료 후 정리
 def cleanup_chrome_processes():
     try:
@@ -394,9 +468,12 @@ def signal_handler(signum, frame):
 def init_db():
     conn = sqlite3.connect('bitcoin_trades.db')
     c = conn.cursor()
+    
+    # trades 테이블 수정 (trade_type 컬럼 추가)
     c.execute('''CREATE TABLE IF NOT EXISTS trades
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   timestamp TEXT,
+                  trade_type TEXT,  # 'AI' 또는 'MANUAL'
                   decision TEXT,
                   percentage INTEGER,
                   reason TEXT,
@@ -411,15 +488,16 @@ def init_db():
 
 
 # 거래 기록을 DB에 저장하는 함수
-def log_trade(conn, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection=''):
+
+# 거래 기록 함수 수정
+def log_trade(conn, trade_type, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection=''):
     c = conn.cursor()
     timestamp = datetime.now().isoformat()
     c.execute("""INSERT INTO trades 
-                 (timestamp, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-              (timestamp, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection))
+                 (timestamp, trade_type, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              (timestamp, trade_type, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection))
     conn.commit()
-
 
 # 최근 투자 기록 조회
 def get_recent_trades(conn, days=7):
@@ -757,28 +835,29 @@ def ai_trading():
     # df_hourly = pyupbit.get_ohlcv("KRW-BTC", interval="minute60", count=24)
     # df_hourly = dropna(df_hourly)
     # df_hourly = add_indicators(df_hourly)
-    # 바이낸스 일봉 데이터 
-    df_daily = pd.DataFrame(
-    trader.exchange.fetch_ohlcv(
-        "BTC/USDT",
-        timeframe='1d',
-        limit=30
-    ),
-    columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
-    )
-    df_daily['timestamp'] = pd.to_datetime(df_daily['timestamp'], unit='ms')
-    df_daily = df_daily.set_index('timestamp')
-    df_daily = dropna(df_daily)
-    df_daily = add_indicators(df_daily)
 
-    # 바이낸스 60분봉 데이터
+    # 바이낸스 5분봉 데이터 조회 (최근 2.5시간)
+    df_5min = pd.DataFrame(
+        trader.exchange.fetch_ohlcv(
+            "BTC/USDT",
+            timeframe='5m',
+            limit=30
+        ),
+        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    )
+    df_5min['timestamp'] = pd.to_datetime(df_5min['timestamp'], unit='ms')
+    df_5min = df_5min.set_index('timestamp')
+    df_5min = dropna(df_5min)
+    df_5min = add_indicators(df_5min)
+    
+    # 바이낸스 60분봉 데이터 조회 (최근 12시간)
     df_hourly = pd.DataFrame(
-    trader.exchange.fetch_ohlcv(
-        "BTC/USDT", 
-        timeframe='1h',
-        limit=24
-    ),
-    columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        trader.exchange.fetch_ohlcv(
+            "BTC/USDT", 
+            timeframe='1h',
+            limit=12
+        ),
+        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
     df_hourly['timestamp'] = pd.to_datetime(df_hourly['timestamp'], unit='ms')
     df_hourly = df_hourly.set_index('timestamp')
@@ -833,12 +912,10 @@ def ai_trading():
             # 현재 시장 데이터 수집 (기존 코드에서 가져온 데이터 사용)
             current_market_data = {
                 "fear_greed_index": fear_greed_index,
-                # "news_headlines": news_headlines,
                 "orderbook": orderbook,
-                "daily_ohlcv": df_daily.to_dict(),
-                "hourly_ohlcv": df_hourly.to_dict()
+                "5min_ohlcv": df_5min.to_dict(),     # 2.5시간치 5분봉 데이터 추가
+                "hourly_ohlcv": df_hourly.to_dict()  # 12시간치 60분봉 데이터 추가
             }
-    
             # 반성 및 개선 내용 생성
             reflection = generate_reflection(recent_trades, current_market_data)
     
@@ -850,7 +927,8 @@ def ai_trading():
                         "role": "system",
                         "content": f"""You are a Bitcoin futures day trader who specializes in short-term trading based on 5-minute candlestick charts. You are trading two-way positions based on coin futures trading and focus on analyzing 5-minute timeframes to identify quick market moves and opportunities while also considering the broader market conditions. You analyze the data provided to determine whether to take a buy, sell, or hold position at the current time. Consider the following when analyzing
                         
-                        - Technical indicators and market data, with primary focus on 5-minute chart patterns and movements
+                        - Technical indicators and market data
+                        - Focus on 5-minute chart patterns and movements for primary analysis, but use 60-minute data for medium-term trends
                         - Short-term price action and momentum
                         - Volume analysis on 5-minute timeframes
                         - Quick trend reversals and continuation patterns
@@ -894,7 +972,7 @@ def ai_trading():
                                 "type": "text",
                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
                                 Orderbook: {json.dumps(orderbook)}
-                                Daily OHLCV with indicators (30 days): {df_daily.to_json()}
+                                5-minute OHLCV with indicators (30 days): {df_5min.to_json()}
                                 Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}"""
                             },
@@ -1010,15 +1088,11 @@ def ai_trading():
         current_btc_price = ticker['last']
 
         # 거래 기록을 DB에 저장하기
-        log_trade(conn, result.decision, result.percentage if order_executed else 0, result.reason, 
-                used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
+        log_trade(conn, 'AI', result.decision, result.percentage if order_executed else 0, result.reason, 
+         used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
     except sqlite3.Error as e:
         logger.error(f"Database connection error: {e}")
         return
-
-
-
-
 
 
 
@@ -1046,60 +1120,71 @@ if __name__ == "__main__":
     logger.info("Hello, Mingu !!")
     logger.info("Starting trading bot ...")
     try:
-
         # 시작할 때도 크롬 프로세스 한번 정리
         cleanup_chrome_processes()
-
-
 
         # 프로그램 시작 시 핸들러 등록
         signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
         signal.signal(signal.SIGTERM, signal_handler)  # 종료 시그널
         atexit.register(cleanup_handler)              # 정상 종료 시
 
-
         # 데이터베이스 초기화
         init_db()
 
-
-        # 중복 실행 방지를 위한 변수
+        # 중복 실행 방지를 위한 변수들
         trading_in_progress = False
+        monitoring_in_progress = False
         
-        # 트레이딩 작업을 수행하는 함수
-        def job():
+        # AI 트레이딩 작업을 수행하는 함수
+        def trading_job():
             global trading_in_progress
             if trading_in_progress:
-                logger.warning("Trading job is already in progress, skipping this run ")
+                logger.warning("Trading job is already in progress, skipping this run")
                 return
             try:
                 trading_in_progress = True
                 ai_trading()
             except Exception as e:
-                logger.error(f"An error occured: {e}")
+                logger.error(f"An error occurred in trading job: {e}")
             finally:
                 trading_in_progress = False
 
-        job()
-        # 활발한 거래 시간대 (21:00-02:00): 15분 간격
+        # 수동 거래 모니터링 작업을 수행하는 함수
+        def monitoring_job():
+            global monitoring_in_progress
+            if monitoring_in_progress:
+                logger.warning("Monitoring job is already in progress, skipping this run")
+                return
+            try:
+                monitoring_in_progress = True
+                trader.monitor_manual_trades()
+            except Exception as e:
+                logger.error(f"An error occurred in monitoring job: {e}")
+            finally:
+                monitoring_in_progress = False
+
+        # 초기 실행
+        trading_job()
+        monitoring_job()
+
+        # AI 트레이딩 스케줄 설정
         for hour in [21, 22, 23, 0, 1]:
             for minute in range(0, 60, 15):
-                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
-        # 02:00에 마지막 실행
-        schedule.every().day.at("02:00").do(job)
+                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
+        schedule.every().day.at("02:00").do(trading_job)
 
-        # 활발한 거래 시간대 (04:00-07:00): 15분 간격
         for hour in [4, 5, 6]:
             for minute in range(0, 60, 15):
-                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
-        # 07:00에 마지막 실행
-        schedule.every().day.at("07:00").do(job)
+                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
+        schedule.every().day.at("07:00").do(trading_job)
 
-        # 새로 추가된 15:00-18:00 시간대: 15분 간격
         for hour in [15, 16, 17]:
             for minute in range(0, 60, 15):
-                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
-        # 18:00에 마지막 실행
-        schedule.every().day.at("18:00").do(job)
+                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
+        schedule.every().day.at("18:00").do(trading_job)
+
+        # 수동 거래 모니터링 스케줄 설정 (1분마다 실행)
+        schedule.every(1).minutes.do(monitoring_job)
 
         # 스케줄러 실행
         while True:
@@ -1111,3 +1196,75 @@ if __name__ == "__main__":
         cleanup_chrome_processes()
     finally:
         cleanup_chrome_processes()
+
+
+
+# if __name__ == "__main__":
+#     logger.info("Hello, Mingu !!")
+#     logger.info("Starting trading bot ...")
+#     try:
+
+#         # 시작할 때도 크롬 프로세스 한번 정리
+#         cleanup_chrome_processes()
+
+
+
+#         # 프로그램 시작 시 핸들러 등록
+#         signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+#         signal.signal(signal.SIGTERM, signal_handler)  # 종료 시그널
+#         atexit.register(cleanup_handler)              # 정상 종료 시
+
+
+#         # 데이터베이스 초기화
+#         init_db()
+
+
+#         # 중복 실행 방지를 위한 변수
+#         trading_in_progress = False
+        
+#         # 트레이딩 작업을 수행하는 함수
+#         def job():
+#             global trading_in_progress
+#             if trading_in_progress:
+#                 logger.warning("Trading job is already in progress, skipping this run ")
+#                 return
+#             try:
+#                 trading_in_progress = True
+#                 ai_trading()
+#             except Exception as e:
+#                 logger.error(f"An error occured: {e}")
+#             finally:
+#                 trading_in_progress = False
+
+#         job()
+#         # 활발한 거래 시간대 (21:00-02:00): 15분 간격
+#         for hour in [21, 22, 23, 0, 1]:
+#             for minute in range(0, 60, 15):
+#                 schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
+#         # 02:00에 마지막 실행
+#         schedule.every().day.at("02:00").do(job)
+
+#         # 활발한 거래 시간대 (04:00-07:00): 15분 간격
+#         for hour in [4, 5, 6]:
+#             for minute in range(0, 60, 15):
+#                 schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
+#         # 07:00에 마지막 실행
+#         schedule.every().day.at("07:00").do(job)
+
+#         # 새로 추가된 15:00-18:00 시간대: 15분 간격
+#         for hour in [15, 16, 17]:
+#             for minute in range(0, 60, 15):
+#                 schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
+#         # 18:00에 마지막 실행
+#         schedule.every().day.at("18:00").do(job)
+
+#         # 스케줄러 실행
+#         while True:
+#             schedule.run_pending()
+#             time.sleep(1)
+            
+#     except Exception as e:
+#         logger.error(f"Critical error occurred: {e}")
+#         cleanup_chrome_processes()
+#     finally:
+#         cleanup_chrome_processes()
