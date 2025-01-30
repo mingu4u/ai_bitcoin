@@ -339,20 +339,55 @@ class BinanceFuturesTrader:
                         'tp': None,
                         'sl': None
                     }
-                
-                # 같은 방향 추가 진입인 경우
-                elif side == position_side:
-                    # 기존 TP/SL 주문 취소
-                    try:
-                        open_orders = self.exchange.fetch_open_orders(self.symbol)
-                        for order in open_orders:
-                            if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-                                self.exchange.cancel_order(order['id'], self.symbol)
-                                self.logger.info(f"Cancelled existing TP/SL order {order['id']}")
-                    except Exception as e:
-                        self.logger.error(f"Error cancelling existing TP/SL orders: {e}")
-                        return None
+                            
+            # 같은 방향 추가 진입인 경우
+            elif side == position_side:
+                # 현재 오픈된 주문들 중 SL 주문의 가격 찾기
+                try:
+                    open_orders = self.exchange.fetch_open_orders(self.symbol)
+                    existing_sl_price = None
+                    for order in open_orders:
+                        if order['type'] == 'STOP_MARKET':
+                            existing_sl_price = order['price']
+                            break
+                except Exception as e:
+                    self.logger.error(f"기존 SL 주문 가격 조회 중 오류: {e}")
+                    existing_sl_price = None
 
+                # 총 포지션 크기와 평균 진입 가격 계산
+                total_position_size = quantity + float(current_position['contracts'])
+                total_position_value = (quantity * current_price) + (float(current_position['contracts']) * float(current_position['entryPrice']))
+                new_avg_entry_price = total_position_value / total_position_size
+
+                # SL 가격 가중평균 계산 (기존 SL 가격이 있는 경우)
+                if existing_sl_price:
+                    total_sl_value = (quantity * sl_price) + (float(current_position['contracts']) * existing_sl_price)
+                    new_sl_price = total_sl_value / total_position_size
+                else:
+                    # 기존 SL 주문이 없으면 현재 제공된 sl_price 사용
+                    new_sl_price = sl_price
+
+                # TP 가격 계산
+                if side == 'buy':
+                    new_tp_price = new_avg_entry_price + (new_avg_entry_price - new_sl_price) * pl_ratio
+                else:  # sell
+                    new_tp_price = new_avg_entry_price - (new_sl_price - new_avg_entry_price) * pl_ratio
+
+                # 기존 TP/SL 주문 취소
+                try:
+                    open_orders = self.exchange.fetch_open_orders(self.symbol)
+                    for order in open_orders:
+                        if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
+                            self.exchange.cancel_order(order['id'], self.symbol)
+                            self.logger.info(f"Cancelled existing TP/SL order {order['id']}")
+                except Exception as e:
+                    self.logger.error(f"Error cancelling existing TP/SL orders: {e}")
+                    return None
+
+                # 이후 코드에서 tp_price와 sl_price를 새로 계산된 값으로 대체
+                tp_price = new_tp_price
+                sl_price = new_sl_price
+                
             # 새로운 포지션 진입 또는 같은 방향 추가 진입
             # 가용 자금 조회
             balance = self.exchange.fetch_balance()
