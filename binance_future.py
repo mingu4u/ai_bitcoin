@@ -248,25 +248,41 @@ class BinanceFuturesTrader:
             # TP/SL 가격 검증
             min_price_diff = current_price * 0.001  # 최소 0.1% 차이 필요
             
-            if side == 'buy':
-                tp_price = current_price + pl_ratio * (current_price - sl_price)
-                # 롱 포지션의 경우 검증
-                if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
-                    self.logger.error(f"Invalid SL price for long position: SL ({sl_price}) must be lower than current price ({current_price}) with minimum difference {min_price_diff}")
-                    return None
-                if tp_price <= current_price or (tp_price - current_price) < min_price_diff:
-                    self.logger.error(f"Invalid TP price for long position: TP ({tp_price}) must be higher than current price ({current_price}) with minimum difference {min_price_diff}")
-                    return None
-            else:  # sell
-                tp_price = current_price - pl_ratio * (sl_price - current_price)
-                # 숏 포지션의 경우 검증
-                if sl_price <= current_price or (sl_price - current_price) < min_price_diff:
-                    self.logger.error(f"Invalid SL price for short position: SL ({sl_price}) must be higher than current price ({current_price}) with minimum difference {min_price_diff}")
-                    return None
-                if tp_price >= current_price or (current_price - tp_price) < min_price_diff:
-                    self.logger.error(f"Invalid TP price for short position: TP ({tp_price}) must be lower than current price ({current_price}) with minimum difference {min_price_diff}")
-                    return None
+            # 안전 마진 상수 (0.2%)
+            SAFETY_MARGIN = 0.002
 
+            if side == 'buy':
+                # SL 가격 보정
+                if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
+                    adjusted_sl_price = current_price * (1 - SAFETY_MARGIN)
+                    self.logger.warning(f"Invalid SL price for long position. Adjusting SL from {sl_price} to {adjusted_sl_price}")
+                    sl_price = adjusted_sl_price
+
+                # TP 가격 재계산
+                tp_price = current_price + pl_ratio * (current_price - sl_price)
+
+                # TP 가격 보정
+                if tp_price <= current_price or (tp_price - current_price) < pl_ratio * min_price_diff:
+                    adjusted_tp_price = current_price * (1 + SAFETY_MARGIN)
+                    self.logger.warning(f"Invalid TP price for long position. Adjusting TP from {tp_price} to {adjusted_tp_price}")
+                    tp_price = adjusted_tp_price
+
+            else:  # sell
+                # SL 가격 보정
+                if sl_price <= current_price or (sl_price - current_price) < min_price_diff:
+                    adjusted_sl_price = current_price * (1 + SAFETY_MARGIN)
+                    self.logger.warning(f"Invalid SL price for short position. Adjusting SL from {sl_price} to {adjusted_sl_price}")
+                    sl_price = adjusted_sl_price
+
+                # TP 가격 재계산
+                tp_price = current_price - pl_ratio * (sl_price - current_price)
+
+                # TP 가격 보정
+                if tp_price >= current_price or (current_price - tp_price) < pl_ratio * min_price_diff:
+                    adjusted_tp_price = current_price * (1 - SAFETY_MARGIN)
+                    self.logger.warning(f"Invalid TP price for short position. Adjusting TP from {tp_price} to {adjusted_tp_price}")
+                    tp_price = adjusted_tp_price 
+                                
             # 현재 포지션 확인
             positions = self.exchange.fetch_positions([self.symbol])
             current_position = None
@@ -1016,7 +1032,7 @@ def ai_trading():
 
                         Ensure that the percentage is an integer between 1 and 100 for buy/sell decisions, and exactly 0 for hold decisions.
                         Your percentage should reflect the strength of your conviction in the decision based on the analyzed data.
-                        Depending on the strength of the buy signal, P&L ratio should between 1.3~2 value  (default 1.5) 
+                        Depending on the strength of the entry signal, P&L ratio should between 1.3~2 value  (default 1.5) 
                         """
                     },
                     {
