@@ -1037,6 +1037,7 @@ def ai_trading():
             logger.info(f"### Reason: {result.reason} ###")
 
             order_executed = False
+            order_info = None  # 변수 초기화 추가
         try:
             # 현재가 조회
             ticker = trader.exchange.fetch_ticker('BTC/USDT')
@@ -1106,16 +1107,14 @@ def ai_trading():
         ticker = trader.exchange.fetch_ticker('BTC/USDT')
         current_btc_price = ticker['last']
 
-            # 거래 기록을 DB에 저장하기
-        if order_info != None:
-            
-            # order_info에서 entry order의 id를 가져옴
+        # 거래 기록을 DB에 저장하기
+        if order_executed and order_info != None:
             order_id = order_info['entry']['id']
-            logger.info(f"롱 포지션 진입: 금액={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
-            order_executed = True
-            
-            # 거래 기록을 DB에 저장하기
-            log_trade(conn, 'AI', order_id, result.decision, result.percentage if order_executed else 0, result.reason, 
+            log_trade(conn, 'AI', order_id, result.decision, result.percentage, result.reason, 
+                used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
+        else:
+            # 거래가 실행되지 않은 경우 (hold 또는 실패)
+            log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
                     used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
     except sqlite3.Error as e:
         logger.error(f"Database connection error: {e}")
