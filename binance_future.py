@@ -489,7 +489,7 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   timestamp TEXT,
                   trade_type TEXT,
-                  order_id TEXT,           # 추가된 컬럼
+                  order_id TEXT,
                   decision TEXT,
                   percentage INTEGER,
                   reason TEXT,
