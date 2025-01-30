@@ -127,6 +127,8 @@ def main():
     st.write(f"Total number of trades: {len(filtered_df)}")
     st.write(f"First trade date: {filtered_df['timestamp'].min()}")
     st.write(f"Last trade date: {filtered_df['timestamp'].max()}")
+    st.write(f"Recent trade reflection: ")
+    st.write(f"{df.loc[0,'reflection']}")   
     
     # AI 거래일 경우에만 reflection 표시
     if trade_type == 'AI' and len(filtered_df) > 0:
@@ -147,8 +149,17 @@ def main():
     # 거래 결정 분포
     st.header('Trade Decision Distribution')
     decision_counts = filtered_df['decision'].value_counts()
-    fig = px.pie(values=decision_counts.values, names=decision_counts.index, 
-                 title=f'Trade Decisions ({trade_type})')
+    fig = px.pie(
+        values=decision_counts.values, 
+        names=decision_counts.index,
+        title=f'Trade Decisions ({trade_type})',
+        color=decision_counts.index,
+        color_discrete_map={
+            'buy': '#FF0000',     # 빨강
+            'sell': '#000080',    # 진한 파랑
+            'hold': '#87CEEB'     # 하늘색
+        }
+    )
     st.plotly_chart(fig)
 
     # 자산 변화 그래프들

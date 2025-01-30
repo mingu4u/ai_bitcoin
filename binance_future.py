@@ -67,11 +67,15 @@ class BinanceFuturesTrader:
             # DB 연결
             conn = sqlite3.connect('bitcoin_trades.db')
             
-            # 가장 최근 기록된 거래의 timestamp 조회
+            # 가장 최근 기록된 거래의 timestamp 조회 (MANUAL 거래만)
             c = conn.cursor()
             c.execute("SELECT MAX(timestamp) FROM trades WHERE trade_type = 'MANUAL'")
             last_recorded = c.fetchone()[0]
             last_recorded_time = datetime.fromisoformat(last_recorded) if last_recorded else datetime.min
+            
+            # AI 거래의 orderIds 조회
+            c.execute("SELECT DISTINCT order_id FROM trades WHERE trade_type = 'AI'")
+            ai_order_ids = set(row[0] for row in c.fetchall())
             
             # 포지션 정보 조회
             positions = self.exchange.fetch_positions([self.symbol])
@@ -95,6 +99,10 @@ class BinanceFuturesTrader:
             for trade in trades:
                 trade_time = datetime.fromtimestamp(trade['timestamp'] / 1000)
                 
+                # AI 거래인 경우 건너뛰기
+                if trade['id'] in ai_order_ids:
+                    continue
+                    
                 # 이미 기록된 거래는 건너뛰기
                 if trade_time <= last_recorded_time:
                     continue
@@ -111,18 +119,27 @@ class BinanceFuturesTrader:
                 # 평균 진입가격
                 btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
 
-                # DB에 거래 기록
-                log_trade(conn, 'MANUAL', decision, int(trade_percentage), reason,
-                        used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price)
+                # DB에 거래 기록 (trade['id']를 order_id로 저장)
+                log_trade(conn, 
+                        trade_type='MANUAL',
+                        order_id=trade['id'],
+                        decision=decision,
+                        percentage=int(trade_percentage),
+                        reason=reason,
+                        btc_balance=used_usdt,
+                        usdt_balance=free_usdt,
+                        total_assets=total_usdt,
+                        btc_avg_buy_price=btc_avg_buy_price,
+                        btc_current_price=current_btc_price)
                 
                 self.logger.info(f"Manual trade recorded: {decision.upper()} at {current_btc_price}")
-                
+            
             conn.close()
             
         except Exception as e:
             self.logger.error(f"Error monitoring manual trades: {e}")
-            if conn:
-                conn.close()
+            if 'conn' in locals():
+                conn.close()    
 
     def setup_leverage_and_margin(self, leverage: int):
         try:
@@ -468,12 +485,11 @@ def signal_handler(signum, frame):
 def init_db():
     conn = sqlite3.connect('bitcoin_trades.db')
     c = conn.cursor()
-    
-    # trades 테이블 수정 (trade_type 컬럼 추가)
     c.execute('''CREATE TABLE IF NOT EXISTS trades
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   timestamp TEXT,
                   trade_type TEXT,
+                  order_id TEXT,           # 추가된 컬럼
                   decision TEXT,
                   percentage INTEGER,
                   reason TEXT,
@@ -490,13 +506,13 @@ def init_db():
 # 거래 기록을 DB에 저장하는 함수
 
 # 거래 기록 함수 수정
-def log_trade(conn, trade_type, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection=''):
+def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection=''):
     c = conn.cursor()
     timestamp = datetime.now().isoformat()
     c.execute("""INSERT INTO trades 
-                 (timestamp, trade_type, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-              (timestamp, trade_type, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection))
+                 (timestamp, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              (timestamp, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection))
     conn.commit()
 
 # 최근 투자 기록 조회
@@ -1090,9 +1106,17 @@ def ai_trading():
         ticker = trader.exchange.fetch_ticker('BTC/USDT')
         current_btc_price = ticker['last']
 
-        # 거래 기록을 DB에 저장하기
-        log_trade(conn, 'AI', result.decision, result.percentage if order_executed else 0, result.reason, 
-         used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
+            # 거래 기록을 DB에 저장하기
+        if order_info != None:
+            
+            # order_info에서 entry order의 id를 가져옴
+            order_id = order_info['entry']['id']
+            logger.info(f"롱 포지션 진입: 금액={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
+            order_executed = True
+            
+            # 거래 기록을 DB에 저장하기
+            log_trade(conn, 'AI', order_id, result.decision, result.percentage if order_executed else 0, result.reason, 
+                    used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
     except sqlite3.Error as e:
         logger.error(f"Database connection error: {e}")
         return
