@@ -110,8 +110,9 @@ class BinanceFuturesTrader:
                 # 거래 방향 결정
                 decision = 'buy' if trade['side'] == 'buy' else 'sell'
                 
-                # 거래 비율 계산 (총 자산 대비)
-                trade_percentage = (abs(trade['cost']) / total_usdt) * 100
+                # 레버리지를 고려한 실제 거래 비율 계산
+                actual_trade_amount = abs(trade['cost']) / self.leverage  # 레버리지를 나눠서 실제 사용된 증거금 계산
+                trade_percentage = (actual_trade_amount / total_usdt) * 100
                 
                 # 거래 이유 (수동 거래는 reason을 'Manual Trade'로 기록)
                 reason = "Manual Trade"
