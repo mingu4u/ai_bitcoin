@@ -238,13 +238,34 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error opening position: {e}")
             raise
 
-
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         try:
             # 현재가 조회
             ticker = self.exchange.fetch_ticker(self.symbol)
             current_price = ticker['last']
+
+            # TP/SL 가격 검증
+            min_price_diff = current_price * 0.001  # 최소 0.1% 차이 필요
             
+            if side == 'buy':
+                tp_price = current_price + pl_ratio * (current_price - sl_price)
+                # 롱 포지션의 경우 검증
+                if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
+                    self.logger.error(f"Invalid SL price for long position: SL ({sl_price}) must be lower than current price ({current_price}) with minimum difference {min_price_diff}")
+                    return None
+                if tp_price <= current_price or (tp_price - current_price) < min_price_diff:
+                    self.logger.error(f"Invalid TP price for long position: TP ({tp_price}) must be higher than current price ({current_price}) with minimum difference {min_price_diff}")
+                    return None
+            else:  # sell
+                tp_price = current_price - pl_ratio * (sl_price - current_price)
+                # 숏 포지션의 경우 검증
+                if sl_price <= current_price or (sl_price - current_price) < min_price_diff:
+                    self.logger.error(f"Invalid SL price for short position: SL ({sl_price}) must be higher than current price ({current_price}) with minimum difference {min_price_diff}")
+                    return None
+                if tp_price >= current_price or (current_price - tp_price) < min_price_diff:
+                    self.logger.error(f"Invalid TP price for short position: TP ({tp_price}) must be lower than current price ({current_price}) with minimum difference {min_price_diff}")
+                    return None
+
             # 현재 포지션 확인
             positions = self.exchange.fetch_positions([self.symbol])
             current_position = None
@@ -278,7 +299,6 @@ class BinanceFuturesTrader:
                                 self.logger.info(f"Cancelled order {order['id']}")
                         except Exception as e:
                             self.logger.error(f"Error cancelling orders: {e}")
-                        
                     else:
                         # 부분 청산
                         quantity = calculated_quantity
@@ -295,9 +315,22 @@ class BinanceFuturesTrader:
                     self.logger.info(f"Position {position_side} closed/reduced at price: {current_price}")
                     return {
                         'entry': order,
-                        'tp': None,  # 포지션 축소/청산시에는 TP/SL 주문 불필요
+                        'tp': None,
                         'sl': None
                     }
+                
+                # 같은 방향 추가 진입인 경우
+                elif side == position_side:
+                    # 기존 TP/SL 주문 취소
+                    try:
+                        open_orders = self.exchange.fetch_open_orders(self.symbol)
+                        for order in open_orders:
+                            if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
+                                self.exchange.cancel_order(order['id'], self.symbol)
+                                self.logger.info(f"Cancelled existing TP/SL order {order['id']}")
+                    except Exception as e:
+                        self.logger.error(f"Error cancelling existing TP/SL orders: {e}")
+                        return None
 
             # 새로운 포지션 진입 또는 같은 방향 추가 진입
             # 가용 자금 조회
@@ -331,18 +364,17 @@ class BinanceFuturesTrader:
                 self.logger.error(f"Order quantity ({quantity}) is below minimum ({min_amount})")
                 return None
             
-            # TP/SL 가격 계산
-            if side == 'buy':
-                tp_price = current_price + pl_ratio * (current_price - sl_price)
-            else:
-                tp_price = current_price - pl_ratio * (sl_price - current_price)
-                
             # 주문 실행
             order = self.exchange.create_market_order(
                 symbol=self.symbol,
                 side=side,
                 amount=quantity
             )
+
+            # 총 포지션 크기 계산
+            total_position_size = quantity
+            if current_position and side == position_side:
+                total_position_size += float(current_position['contracts'])
 
             # TP/SL 주문을 위한 공통 clientOrderId 생성
             client_order_id = f"order_{int(time.time()*1000)}"
@@ -353,7 +385,7 @@ class BinanceFuturesTrader:
                 symbol=self.symbol,
                 type='TAKE_PROFIT_MARKET',
                 side=tp_side,
-                amount=quantity,
+                amount=total_position_size,
                 params={
                     'stopPrice': tp_price,
                     'reduceOnly': True,
@@ -366,7 +398,7 @@ class BinanceFuturesTrader:
                 symbol=self.symbol,
                 type='STOP_MARKET', 
                 side=tp_side,
-                amount=quantity,
+                amount=total_position_size,
                 params={
                     'stopPrice': sl_price,
                     'reduceOnly': True,
@@ -375,7 +407,7 @@ class BinanceFuturesTrader:
                 }
             )
 
-            action_type = "Position increased" if current_position else "New position opened"
+            action_type = "Position increased" if current_position and side == position_side else "New position opened"
             self.logger.info(f"{action_type} - Side: {side}, Amount: {buy_amount} USDT, Leverage: {self.leverage}x")
             self.logger.info(f"Quantity: {quantity} BTC, Entry: {current_price}, TP: {tp_price}, SL: {sl_price}")
             self.logger.info(f"Available balance after order: {available_balance - buy_amount} USDT")
@@ -388,8 +420,10 @@ class BinanceFuturesTrader:
         
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
-            raise  
-                
+            raise
+        
+     
+
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
             position = await self.exchange.fetch_positions(self.symbol)
