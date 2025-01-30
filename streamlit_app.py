@@ -115,9 +115,9 @@ def main():
     df = df.sort_values('timestamp', ascending=False).reset_index(drop=True)
 
     # 거래 유형 선택 필터
-    trade_type = st.selectbox('Select Trade Type', ['All', 'AI', 'Manual'])
+    trade_type = st.selectbox('Select Trade Type', ['ALL', 'AI', 'MANUAL'])
     
-    if trade_type != 'All':
+    if trade_type != 'ALL':
         filtered_df = df[df['trade_type'] == trade_type]
     else:
         filtered_df = df
@@ -187,16 +187,16 @@ def main():
                      title=f'BTC Price ({trade_type})')
         st.plotly_chart(fig)
 
-    # AI와 수동 거래 비교 분석 (All이 선택된 경우에만)
-    if trade_type == 'All':
+    # AI와 수동 거래 비교 분석 (ALL이 선택된 경우에만)
+    if trade_type == 'ALL':
         st.header('AI vs Manual Trading Comparison')
         
         # 거래 유형별 성공률 비교
         ai_trades = df[df['trade_type'] == 'AI']
-        manual_trades = df[df['trade_type'] == 'Manual']
+        manual_trades = df[df['trade_type'] == 'MANUAL']
         
         comparison_data = pd.DataFrame({
-            'Trade Type': ['AI', 'Manual'],
+            'Trade Type': ['AI', 'MANUAL'],
             'Total Trades': [len(ai_trades), len(manual_trades)],
             'Avg Assets Change': [
                 ai_trades['total_assets'].pct_change().mean() * 100 if len(ai_trades) > 0 else 0,
