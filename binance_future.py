@@ -251,6 +251,10 @@ class BinanceFuturesTrader:
             # 안전 마진 상수 (0.2%)
             SAFETY_MARGIN = 0.002
 
+            # 트레일링 스탑로스를 위한 추가 파라미터
+            trailing_threshold = 0.01  # 1% 수익 달성 시 트레일링 시작
+            trailing_buffer = 0.004     # 0.4% 안전 마진
+
             if side == 'buy':
                 # SL 가격 보정
                 if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
@@ -388,41 +392,133 @@ class BinanceFuturesTrader:
                 amount=quantity
             )
 
+
+
+
+            # 포지션 진입 가격 저장 (트레일링 SL을 위해)
+            entry_price = current_price
+
+            # 트레일링 스탑로스 모니터링 함수
+            def monitor_and_adjust_sl():
+                try:
+                    positions = self.exchange.fetch_positions([self.symbol])
+                    current_position = None
+                    for pos in positions:
+                        if float(pos.get('contracts', 0) or 0) != 0:
+                            current_position = pos
+                            break
+
+                    if not current_position:
+                        return None
+
+                    current_ticker = self.exchange.fetch_ticker(self.symbol)
+                    current_market_price = current_ticker['last']
+
+                    # 수익률 계산
+                    if side == 'buy':
+                        profit_percentage = (current_market_price - entry_price) / entry_price
+                    else:  # sell
+                        profit_percentage = (entry_price - current_market_price) / entry_price
+
+                    # 트레일링 스탑로스 로직
+                    if profit_percentage >= trailing_threshold:
+                        # 새로운 SL 가격 계산
+                        if side == 'buy':
+                            new_sl_price = current_market_price * (1 - trailing_buffer)
+                        else:  # sell
+                            new_sl_price = current_market_price * (1 + trailing_buffer)
+
+                        # 기존 SL 주문 취소
+                        try:
+                            open_orders = self.exchange.fetch_open_orders(self.symbol)
+                            for order in open_orders:
+                                if order['type'] == 'STOP_MARKET':
+                                    self.exchange.cancel_order(order['id'], self.symbol)
+                                    self.logger.info("기존 SL 주문 취소")
+                        except Exception as cancel_error:
+                            self.logger.error(f"SL 주문 취소 중 오류: {cancel_error}")
+
+                        # 새로운 SL 주문 생성
+                        tp_side = 'sell' if side == 'buy' else 'buy'
+                        new_sl_order = self.exchange.create_order(
+                            symbol=self.symbol,
+                            type='STOP_MARKET',
+                            side=tp_side,
+                            amount=quantity,
+                            params={
+                                'stopPrice': new_sl_price,
+                                'reduceOnly': True
+                            }
+                        )
+
+                        self.logger.info(f"트레일링 SL 재설정: {new_sl_price}")
+                        return new_sl_order
+
+                except Exception as e:
+                    self.logger.error(f"SL 모니터링 중 오류: {e}")
+                    return None
+
+
+
             # 총 포지션 크기 계산
             total_position_size = quantity
             if current_position and side == position_side:
                 total_position_size += float(current_position['contracts'])
 
-            # TP/SL 주문을 위한 공통 clientOrderId 생성
-            client_order_id = f"order_{int(time.time()*1000)}"
+            # TP/SL 주문 전에 기존 대기 중인 주문 취소
+            try:
+                open_orders = self.exchange.fetch_open_orders(self.symbol)
+                for order in open_orders:
+                    if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
+                        self.exchange.cancel_order(order['id'], self.symbol)
+                        self.logger.info(f"Cancelled existing TP/SL order: {order['id']}")
+            except Exception as e:
+                self.logger.error(f"Error cancelling existing orders: {e}")
+
 
             # TP/SL 주문
             tp_side = 'sell' if side == 'buy' else 'buy'
-            tp_order = self.exchange.create_order(
-                symbol=self.symbol,
-                type='TAKE_PROFIT_MARKET',
-                side=tp_side,
-                amount=total_position_size,
-                params={
-                    'stopPrice': tp_price,
-                    'reduceOnly': True,
-                    'clientOrderId': client_order_id,
-                    'autoClose': True
-                }
-            )
+            
+            try:            
+                # Take Profit 주문
+                tp_order = self.exchange.create_order(
+                    symbol=self.symbol,
+                    type='TAKE_PROFIT_MARKET',
+                    side=tp_side,
+                    amount=quantity,
+                    params={
+                        'stopPrice': tp_price,
+                        'reduceOnly': True
+                    }
+                )            
 
-            sl_order = self.exchange.create_order(
-                symbol=self.symbol,
-                type='STOP_MARKET', 
-                side=tp_side,
-                amount=total_position_size,
-                params={
-                    'stopPrice': sl_price,
-                    'reduceOnly': True,
-                    'clientOrderId': client_order_id,
-                    'autoClose': True
-                }
-            )
+                # Stop Loss 주문
+                sl_order = self.exchange.create_order(
+                    symbol=self.symbol,
+                    type='STOP_MARKET',
+                    side=tp_side,
+                    amount=quantity,
+                    params={
+                        'stopPrice': sl_price,
+                        'reduceOnly': True
+                    }
+                )
+
+            except Exception as e:
+                        # TP/SL 주문 실패 시 기존 포지션 취소
+                        self.logger.error(f"TP/SL 주문 실패: {e}")
+                        try:
+                            # 기존 포지션 취소
+                            self.exchange.create_market_order(
+                                symbol=self.symbol,
+                                side=tp_side,
+                                amount=quantity,
+                                params={'reduceOnly': True}
+                            )
+                        except Exception as cancel_error:
+                            self.logger.error(f"포지션 취소 실패: {cancel_error}")
+
+                        raise
 
             action_type = "Position increased" if current_position and side == position_side else "New position opened"
             self.logger.info(f"{action_type} - Side: {side}, Amount: {buy_amount} USDT, Leverage: {self.leverage}x")
@@ -432,7 +528,9 @@ class BinanceFuturesTrader:
             return {
                 'entry': order,
                 'tp': tp_order,
-                'sl': sl_order
+                'sl': sl_order,
+                'monitor_sl': monitor_and_adjust_sl,
+                'entry_price': entry_price
             }
         
         except Exception as e:
@@ -1163,10 +1261,26 @@ def ai_trading():
             order_id = order_info['entry']['id']
             log_trade(conn, 'AI', order_id, result.decision, result.percentage, result.reason, 
                 used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
+        
+            # 트레일링 스탑로스 모니터링 추가
+            if 'monitor_sl' in order_info:
+                def periodic_sl_monitoring():
+                    new_sl_order = order_info['monitor_sl']()
+                    if new_sl_order:
+                        # 필요하다면 추가 로직 구현
+                        logger.info(f"Trailing SL order updated: {new_sl_order}")
+                        
+                # 5분마다 SL 모니터링
+                schedule.every(5).minutes.do(periodic_sl_monitoring)
+                
         else:
             # 거래가 실행되지 않은 경우 (hold 또는 실패)
             log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
                     used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
+    
+    
+    
+    
     except sqlite3.Error as e:
         logger.error(f"Database connection error: {e}")
         return
