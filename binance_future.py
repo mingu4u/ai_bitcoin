@@ -20,7 +20,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import TimeoutException, ElementClickInterceptedException, WebDriverException, NoSuchElementException
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from youtube_transcript_api import YouTubeTranscriptApi
 from pydantic import BaseModel
 from openai import OpenAI
@@ -795,6 +795,22 @@ def add_indicators(df):
     
     return df
 
+# UTC에서 한국 표준시 (KST) 로 변환
+def convert_utc_to_kst(utc_date_str):
+    if not utc_date_str:
+        return ''
+    
+    try:
+        # Parse the UTC date string
+        utc_datetime = datetime.strptime(utc_date_str, '%m/%d/%Y, %I:%M %p, %z')
+        
+        # Convert to KST (UTC+9)
+        kst_datetime = utc_datetime + timedelta(hours=9)
+        
+        # Format the date in the desired KST format
+        return kst_datetime.strftime('%Y/%m/%d/%H:%M (KST)')
+    except ValueError:
+        return ''
 
 # 공포 탐욕 지수 조회
 def get_fear_and_greed_index():
@@ -803,17 +819,23 @@ def get_fear_and_greed_index():
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         data = response.json()
-        return data['data'][0]
+        result = data['data'][0]
+        
+        # timestamp를 초 단위에서 KST datetime 문자열로 변환
+        timestamp = pd.to_datetime(int(result['timestamp']), unit='s')
+        kst_time = timestamp.tz_localize('UTC').tz_convert('Asia/Seoul')
+        result['timestamp'] = kst_time.strftime('%Y/%m/%d %H:%M (KST)')
+        
+        return result
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error fetching Fear and Greed Index: {e}")
+        print(f"Error fetching Fear and Greed Index: {e}")
         return None
-
 
 # 뉴스 데이터 가져오기
 def get_bitcoin_news():
     serpapi_key = os.getenv("SERPAPI_API_KEY")
     if not serpapi_key:
-        logger.error("SERPAPI API key is missing.")
+        print("SERPAPI API key is missing.")
         return None  # 또는 함수 종료
     url = "https://serpapi.com/search.json"
     params = {
@@ -832,13 +854,14 @@ def get_bitcoin_news():
         for item in news_results:
             headlines.append({
                 "title": item.get("title", ""),
-                "date": item.get("date", "")
+                "timestamp": convert_utc_to_kst(item.get("date", ""))
             })
         
         return headlines[:5]
     except requests.RequestException as e:
-        logger.error(f"Error fetching news: {e}")
+        print(f"Error fetching news: {e}")
         return []
+
 
 # 유튜브 자막 데이터 가져오기
 def get_combined_transcript(video_id):
@@ -1002,7 +1025,22 @@ def capture_and_encode_screenshot(driver, type, save="no"):
         return None, None
 
 
-
+def modify_orderbook(orderbook):
+    # Convert timestamp to KST using timezone-aware method
+    timestamp_ms = orderbook['timestamp']
+    original_datetime = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+    kst_datetime = original_datetime.astimezone(timezone(timedelta(hours=9)))
+    
+    # Modify the orderbook dictionary
+    modified_orderbook = {
+        'symbol': orderbook['symbol'],
+        'bids': orderbook['bids'],
+        'asks': orderbook['asks'],
+        'timestamp': kst_datetime.strftime('%Y/%m/%d/%H:%M (KST)'),
+        'nonce': orderbook['nonce']
+    }
+    
+    return modified_orderbook
 
 
 
@@ -1010,11 +1048,8 @@ def capture_and_encode_screenshot(driver, type, save="no"):
 
 ### 메인 AI 트레이딩 로직
 def ai_trading():
-    # global upbit
     ### 데이터 가져오기
     # 1. 현재 투자 상태 조회
-    # all_balances = upbit.get_balances()
-    # filtered_balances = [balance for balance in all_balances if balance['currency'] in ['BTC', 'KRW']]
     # USDT 잔고 조회
     balance = trader.exchange.fetch_balance()
     usdt_balance = balance['USDT']
@@ -1024,17 +1059,14 @@ def ai_trading():
     filtered_balances = [used_usdt, free_usdt]
 
     # 2. 오더북(호가 데이터) 조회
-    # orderbook = pyupbit.get_orderbook("KRW-BTC")
     orderbook = trader.exchange.fetch_order_book('BTC/USDT')
+    modified_orderbook = modify_orderbook(orderbook)
 
     # 3. 차트 데이터 조회 및 보조지표 추가
     # df_daily = pyupbit.get_ohlcv("KRW-BTC", interval="day", count=30)
     # df_daily = dropna(df_daily)
     # df_daily = add_indicators(df_daily)
     
-    # df_hourly = pyupbit.get_ohlcv("KRW-BTC", interval="minute60", count=24)
-    # df_hourly = dropna(df_hourly)
-    # df_hourly = add_indicators(df_hourly)
 
     # 바이낸스 5분봉 데이터 조회 (최근 2.5시간)
     df_5min = pd.DataFrame(
@@ -1045,7 +1077,7 @@ def ai_trading():
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
-    df_5min['timestamp'] = pd.to_datetime(df_5min['timestamp'], unit='ms')
+    df_5min['timestamp'] = pd.to_datetime(df_5min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
     df_5min = df_5min.set_index('timestamp')
     df_5min = dropna(df_5min)
     df_5min = add_indicators(df_5min)
@@ -1059,7 +1091,7 @@ def ai_trading():
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
-    df_hourly['timestamp'] = pd.to_datetime(df_hourly['timestamp'], unit='ms')
+    df_hourly['timestamp'] = pd.to_datetime(df_hourly['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
     df_hourly = df_hourly.set_index('timestamp')
     df_hourly = dropna(df_hourly)
     df_hourly = add_indicators(df_hourly)
@@ -1113,7 +1145,7 @@ def ai_trading():
             current_market_data = {
                 "fear_greed_index": fear_greed_index,
                 "news_headlines": news_headlines,
-                "orderbook": orderbook,
+                "orderbook": modified_orderbook,
                 "5min_ohlcv": df_5min.to_dict(),     # 2.5시간치 5분봉 데이터 추가
                 "hourly_ohlcv": df_hourly.to_dict()  # 12시간치 60분봉 데이터 추가
             }
@@ -1174,9 +1206,10 @@ def ai_trading():
                             {
                                 "type": "text",
                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
-                                Orderbook: {json.dumps(orderbook)}
+                                Orderbook: {json.dumps(modified_orderbook)}
                                 5-minute OHLCV with indicators (30 days): {df_5min.to_json()}
                                 Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
+                                Recent news headlines: {json.dumps(news_headlines)}
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}"""
                             },
                             {
@@ -1266,9 +1299,6 @@ def ai_trading():
         # 거래 실행 여부와 관계없이 현재 잔고 조회
         time.sleep(2)  # API 호출 제한을 고려하여 잠시 대기
         balance = trader.exchange.fetch_balance()
-        # used_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'BTC'), 0)
-        # free_balance = next((float(balance['balance']) for balance in balances if balance['currency'] == 'KRW'), 0)
-        # btc_avg_buy_price = next((float(balance['avg_buy_price']) for balance in balances if balance['currency'] == 'BTC'), 0)
         usdt_balance = balance['USDT']
         free_usdt = usdt_balance['free']    # 사용 가능한 잔고
         used_usdt = usdt_balance['used']    # 주문에 묶인 잔고
@@ -1422,75 +1452,3 @@ if __name__ == "__main__":
         cleanup_chrome_processes()
     finally:
         cleanup_chrome_processes()
-
-
-
-# if __name__ == "__main__":
-#     logger.info("Hello, Mingu !!")
-#     logger.info("Starting trading bot ...")
-#     try:
-
-#         # 시작할 때도 크롬 프로세스 한번 정리
-#         cleanup_chrome_processes()
-
-
-
-#         # 프로그램 시작 시 핸들러 등록
-#         signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
-#         signal.signal(signal.SIGTERM, signal_handler)  # 종료 시그널
-#         atexit.register(cleanup_handler)              # 정상 종료 시
-
-
-#         # 데이터베이스 초기화
-#         init_db()
-
-
-#         # 중복 실행 방지를 위한 변수
-#         trading_in_progress = False
-        
-#         # 트레이딩 작업을 수행하는 함수
-#         def job():
-#             global trading_in_progress
-#             if trading_in_progress:
-#                 logger.warning("Trading job is already in progress, skipping this run ")
-#                 return
-#             try:
-#                 trading_in_progress = True
-#                 ai_trading()
-#             except Exception as e:
-#                 logger.error(f"An error occured: {e}")
-#             finally:
-#                 trading_in_progress = False
-
-#         job()
-#         # 활발한 거래 시간대 (21:00-02:00): 15분 간격
-#         for hour in [21, 22, 23, 0, 1]:
-#             for minute in range(0, 60, 15):
-#                 schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
-#         # 02:00에 마지막 실행
-#         schedule.every().day.at("02:00").do(job)
-
-#         # 활발한 거래 시간대 (04:00-07:00): 15분 간격
-#         for hour in [4, 5, 6]:
-#             for minute in range(0, 60, 15):
-#                 schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
-#         # 07:00에 마지막 실행
-#         schedule.every().day.at("07:00").do(job)
-
-#         # 새로 추가된 15:00-18:00 시간대: 15분 간격
-#         for hour in [15, 16, 17]:
-#             for minute in range(0, 60, 15):
-#                 schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(job)
-#         # 18:00에 마지막 실행
-#         schedule.every().day.at("18:00").do(job)
-
-#         # 스케줄러 실행
-#         while True:
-#             schedule.run_pending()
-#             time.sleep(1)
-            
-#     except Exception as e:
-#         logger.error(f"Critical error occurred: {e}")
-#         cleanup_chrome_processes()
-#     finally:
-#         cleanup_chrome_processes()
