@@ -1420,7 +1420,7 @@ if __name__ == "__main__":
                 monitoring_in_progress = False
 
         # 초기 실행
-        # trading_job()
+        trading_job()
         monitoring_job()
 
         # AI 트레이딩 스케줄 설정
