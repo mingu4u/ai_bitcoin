@@ -700,10 +700,10 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
     conn.commit()
 
 # 최근 투자 기록 조회
-def get_recent_trades(conn, days=7):
+def get_recent_trades(conn, days=3):
     c = conn.cursor()
-    seven_days_ago = (datetime.now() - timedelta(days=days)).isoformat()
-    c.execute("SELECT * FROM trades WHERE timestamp > ? ORDER BY timestamp DESC", (seven_days_ago,))
+    three_days_ago = (datetime.now() - timedelta(days=days)).isoformat()
+    c.execute("SELECT * FROM trades WHERE timestamp > ? ORDER BY timestamp DESC", (three_days_ago,))
     columns = [column[0] for column in c.description]
     return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
 
@@ -1420,7 +1420,7 @@ if __name__ == "__main__":
                 monitoring_in_progress = False
 
         # 초기 실행
-        trading_job()
+        # trading_job()
         monitoring_job()
 
         # AI 트레이딩 스케줄 설정
