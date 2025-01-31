@@ -66,81 +66,86 @@ class BinanceFuturesTrader:
             
             # DB 연결
             conn = sqlite3.connect('bitcoin_trades.db')
-            
-            # 가장 최근 기록된 거래의 timestamp 조회 (MANUAL 거래만)
             c = conn.cursor()
-            c.execute("SELECT MAX(timestamp) FROM trades WHERE trade_type = 'MANUAL'")
-            last_recorded = c.fetchone()[0]
-            last_recorded_time = datetime.fromisoformat(last_recorded) if last_recorded else datetime.min
             
-            # AI 거래의 orderIds 조회
-            c.execute("SELECT DISTINCT order_id FROM trades WHERE trade_type = 'AI'")
-            ai_order_ids = set(row[0] for row in c.fetchall())
-            
-            # 포지션 정보 조회
-            positions = self.exchange.fetch_positions([self.symbol])
-            current_position = None
-            for pos in positions:
-                if float(pos.get('contracts', 0) or 0) != 0:
-                    current_position = pos
-                    break
-                    
-            # 잔고 정보 조회
-            balance = self.exchange.fetch_balance()
-            usdt_balance = balance['USDT']
-            free_usdt = usdt_balance['free']
-            used_usdt = usdt_balance['used']
-            total_usdt = usdt_balance['total']
-            
-            # BTC 현재가 조회
-            ticker = self.exchange.fetch_ticker(self.symbol)
-            current_btc_price = ticker['last']
+            try:
+                # 가장 최근 기록된 MANUAL 거래의 ID 조회
+                c.execute("SELECT MAX(order_id) FROM trades WHERE trade_type = 'MANUAL'")
+                last_recorded_id = c.fetchone()[0]
+                
+                # AI 거래의 orderIds 조회
+                c.execute("SELECT DISTINCT order_id FROM trades WHERE trade_type = 'AI'")
+                ai_order_ids = set(str(row[0]) for row in c.fetchall() if row[0] is not None)
+                
+                # 포지션 정보 조회
+                positions = self.exchange.fetch_positions([self.symbol])
+                current_position = None
+                for pos in positions:
+                    if float(pos.get('contracts', 0) or 0) != 0:
+                        current_position = pos
+                        break
+                        
+                # 잔고 정보 조회
+                balance = self.exchange.fetch_balance()
+                usdt_balance = balance['USDT']
+                free_usdt = usdt_balance['free']
+                used_usdt = usdt_balance['used']
+                total_usdt = usdt_balance['total']
+                
+                # BTC 현재가 조회
+                ticker = self.exchange.fetch_ticker(self.symbol)
+                current_btc_price = ticker['last']
 
-            for trade in trades:
-                trade_time = datetime.fromtimestamp(trade['timestamp'] / 1000)
-                
-                # AI 거래인 경우 건너뛰기
-                if trade['id'] in ai_order_ids:
-                    continue
+                for trade in trades:
+                    trade_id = str(trade['id'])
                     
-                # 이미 기록된 거래는 건너뛰기
-                if trade_time <= last_recorded_time:
-                    continue
+                    # AI 거래이거나 이미 기록된 거래는 건너뛰기
+                    if (trade_id in ai_order_ids) or (last_recorded_id is not None and trade_id == str(last_recorded_id)):
+                        continue
+                        
+                    # 거래 방향 결정
+                    decision = 'buy' if trade['side'] == 'buy' else 'sell'
                     
-                # 거래 방향 결정
-                decision = 'buy' if trade['side'] == 'buy' else 'sell'
-                
-                # 레버리지를 고려한 실제 거래 비율 계산
-                actual_trade_amount = abs(trade['cost']) / self.leverage  # 레버리지를 나눠서 실제 사용된 증거금 계산
-                trade_percentage = (actual_trade_amount / total_usdt) * 100
-                
-                # 거래 이유 (수동 거래는 reason을 'Manual Trade'로 기록)
-                reason = "Manual Trade"
-                
-                # 평균 진입가격
-                btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
+                    # 레버리지를 고려한 실제 거래 비율 계산
+                    actual_trade_amount = abs(trade['cost']) / self.leverage  # 레버리지를 나눠서 실제 사용된 증거금 계산
+                    trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
+                    
+                    # 거래 이유
+                    reason = "Manual Trade"
+                    
+                    # 평균 진입가격
+                    btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
 
-                # DB에 거래 기록 (trade['id']를 order_id로 저장)
-                log_trade(conn, 
-                        trade_type='MANUAL',
-                        order_id=trade['id'],
-                        decision=decision,
-                        percentage=int(trade_percentage),
-                        reason=reason,
-                        btc_balance=used_usdt,
-                        usdt_balance=free_usdt,
-                        total_assets=total_usdt,
-                        btc_avg_buy_price=btc_avg_buy_price,
-                        btc_current_price=current_btc_price)
+                    # DB에 거래 기록
+                    c.execute("""
+                        INSERT INTO trades 
+                        (timestamp, trade_type, order_id, decision, percentage, reason, 
+                        btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        datetime.now().isoformat(),
+                        'MANUAL',
+                        trade_id,
+                        decision,
+                        int(trade_percentage),
+                        reason,
+                        used_usdt,
+                        free_usdt,
+                        total_usdt,
+                        btc_avg_buy_price,
+                        current_btc_price
+                    ))
+                    conn.commit()
+                    
+                    self.logger.info(f"Manual trade recorded: {decision.upper()} at {current_btc_price}")
                 
-                self.logger.info(f"Manual trade recorded: {decision.upper()} at {current_btc_price}")
-            
-            conn.close()
-            
+            finally:
+                conn.close()
+                
         except Exception as e:
             self.logger.error(f"Error monitoring manual trades: {e}")
             if 'conn' in locals():
-                conn.close()    
+                conn.close()
 
     def setup_leverage_and_margin(self, leverage: int):
         try:
