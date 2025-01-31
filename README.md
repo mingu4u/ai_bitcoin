@@ -9,7 +9,8 @@
 OpenAI의 GPT-4를 활용하여 Binance Futures에서 시장 분석과 자동 거래를 수행하는 고급 암호화폐 거래 봇입니다. 이 봇은 전통적인 기술적 분석과 인공지능을 결합하여 거래 결정을 내리며, 자체 성찰과 지속적인 개선 메커니즘을 포함하고 있습니다.
 
 ## 시스템 아키텍처
-![시스템 아키텍처 다이어그램 new](https://github.com/user-attachments/assets/dfaad03e-fdd9-4c16-b8ee-6b58d8a20923)
+![시스템 아키텍처 다이어그램 new](https://github.com/user-attachments/assets/1180d60e-4ecd-4b50-9e3c-ea6057ce7617)
+
 
 
 
