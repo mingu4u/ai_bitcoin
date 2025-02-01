@@ -1189,7 +1189,7 @@ def ai_trading():
                 messages=[
                     {
                         "role": "system",
-                        "content": f"""You are a Bitcoin futures day trader who specializes in short-term trading based on 5-minute candlestick charts. You are trading two-way positions based on coin futures trading and focus on analyzing 5-minute timeframes to identify quick market moves and opportunities while also considering the broader market conditions. You analyze the data provided to determine whether to take a buy, sell, or hold position at the current time. Consider the following when analyzing
+                        "content": f"""You are a Bitcoin futures day trader who specializes in short-term trading based on 5-minute candlestick charts. You are trading two-way positions (buy or sell) and focus on analyzing 5-minute timeframes to identify quick market moves and opportunities while also considering the broader market conditions. You analyze the data provided to determine whether to take a buy(long), sell(short), or hold position at the current time. Consider the following when analyzing
                         
                         - Manage risk by only investing up to 65 percent of your assets in a single order
                         - Technical indicators and market data
@@ -1213,10 +1213,10 @@ def ai_trading():
 
                         You can find the BlackFlag FTS, UT Bot Alerts indicators, Volume Oscillator from the TradingView chart screenshot provided in the image of the user message. 
                         These technical indicators are essential for following the trading strategy outlined above.
-                        For optimal timing of entry, the occurrence of these three indicators should be recent on a 5-minute timeframe. Otherwise, don't enter position.
+                        For optimal timing of entry, the occurrence of these three indicators should be recent on a 5-minute timeframe.
                         and "stop loss price" should be based on trading method above.
                         Also, because of the high fees associated with futures leverage, you shouldn't trade too often. Prioritize the entry signals from the three indicators.
-                        
+                        However, if other factors are sufficient reasons to enter a long(buy) or short(sell) position, you may trade.
                         Based on this trading method, analyze the current market situation and make a judgment by synthesizing it with the provided data and recent performance reflection.
 
                         Response format:
