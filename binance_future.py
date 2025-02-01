@@ -69,13 +69,38 @@ class BinanceFuturesTrader:
             c = conn.cursor()
             
             try:
-                # 가장 최근 기록된 MANUAL 거래의 ID 조회
-                c.execute("SELECT MAX(id) FROM trades WHERE trade_type = 'MANUAL'")
-                last_recorded_id = c.fetchone()[0]
+                # AI 거래의 TP/SL 주문 ID 조회
+                c.execute("""
+                    SELECT t.order_id, t.decision 
+                    FROM trades t 
+                    WHERE t.trade_type = 'AI' 
+                    ORDER BY t.timestamp DESC 
+                    LIMIT 1
+                """)
+                last_ai_trade = c.fetchone()
                 
-                # AI 거래의 orderIds 조회
-                c.execute("SELECT DISTINCT id FROM trades WHERE trade_type = 'AI'")
-                ai_order_ids = set(str(row[0]) for row in c.fetchall() if row[0] is not None)
+                if last_ai_trade:
+                    last_ai_order_id = last_ai_trade[0]
+                    last_ai_decision = last_ai_trade[1]
+                    
+                    # TP/SL 주문 ID 조회
+                    try:
+                        ai_orders = self.exchange.fetch_orders(self.symbol, since=since)
+                        tp_sl_order_ids = []
+                        for order in ai_orders:
+                            if (order['info'].get('origType') in ['TAKE_PROFIT_MARKET', 'STOP_MARKET'] and 
+                                order['info'].get('origClientOrderId', '').startswith(last_ai_order_id)):
+                                tp_sl_order_ids.append(order['id'])
+                    except Exception as e:
+                        self.logger.error(f"Error fetching TP/SL orders: {e}")
+                        tp_sl_order_ids = []
+                else:
+                    tp_sl_order_ids = []
+                    last_ai_decision = None
+
+                # 가장 최근 기록된 거래의 ID 조회
+                c.execute("SELECT MAX(id) FROM trades")
+                last_recorded_id = c.fetchone()[0]
                 
                 # 포지션 정보 조회
                 positions = self.exchange.fetch_positions([self.symbol])
@@ -99,19 +124,32 @@ class BinanceFuturesTrader:
                 for trade in trades:
                     trade_id = str(trade['id'])
                     
-                    # AI 거래이거나 이미 기록된 거래는 건너뛰기
-                    if (trade_id in ai_order_ids) or (last_recorded_id is not None and trade_id == str(last_recorded_id)):
+                    # 이미 기록된 거래는 건너뛰기
+                    if last_recorded_id is not None and trade_id == str(last_recorded_id):
                         continue
-                        
+                    
                     # 거래 방향 결정
                     decision = 'buy' if trade['side'] == 'buy' else 'sell'
                     
                     # 레버리지를 고려한 실제 거래 비율 계산
-                    actual_trade_amount = abs(trade['cost']) / self.leverage  # 레버리지를 나눠서 실제 사용된 증거금 계산
+                    actual_trade_amount = abs(trade['cost']) / self.leverage
                     trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
                     
-                    # 거래 이유
-                    reason = "Manual Trade"
+                    # TP/SL 주문인지 확인하고 이유 설정
+                    if trade_id in tp_sl_order_ids:
+                        order_info = next((order for order in ai_orders if order['id'] == trade_id), None)
+                        if order_info and order_info['info'].get('origType') == 'TAKE_PROFIT_MARKET':
+                            trade_type = 'AI'
+                            reason = 'Take Profit'
+                        elif order_info and order_info['info'].get('origType') == 'STOP_MARKET':
+                            trade_type = 'AI'
+                            reason = 'Stop Loss'
+                        else:
+                            trade_type = 'MANUAL'
+                            reason = 'Manual Trade'
+                    else:
+                        trade_type = 'MANUAL'
+                        reason = 'Manual Trade'
                     
                     # 평균 진입가격
                     btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
@@ -124,7 +162,7 @@ class BinanceFuturesTrader:
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         datetime.now().isoformat(),
-                        'MANUAL',
+                        trade_type,
                         trade_id,
                         decision,
                         int(trade_percentage),
@@ -137,13 +175,13 @@ class BinanceFuturesTrader:
                     ))
                     conn.commit()
                     
-                    self.logger.info(f"Manual trade recorded: {decision.upper()} at {current_btc_price}")
+                    self.logger.info(f"{trade_type} trade recorded: {decision.upper()} at {current_btc_price} (Reason: {reason})")
                 
             finally:
                 conn.close()
                 
         except Exception as e:
-            self.logger.error(f"Error monitoring manual trades: {e}")
+            self.logger.error(f"Error monitoring trades: {e}")
             if 'conn' in locals():
                 conn.close()
 
@@ -710,7 +748,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
 #     columns = [column[0] for column in c.description]
 #     return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
 
-def get_recent_trades(conn, num_trades=20):
+def get_recent_trades(conn, num_trades=40):
     f"""
     최근 n개의 거래 내역을 시간 역순으로 가져오는 함수
     
@@ -762,7 +800,7 @@ def generate_reflection(trades_df, current_market_data):
     
     # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
     response = client.chat.completions.create(
-        model="gpt-4o-2024-11-20",
+        model="gpt-4o-mini", #gpt-4o-2024-11-20
         messages=[
             {
                 "role": "system",
@@ -1185,7 +1223,7 @@ def ai_trading():
     
             # AI 모델에 반성 내용 제공
             response = client.chat.completions.create(
-                model="gpt-4o-2024-11-20",
+                model="gpt-4o-mini", #gpt-4o-2024-11-20
                 messages=[
                     {
                         "role": "system",
@@ -1455,20 +1493,24 @@ if __name__ == "__main__":
         monitoring_job()
 
         # AI 트레이딩 스케줄 설정
-        for hour in [21, 22, 23, 0, 1]:
-            for minute in range(0, 60, 15):
-                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
-        schedule.every().day.at("02:00").do(trading_job)
+        # for hour in [21, 22, 23, 0, 1]:
+        #     for minute in range(0, 60, 15):
+        #         schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
+        # schedule.every().day.at("02:00").do(trading_job)
 
-        for hour in [4, 5, 6]:
-            for minute in range(0, 60, 15):
-                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
-        schedule.every().day.at("07:00").do(trading_job)
+        # for hour in [4, 5, 6]:
+        #     for minute in range(0, 60, 15):
+        #         schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
+        # schedule.every().day.at("07:00").do(trading_job)
 
-        for hour in [15, 16, 17]:
-            for minute in range(0, 60, 15):
-                schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
-        schedule.every().day.at("18:00").do(trading_job)
+        # for hour in [15, 16, 17]:
+        #     for minute in range(0, 60, 15):
+        #         schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
+        # schedule.every().day.at("18:00").do(trading_job)
+        
+        # AI 트레이딩 스케줄 설정 (5분마다 실행)
+        schedule.every(5).minutes.do(trading_job) # GPT-4o-mini를 사용하여 비용 절감, 더 자주 트레이딩 수행
+
 
         # 수동 거래 모니터링 스케줄 설정 (1분마다 실행)
         schedule.every(1).minutes.do(monitoring_job)
