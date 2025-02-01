@@ -70,11 +70,11 @@ class BinanceFuturesTrader:
             
             try:
                 # 가장 최근 기록된 MANUAL 거래의 ID 조회
-                c.execute("SELECT MAX(order_id) FROM trades WHERE trade_type = 'MANUAL'")
+                c.execute("SELECT MAX(id) FROM trades WHERE trade_type = 'MANUAL'")
                 last_recorded_id = c.fetchone()[0]
                 
                 # AI 거래의 orderIds 조회
-                c.execute("SELECT DISTINCT order_id FROM trades WHERE trade_type = 'AI'")
+                c.execute("SELECT DISTINCT id FROM trades WHERE trade_type = 'AI'")
                 ai_order_ids = set(str(row[0]) for row in c.fetchall() if row[0] is not None)
                 
                 # 포지션 정보 조회
@@ -705,12 +705,40 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
     conn.commit()
 
 # 최근 투자 기록 조회
-def get_recent_trades(conn, days=3):
-    c = conn.cursor()
-    three_days_ago = (datetime.now() - timedelta(days=days)).isoformat()
-    c.execute("SELECT * FROM trades WHERE timestamp > ? ORDER BY timestamp DESC", (three_days_ago,))
-    columns = [column[0] for column in c.description]
-    return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
+# def get_recent_trades(conn, days=1):
+#     c = conn.cursor()
+#     some_days_ago = (datetime.now() - timedelta(days=days)).isoformat()
+#     c.execute("SELECT * FROM trades WHERE timestamp > ? ORDER BY timestamp DESC", (some_days_ago,))
+#     columns = [column[0] for column in c.description]
+#     return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
+
+def get_recent_trades(conn, num_trades=20):
+    f"""
+    최근 n개의 거래 내역을 시간 역순으로 가져오는 함수
+    
+    Args:
+        conn: SQLite 데이터베이스 연결 객체
+        num_trades: 가져올 거래 내역의 수 (기본값: 20)
+    
+    Returns:
+        DataFrame: 최근 {num_trades}개의 거래 내역이 시간 역순으로 정렬된 데이터프레임
+    """
+    try:
+        c = conn.cursor()
+        
+        # 단순히 시간 역순으로 정렬하여 최근 n개의 거래 내역 조회
+        c.execute("""
+            SELECT * FROM trades 
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (num_trades,))
+        
+        columns = [column[0] for column in c.description]
+        return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
+        
+    except Exception as e:
+        logging.error(f"Error fetching recent trades: {e}")
+        return pd.DataFrame()  # 에러 발생 시 빈 데이터프레임 반환
 
 
 # 최근 투자 기록을 기반으로 퍼포먼스 계산 (초기 잔고 대비 최종 잔고)
@@ -745,13 +773,13 @@ def generate_reflection(trades_df, current_market_data):
             {
                 "role": "user",
                 "content": f"""
-                Recent trading data:
+                Recent 20 trading data:
                 {trades_df.to_json(orient='records')}
                 
                 Current market data:
                 {current_market_data}
                 
-                Overall performance in the last 7 days: {performance:.2f}%
+                Overall performance over the last 20 trades : {performance:.2f}%
                 
                 Please analyze this data and provide:
                 1. A brief reflection on the recent trading decisions
