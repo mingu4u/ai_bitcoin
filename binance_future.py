@@ -295,14 +295,16 @@ class BinanceFuturesTrader:
             # 현재 포지션 확인
             positions = self.exchange.fetch_positions([self.symbol])
             current_position = None
+            position_side = None  # position_side 명시적 초기화
+
             for pos in positions:
                 if float(pos.get('contracts', 0) or 0) != 0:
                     current_position = pos
+                    position_side = pos['side']  # binance futures에서는 'long' 또는 'short' 반환
                     break
 
             # 반대 방향 주문이 들어온 경우 포지션 축소/청산
-            if current_position:
-                position_side = current_position['side']
+            if current_position and position_side:  # position_side가 있는 경우에만 실행
                 if (position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy'):
                     position_size = float(current_position['contracts'])
                     position_notional = float(current_position['notional'])
@@ -346,7 +348,7 @@ class BinanceFuturesTrader:
                     }
                             
             # 같은 방향 추가 진입인 경우
-            elif side == position_side:
+            elif current_position and side == position_side:
                 # 현재 오픈된 주문들 중 SL 주문의 가격 찾기
                 try:
                     open_orders = self.exchange.fetch_open_orders(self.symbol)
@@ -432,9 +434,6 @@ class BinanceFuturesTrader:
                 amount=quantity
             )
 
-
-
-
             # 포지션 진입 가격 저장 (트레일링 SL을 위해)
             entry_price = current_price
 
@@ -497,7 +496,6 @@ class BinanceFuturesTrader:
                 except Exception as e:
                     self.logger.error(f"SL 모니터링 중 오류: {e}")
                     return None
-
 
 
             # 총 포지션 크기 계산
