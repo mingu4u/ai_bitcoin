@@ -132,7 +132,10 @@ class BinanceFuturesTrader:
             # TP/SL 및 일반 주문 필터링
             tp_orders = [order for order in orders if order['type'] == 'TAKE_PROFIT_MARKET' and order['status'] == 'FILLED']
             sl_orders = [order for order in orders if order['type'] == 'STOP_MARKET' and order['status'] == 'FILLED']
-            market_orders = [order for order in orders if order['type'] == 'MARKET' and order['status'] == 'FILLED']
+            market_orders = [order for order in orders if 
+                            order['type'] == 'MARKET' and 
+                            order['status'] == 'FILLED' and 
+                            not order.get('info', {}).get('reduceOnly', False)]  # reduceOnly가 아닌 것만
             reduce_orders = [order for order in orders if 
                             order['status'] == 'FILLED' and 
                             order.get('info', {}).get('reduceOnly', False) == True]
@@ -174,26 +177,45 @@ class BinanceFuturesTrader:
                     trade_type = 'MANUAL'
                     reason = 'Manual Trade'
 
-                    # reduceOnly 주문인 경우
-                    if order.get('info', {}).get('reduceOnly', False):
-                        reason = 'Position Close'
-                    
-                    # TP/SL 주문인 경우 원본 주문 확인
+                    # AI 거래 여부 먼저 확인
+                    is_ai = False
                     if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
                         client_order_id = order['info'].get('origClientOrderId', '')
                         for orig_order in market_orders:
                             if str(orig_order['id']) == client_order_id.split('_')[-1]:
                                 if self.is_ai_trade(orig_order, last_ai_entry):
-                                    trade_type = 'AI'
-                                    reason = 'Take Profit' if order['type'] == 'TAKE_PROFIT_MARKET' else 'Stop Loss'
+                                    is_ai = True
                                 break
                     else:
-                        # MARKET 주문인 경우 직접 AI 거래 여부 확인
-                        if self.is_ai_trade(order, last_ai_entry):
-                            trade_type = 'AI'
+                        is_ai = self.is_ai_trade(order, last_ai_entry)
 
-                    # AI 거래는 별도로 기록되므로 건너뛰기
-                    if trade_type == 'AI':
+                    # reduceOnly 주문 처리
+                    if order.get('info', {}).get('reduceOnly', False):
+                        # 현재 포지션이 AI에 의해 생성된 것인지 확인
+                        c.execute("""
+                            SELECT trade_type
+                            FROM trades
+                            WHERE decision != 'hold'
+                            ORDER BY timestamp DESC
+                            LIMIT 1
+                        """)
+                        last_position_type = c.fetchone()
+                        
+                        if last_position_type and last_position_type[0] == 'AI':
+                            trade_type = 'MANUAL'  # 수동 청산이므로 MANUAL로 기록
+                            reason = 'Manual Close of AI Position'
+                        else:
+                            trade_type = 'MANUAL'
+                            reason = 'Position Close'
+                    elif is_ai:
+                        trade_type = 'AI'
+                        if order['type'] == 'TAKE_PROFIT_MARKET':
+                            reason = 'Take Profit'
+                        elif order['type'] == 'STOP_MARKET':
+                            reason = 'Stop Loss'
+
+                    # AI 주문 자체는 건너뛰기 (TP/SL/신규 진입)
+                    if is_ai and not order.get('info', {}).get('reduceOnly', False):
                         continue
 
                     decision = 'buy' if order['side'] == 'buy' else 'sell'
