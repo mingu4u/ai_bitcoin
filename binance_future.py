@@ -69,16 +69,15 @@ class BinanceFuturesTrader:
             c = conn.cursor()
             
             try:
-                # 가장 최근의 기록된 주문 ID 조회 (중복 방지)
+                # 1. 중복 기록 방지를 위한 최근 주문 정보 조회 (timestamp와 order_id 함께 사용)
                 c.execute("""
-                    SELECT order_id 
+                    SELECT timestamp, order_id 
                     FROM trades 
                     ORDER BY timestamp DESC 
                     LIMIT 1
                 """)
-                last_recorded_order_id = c.fetchone()
-                last_recorded_order_id = last_recorded_order_id[0] if last_recorded_order_id else None
-
+                last_recorded_trade = c.fetchone()
+                
                 # 가장 최근의 reflection 조회
                 c.execute("""
                     SELECT reflection 
@@ -90,9 +89,9 @@ class BinanceFuturesTrader:
                 last_reflection = c.fetchone()
                 last_reflection = last_reflection[0] if last_reflection else None
 
-                # AI Entry 주문 조회
+                # AI Entry 주문 조회 (최근 AI 트레이딩 정보 포함)
                 c.execute("""
-                    SELECT t.order_id 
+                    SELECT t.order_id, t.timestamp
                     FROM trades t 
                     WHERE t.trade_type = 'AI'
                     ORDER BY t.timestamp DESC 
@@ -106,9 +105,10 @@ class BinanceFuturesTrader:
                         continue
                     
                     order_id = str(order['id'])
+                    order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
                     
-                    # 이미 기록된 주문은 건너뛰기 (중복 방지)
-                    if last_recorded_order_id == order_id:
+                    # 1. 중복 기록 방지 (timestamp와 order_id 모두 고려)
+                    if last_recorded_trade and last_recorded_trade[0] == order_timestamp and last_recorded_trade[1] == order_id:
                         continue
                     
                     # 거래 방향 결정
@@ -129,17 +129,24 @@ class BinanceFuturesTrader:
                     trade_type = 'MANUAL'
                     reason = 'Manual Trade'
                     
-                    # AI의 TP/SL 주문인지 확인
+                    # 2. AI의 TP/SL 주문 및 포지션 추적
                     if last_ai_entry:
                         client_order_id = order['info'].get('origClientOrderId', '')
                         order_type = order['info'].get('type', '').upper()
                         
+                        # AI 트레이딩 주문 ID와 연관된 경우
                         if client_order_id.startswith(str(last_ai_entry[0])):
                             trade_type = 'AI'
                             if order_type == 'TAKE_PROFIT_MARKET':
                                 reason = 'Take Profit'
                             elif order_type == 'STOP_MARKET':
                                 reason = 'Stop Loss'
+                            
+                            # 3. AI 트레이딩 타임스탬프 고려
+                            order_timestamp = max(
+                                order_timestamp, 
+                                last_ai_entry[1] if last_ai_entry and last_ai_entry[1] else order_timestamp
+                            )
                     
                     # 포지션 정보 조회
                     positions = self.exchange.fetch_positions([self.symbol])
@@ -157,7 +164,7 @@ class BinanceFuturesTrader:
                         btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        datetime.fromtimestamp(order['timestamp']/1000).isoformat(),
+                        order_timestamp,
                         trade_type,
                         order_id,
                         decision,
@@ -181,7 +188,6 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error monitoring trades: {e}")
             if 'conn' in locals():
                 conn.close()
-
 
     def setup_leverage_and_margin(self, leverage: int):
         try:
