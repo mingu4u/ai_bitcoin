@@ -191,28 +191,38 @@ class BinanceFuturesTrader:
 
                     # reduceOnly 주문 처리
                     if order.get('info', {}).get('reduceOnly', False):
-                        # 현재 포지션이 AI에 의해 생성된 것인지 확인
+                        # 최근 AI 포지션 진입 주문 확인
                         c.execute("""
-                            SELECT trade_type
+                            SELECT order_id, trade_type
                             FROM trades
-                            WHERE decision != 'hold'
-                            ORDER BY timestamp DESC
+                            WHERE trade_type = 'AI' AND decision != 'hold' 
+                            ORDER BY timestamp DESC 
                             LIMIT 1
                         """)
-                        last_position_type = c.fetchone()
+                        last_ai_position = c.fetchone()
                         
-                        if last_position_type and last_position_type[0] == 'AI':
-                            trade_type = 'MANUAL'  # 수동 청산이므로 MANUAL로 기록
+                        if last_ai_position:
+                            trade_type = 'MANUAL'
                             reason = 'Manual Close of AI Position'
+                            
+                            # AI 포지션의 원래 주문 ID와 현재 reduceOnly 주문의 연관성 확인 추가
+                            c.execute("""
+                                SELECT order_id 
+                                FROM trades 
+                                WHERE trade_type = 'AI' AND order_id = ?
+                            """, (last_ai_position[0],))
+                            ai_trade_exists = c.fetchone()
+                            
+                            if not ai_trade_exists:
+                                reason = 'Position Close'
                         else:
                             trade_type = 'MANUAL'
                             reason = 'Position Close'
-                    elif is_ai:
-                        trade_type = 'AI'
-                        if order['type'] == 'TAKE_PROFIT_MARKET':
-                            reason = 'Take Profit'
-                        elif order['type'] == 'STOP_MARKET':
-                            reason = 'Stop Loss'
+
+                        # 로깅 추가
+                        self.logger.info(f"Reduce Order Processing: reduceOnly={order.get('info', {}).get('reduceOnly', False)}, "
+                                            f"Last AI Position={last_ai_position}, "
+                                            f"Trade Type={trade_type}, Reason={reason}")
 
                     # AI 주문 자체는 건너뛰기 (TP/SL/신규 진입)
                     if is_ai and not order.get('info', {}).get('reduceOnly', False):
@@ -239,6 +249,11 @@ class BinanceFuturesTrader:
                     # BTC 현재가 조회
                     ticker = self.exchange.fetch_ticker(self.symbol)
                     current_btc_price = ticker['last']
+
+                    # 로깅 추가
+                    self.logger.info(f"Trade Processing: order_id={order_id}, "
+                                        f"trade_type={trade_type}, reason={reason}, "
+                                        f"is_ai={is_ai}, decision={decision}")
 
                     # DB에 거래 기록
                     c.execute("""
@@ -523,7 +538,7 @@ class BinanceFuturesTrader:
                     new_avg_entry_price = total_position_value / total_position_size
                 else:
                     total_position_size = quantity
-                    new_avg_entry_price = current_price
+                    new_avg_entry_price = current_price            
 
                 # 기존 TP/SL 주문 취소
                 try:
