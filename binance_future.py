@@ -343,6 +343,13 @@ class BinanceFuturesTrader:
 
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         try:
+            # 기존 TP/SL 주문 정보 백업
+            old_orders = []
+            try:
+                open_orders = self.exchange.fetch_open_orders(self.symbol)
+                old_orders = [order for order in open_orders if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']]
+            except Exception as e:
+                self.logger.error(f"Error fetching existing TP/SL orders: {e}")
             # 시작하기 전에 불필요한 주문만 취소 (같은 방향 추가 진입을 위한 TP/SL은 아직 유지)
             try:
                 open_orders = self.exchange.fetch_open_orders(self.symbol)
@@ -611,12 +618,19 @@ class BinanceFuturesTrader:
             if current_position and side == position_side:
                 total_position_size += float(current_position['contracts'])
 
-            # TP/SL 주문 전에 기존 대기 중인 주문 취소
-            self.cancel_existing_tp_sl_orders()
+
 
             # TP/SL 주문
             tp_side = 'sell' if side == 'buy' else 'buy'
             try:            
+                # 여기서 이전 TP/SL 취소
+                for old_order in old_orders:
+                    try:
+                        self.exchange.cancel_order(old_order['id'], self.symbol)
+                        self.logger.info(f"Cancelled old TP/SL order: {old_order['id']}")
+                    except Exception as e:
+                        self.logger.error(f"Error cancelling old TP/SL order: {e}")
+
                 # Take Profit 주문
                 tp_order = self.exchange.create_order(
                     symbol=self.symbol,
@@ -644,21 +658,40 @@ class BinanceFuturesTrader:
                 )
 
             except Exception as e:
-                # TP/SL 주문 실패 시 기존 포지션 취소
-                self.logger.error(f"TP/SL 주문 실패: {e}")
+                self.logger.error(f"TP/SL order creation failed: {str(e)}")
+                
+                # 실패 시 이전 TP/SL 복구
                 try:
-                    # 기존 포지션 취소
-                    self.exchange.create_market_order(
-                        symbol=self.symbol,
-                        side=tp_side,
-                        amount=quantity,
-                        params={'reduceOnly': True}
-                    )
-                except Exception as cancel_error:
-                    self.logger.error(f"포지션 취소 실패: {cancel_error}")
+                    # 실패한 주문이 있다면 취소
+                    if 'order' in locals():
+                        try:
+                            self.exchange.cancel_order(order['id'], self.symbol)
+                            self.logger.info(f"Cancelled failed new position order: {order['id']}")
+                        except:
+                            pass
 
+                    # 이전 TP/SL 재설정
+                    for old_order in old_orders:
+                        try:
+                            self.exchange.create_order(
+                                symbol=self.symbol,
+                                type=old_order['type'],
+                                side=old_order['side'],
+                                amount=old_order['amount'],
+                                params={
+                                    'stopPrice': old_order['info']['stopPrice'],
+                                    'reduceOnly': True
+                                }
+                            )
+                            self.logger.info(f"Restored old TP/SL order for: {old_order['id']}")
+                        except Exception as restore_err:
+                            self.logger.error(f"Error restoring old TP/SL order: {restore_err}")
+                except Exception as recovery_err:
+                    self.logger.error(f"Error in recovery process: {recovery_err}")
+                
                 raise
 
+            # TP/SL 주문 성공 후 로깅 및 반환
             action_type = "Position increased" if current_position and side == position_side else "New position opened"
             self.logger.info(f"{action_type} - Side: {side}, Amount: {buy_amount} USDT, Leverage: {self.leverage}x")
             self.logger.info(f"Quantity: {quantity} BTC, Entry: {current_price}, TP: {tp_price}, SL: {sl_price}")
@@ -674,8 +707,8 @@ class BinanceFuturesTrader:
         
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
-            raise
-    
+            raise           
+        
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
