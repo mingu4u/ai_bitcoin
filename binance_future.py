@@ -84,7 +84,7 @@ class BinanceFuturesTrader:
                 c.execute("""
                     SELECT t.order_id 
                     FROM trades t 
-                    WHERE t.trade_type = 'AI' AND t.reason LIKE 'AI%'
+                    WHERE t.trade_type = 'AI'
                     ORDER BY t.timestamp DESC 
                     LIMIT 1
                 """)
@@ -407,6 +407,16 @@ class BinanceFuturesTrader:
                 total_position_value = (quantity * current_price) + (float(current_position['contracts']) * float(current_position['entryPrice']))
                 new_avg_entry_price = total_position_value / total_position_size
 
+                # 기존 TP/SL 주문 취소
+                try:
+                    for order in open_orders:
+                        if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
+                            self.exchange.cancel_order(order['id'], self.symbol)
+                            self.logger.info(f"Cancelled existing TP/SL order: {order['id']}")
+                except Exception as e:
+                    self.logger.error(f"Error cancelling existing TP/SL orders: {e}")
+                    return None
+
                 # SL 가격 가중평균 계산
                 if existing_sl_price:
                     total_sl_value = (quantity * sl_price) + (float(current_position['contracts']) * existing_sl_price)
@@ -419,16 +429,6 @@ class BinanceFuturesTrader:
                     new_tp_price = new_avg_entry_price + (new_avg_entry_price - new_sl_price) * pl_ratio
                 else:  # sell
                     new_tp_price = new_avg_entry_price - (new_sl_price - new_avg_entry_price) * pl_ratio
-
-                # 3. 기존 TP/SL 주문 취소
-                try:
-                    for order in open_orders:
-                        if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-                            self.exchange.cancel_order(order['id'], self.symbol)
-                            self.logger.info(f"Cancelled existing TP/SL order after calculation: {order['id']}")
-                except Exception as e:
-                    self.logger.error(f"Error cancelling existing TP/SL orders: {e}")
-                    return None
 
                 # 계산된 새 가격으로 업데이트
                 tp_price = new_tp_price
@@ -491,19 +491,21 @@ class BinanceFuturesTrader:
 
                     current_ticker = self.exchange.fetch_ticker(self.symbol)
                     current_market_price = current_ticker['last']
+                    position_size = float(current_position['contracts'])
+                    position_side = current_position['side']
 
                     # 수익률 계산
-                    if side == 'buy':
+                    if position_side == 'long':
                         profit_percentage = (current_market_price - entry_price) / entry_price
-                    else:  # sell
+                    else:  # short
                         profit_percentage = (entry_price - current_market_price) / entry_price
 
                     # 트레일링 스탑로스 로직
                     if profit_percentage >= trailing_threshold:
                         # 새로운 SL 가격 계산
-                        if side == 'buy':
+                        if position_side == 'long':
                             new_sl_price = current_market_price * (1 - trailing_buffer)
-                        else:  # sell
+                        else:  # short
                             new_sl_price = current_market_price * (1 + trailing_buffer)
 
                         # 기존 SL 주문 취소
@@ -517,12 +519,12 @@ class BinanceFuturesTrader:
                             self.logger.error(f"SL 주문 취소 중 오류: {cancel_error}")
 
                         # 새로운 SL 주문 생성
-                        tp_side = 'sell' if side == 'buy' else 'buy'
+                        tp_side = 'sell' if position_side == 'long' else 'buy'
                         new_sl_order = self.exchange.create_order(
                             symbol=self.symbol,
                             type='STOP_MARKET',
                             side=tp_side,
-                            amount=quantity,
+                            amount=position_size,
                             params={
                                 'stopPrice': new_sl_price,
                                 'reduceOnly': True
@@ -553,7 +555,6 @@ class BinanceFuturesTrader:
 
             # TP/SL 주문
             tp_side = 'sell' if side == 'buy' else 'buy'
-            
             try:            
                 # Take Profit 주문
                 tp_order = self.exchange.create_order(
@@ -580,20 +581,20 @@ class BinanceFuturesTrader:
                 )
 
             except Exception as e:
-                        # TP/SL 주문 실패 시 기존 포지션 취소
-                        self.logger.error(f"TP/SL 주문 실패: {e}")
-                        try:
-                            # 기존 포지션 취소
-                            self.exchange.create_market_order(
-                                symbol=self.symbol,
-                                side=tp_side,
-                                amount=quantity,
-                                params={'reduceOnly': True}
-                            )
-                        except Exception as cancel_error:
-                            self.logger.error(f"포지션 취소 실패: {cancel_error}")
+                # TP/SL 주문 실패 시 기존 포지션 취소
+                self.logger.error(f"TP/SL 주문 실패: {e}")
+                try:
+                    # 기존 포지션 취소
+                    self.exchange.create_market_order(
+                        symbol=self.symbol,
+                        side=tp_side,
+                        amount=quantity,
+                        params={'reduceOnly': True}
+                    )
+                except Exception as cancel_error:
+                    self.logger.error(f"포지션 취소 실패: {cancel_error}")
 
-                        raise
+                raise
 
             action_type = "Position increased" if current_position and side == position_side else "New position opened"
             self.logger.info(f"{action_type} - Side: {side}, Amount: {buy_amount} USDT, Leverage: {self.leverage}x")
@@ -607,11 +608,11 @@ class BinanceFuturesTrader:
                 'monitor_sl': monitor_and_adjust_sl,
                 'entry_price': entry_price
             }
-            
+        
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
-            raise   
-     
+            raise
+    
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
