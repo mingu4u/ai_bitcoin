@@ -384,7 +384,7 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error opening position: {e}")
             raise
 
-    def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
+    def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, origin_sl_price: float):
         try:
             # 공통 상수 및 초기 설정
             SAFETY_MARGIN = 0.002
@@ -404,10 +404,10 @@ class BinanceFuturesTrader:
                 min_price_diff = current_price * 0.001
                     
                 # TP/SL 가격 보정 로직
-                def adjust_prices(side, current_price, origin_sl_price, min_price_diff):
-                    sl_price = origin_sl_price
+                def adjust_prices(order_side, current_price, input_sl_price, min_price_diff):
+                    sl_price = input_sl_price
 
-                    if side == 'buy':
+                    if order_side == 'buy':
                         # SL 가격 보정 (롱 포지션)
                         if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
                             sl_price = current_price * (1 - SAFETY_MARGIN)
@@ -431,7 +431,7 @@ class BinanceFuturesTrader:
 
                 return current_price, min_price_diff, adjust_prices
 
-            def validate_and_prepare_order(current_price):
+            def validate_and_prepare_order(current_price, input_buy_amount):
                 # 주문 가능 금액 및 수량 검증
                 balance = self.exchange.fetch_balance()
                 available_balance = float(balance['USDT']['free'])
@@ -440,9 +440,9 @@ class BinanceFuturesTrader:
                     raise ValueError(f"Insufficient balance. Available: {available_balance} USDT")
                 
                 max_safe_amount = available_balance * 0.65
-                buy_amount = min(buy_amount, max_safe_amount)
+                adjusted_buy_amount = min(input_buy_amount, max_safe_amount)
                 
-                leveraged_amount = buy_amount * self.leverage
+                leveraged_amount = adjusted_buy_amount * self.leverage
                 quantity = leveraged_amount / current_price
                 
                 notional_value = quantity * current_price
@@ -454,9 +454,9 @@ class BinanceFuturesTrader:
                 if quantity < min_amount:
                     raise ValueError(f"Order quantity ({quantity}) is below minimum ({min_amount})")
                 
-                return quantity, leveraged_amount        
+                return quantity, leveraged_amount
 
-            def manage_existing_positions(side, current_price, quantity, leveraged_amount):
+            def manage_existing_positions(input_side, current_price, quantity, leveraged_amount):
                 nonlocal current_position, position_side
                 positions = self.exchange.fetch_positions([self.symbol])
                 current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
@@ -474,7 +474,7 @@ class BinanceFuturesTrader:
                     position_notional = position_size * current_price
                 
                 # 포지션 축소/청산 로직
-                if (position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy'):
+                if (position_side == 'long' and input_side == 'sell') or (position_side == 'short' and input_side == 'buy'):
                     if leveraged_amount >= abs(position_notional):
                         quantity = abs(position_size)
                         
@@ -489,14 +489,14 @@ class BinanceFuturesTrader:
                     # 포지션 축소/청산 주문
                     order = self.exchange.create_market_order(
                         symbol=self.symbol, 
-                        side=side, 
+                        side=input_side, 
                         amount=round(quantity, PRECISION),
                         params={'reduceOnly': True}
                     )
                     
                     return order, position_side, None, position_notional
                 
-                return None, position_side, quantity, None           
+                return None, position_side, quantity, None
 
             def calculate_position_metrics(current_price, quantity):
                 nonlocal current_position, position_side
@@ -507,16 +507,14 @@ class BinanceFuturesTrader:
                 
                 return round(total_position_size, PRECISION)
 
-                
-
             # 주요 실행 흐름
             current_price, min_price_diff, adjust_prices = fetch_market_data()
             
             # SL, TP 가격 보정
-            sl_price, tp_price = adjust_prices(side, current_price, sl_price, min_price_diff)
+            sl_price, tp_price = adjust_prices(side, current_price, origin_sl_price, min_price_diff)
             
             # 주문 수량 및 금액 검증
-            quantity, leveraged_amount = validate_and_prepare_order(current_price)
+            quantity, leveraged_amount = validate_and_prepare_order(current_price, buy_amount)
             
             # 기존 포지션 관리
             reduce_order, position_side, quantity, position_notional = manage_existing_positions(
@@ -582,7 +580,7 @@ class BinanceFuturesTrader:
                 # 원래 예외 다시 발생
                 raise
 
-            # 트레일링 스탑 모니터링 함수 (이전과 동일)
+            # 트레일링 스탑 모니터링 함수
             def monitor_and_adjust_sl():
                 try:
                     positions = self.exchange.fetch_positions([self.symbol])
@@ -643,9 +641,6 @@ class BinanceFuturesTrader:
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
             raise
-
-
-
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
