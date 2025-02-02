@@ -384,7 +384,9 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error opening position: {e}")
             raise
 
-    def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, origin_sl_price: float):
+
+
+    def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         try:
             # 공통 상수 및 초기 설정
             SAFETY_MARGIN = 0.002
@@ -404,7 +406,7 @@ class BinanceFuturesTrader:
                 min_price_diff = current_price * 0.001
                     
                 # TP/SL 가격 보정 로직
-                def adjust_prices(order_side, current_price, input_sl_price, min_price_diff):
+                def adjust_prices(order_side, current_price, input_sl_price, input_pl_ratio, min_price_diff):
                     sl_price = input_sl_price
 
                     if order_side == 'buy':
@@ -413,7 +415,7 @@ class BinanceFuturesTrader:
                             sl_price = current_price * (1 - SAFETY_MARGIN)
                         
                         # TP 가격 계산
-                        tp_price = current_price + pl_ratio * (current_price - sl_price)
+                        tp_price = current_price + input_pl_ratio * (current_price - sl_price)
                         if tp_price <= current_price or (tp_price - current_price) < min_price_diff:
                             tp_price = current_price * (1 + SAFETY_MARGIN)
                     
@@ -423,13 +425,13 @@ class BinanceFuturesTrader:
                             sl_price = current_price * (1 + SAFETY_MARGIN)
                         
                         # TP 가격 계산
-                        tp_price = current_price - pl_ratio * (sl_price - current_price)
+                        tp_price = current_price - input_pl_ratio * (sl_price - current_price)
                         if tp_price >= current_price or (current_price - tp_price) < min_price_diff:
                             tp_price = current_price * (1 - SAFETY_MARGIN)
                     
                     return sl_price, tp_price
 
-                return current_price, min_price_diff, adjust_prices
+                return current_price, min_price_diff, lambda order_side, current_price, input_sl_price, min_price_diff: adjust_prices(order_side, current_price, input_sl_price, pl_ratio, min_price_diff)
 
             def validate_and_prepare_order(current_price, input_buy_amount):
                 # 주문 가능 금액 및 수량 검증
@@ -498,9 +500,9 @@ class BinanceFuturesTrader:
                 
                 return None, position_side, quantity, None
 
-            def calculate_position_metrics(current_price, quantity):
+            def calculate_position_metrics(current_price, quantity, input_side):
                 nonlocal current_position, position_side
-                if current_position and side == position_side:
+                if current_position and input_side == position_side:
                     total_position_size = float(current_position.get('contracts', 0)) + quantity
                 else:
                     total_position_size = quantity
@@ -508,10 +510,10 @@ class BinanceFuturesTrader:
                 return round(total_position_size, PRECISION)
 
             # 주요 실행 흐름
-            current_price, min_price_diff, adjust_prices = fetch_market_data()
+            current_price, min_price_diff, adjust_prices_func = fetch_market_data()
             
             # SL, TP 가격 보정
-            sl_price, tp_price = adjust_prices(side, current_price, origin_sl_price, min_price_diff)
+            sl_price, tp_price = adjust_prices_func(side, current_price, sl_price, min_price_diff)
             
             # 주문 수량 및 금액 검증
             quantity, leveraged_amount = validate_and_prepare_order(current_price, buy_amount)
@@ -531,7 +533,7 @@ class BinanceFuturesTrader:
                 }
             
             # 포지션 메트릭스 계산
-            total_position_size = calculate_position_metrics(current_price, quantity)
+            total_position_size = calculate_position_metrics(current_price, quantity, side)
             
             # 주문 실행
             order = self.exchange.create_market_order(
@@ -575,7 +577,10 @@ class BinanceFuturesTrader:
                 self.logger.error(f"TP/SL order creation failed: {str(e)}")
                 
                 # 원래 주문 취소
-                self.exchange.cancel_order(order['id'], self.symbol)
+                try:
+                    self.exchange.cancel_order(order['id'], self.symbol)
+                except Exception as cancel_error:
+                    self.logger.error(f"Error cancelling order: {cancel_error}")
                 
                 # 원래 예외 다시 발생
                 raise
@@ -641,6 +646,7 @@ class BinanceFuturesTrader:
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
             raise
+
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
