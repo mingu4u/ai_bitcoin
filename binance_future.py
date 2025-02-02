@@ -129,10 +129,13 @@ class BinanceFuturesTrader:
             # 모든 주문 조회
             orders = self.exchange.fetch_orders(self.symbol, since)
             
-            # TP/SL 주문 필터링
+            # TP/SL 및 일반 주문 필터링
             tp_orders = [order for order in orders if order['type'] == 'TAKE_PROFIT_MARKET' and order['status'] == 'FILLED']
             sl_orders = [order for order in orders if order['type'] == 'STOP_MARKET' and order['status'] == 'FILLED']
             market_orders = [order for order in orders if order['type'] == 'MARKET' and order['status'] == 'FILLED']
+            reduce_orders = [order for order in orders if 
+                            order['status'] == 'FILLED' and 
+                            order.get('info', {}).get('reduceOnly', False) == True]
             
             # DB 연결
             conn = sqlite3.connect('bitcoin_trades.db')
@@ -158,8 +161,8 @@ class BinanceFuturesTrader:
                 """)
                 last_ai_entry = c.fetchone()
 
-                # 모든 주문 처리 (MARKET, TP, SL)
-                for order in market_orders + tp_orders + sl_orders:
+                # 모든 주문 처리 (MARKET, TP, SL, Reduce)
+                for order in market_orders + tp_orders + sl_orders + reduce_orders:
                     order_id = str(order['id'])
                     order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
                     
@@ -170,6 +173,10 @@ class BinanceFuturesTrader:
                     # 거래 타입 결정
                     trade_type = 'MANUAL'
                     reason = 'Manual Trade'
+
+                    # reduceOnly 주문인 경우
+                    if order.get('info', {}).get('reduceOnly', False):
+                        reason = 'Position Close'
                     
                     # TP/SL 주문인 경우 원본 주문 확인
                     if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
@@ -241,7 +248,6 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error monitoring trades: {e}")
             if 'conn' in locals():
                 conn.close()
-
 
 
     def setup_leverage_and_margin(self, leverage: int):
