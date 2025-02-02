@@ -386,224 +386,154 @@ class BinanceFuturesTrader:
 
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         try:
-            # 기존 TP/SL 주문 정보 백업
-            old_orders = []
-            try:
-                open_orders = self.exchange.fetch_open_orders(self.symbol)
-                old_orders = [order for order in open_orders if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']]
-            except Exception as e:
-                self.logger.error(f"Error fetching existing TP/SL orders: {e}")
-            # 시작하기 전에 불필요한 주문만 취소 (같은 방향 추가 진입을 위한 TP/SL은 아직 유지)
-            try:
-                open_orders = self.exchange.fetch_open_orders(self.symbol)
-                for order in open_orders:
-                    # TP/SL 주문이 아닌 경우에만 취소
-                    if order['type'] not in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-                        self.exchange.cancel_order(order['id'], self.symbol)
-                        self.logger.info(f"Cancelled non-TP/SL order: {order['id']}")
-            except Exception as e:
-                self.logger.error(f"Error cancelling non-TP/SL orders: {e}")
-
-            # 현재가 조회
-            ticker = self.exchange.fetch_ticker(self.symbol)
-            current_price = ticker['last']
-
-            # TP/SL 가격 검증
-            min_price_diff = current_price * 0.001  # 최소 0.1% 차이 필요
-            
-            # 안전 마진 상수 (0.2%)
+            # 공통 상수 및 초기 설정
             SAFETY_MARGIN = 0.002
+            TRAILING_THRESHOLD = 0.01
+            TRAILING_BUFFER = 0.004
+            MINIMUM_ORDER_VALUE = 100
+            PRECISION = 8  # 소수점 처리를 위한 정밀도
 
-            # 트레일링 스탑로스를 위한 추가 파라미터
-            trailing_threshold = 0.01  # 1% 수익 달성 시 트레일링 시작
-            trailing_buffer = 0.004     # 0.4% 안전 마진
-
-            if side == 'buy':
-                # SL 가격 보정
-                if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
-                    adjusted_sl_price = current_price * (1 - SAFETY_MARGIN)
-                    self.logger.warning(f"Invalid SL price for long position. Adjusting SL from {sl_price} to {adjusted_sl_price}")
-                    sl_price = adjusted_sl_price
-
-                # TP 가격 재계산
-                tp_price = current_price + pl_ratio * (current_price - sl_price)
-
-                # TP 가격 보정
-                if tp_price <= current_price or (tp_price - current_price) < pl_ratio * min_price_diff:
-                    adjusted_tp_price = current_price * (1 + SAFETY_MARGIN)
-                    self.logger.warning(f"Invalid TP price for long position. Adjusting TP from {tp_price} to {adjusted_tp_price}")
-                    tp_price = adjusted_tp_price
-
-            else:  # sell
-                # SL 가격 보정
-                if sl_price <= current_price or (sl_price - current_price) < min_price_diff:
-                    adjusted_sl_price = current_price * (1 + SAFETY_MARGIN)
-                    self.logger.warning(f"Invalid SL price for short position. Adjusting SL from {sl_price} to {adjusted_sl_price}")
-                    sl_price = adjusted_sl_price
-
-                # TP 가격 재계산
-                tp_price = current_price - pl_ratio * (sl_price - current_price)
-
-                # TP 가격 보정
-                if tp_price >= current_price or (current_price - tp_price) < pl_ratio * min_price_diff:
-                    adjusted_tp_price = current_price * (1 - SAFETY_MARGIN)
-                    self.logger.warning(f"Invalid TP price for short position. Adjusting TP from {tp_price} to {adjusted_tp_price}")
-                    tp_price = adjusted_tp_price
-
-            # 현재 포지션 확인
-            positions = self.exchange.fetch_positions([self.symbol])
+            # 초기 변수 설정
             current_position = None
-            position_side = None  # position_side 명시적 초기화
+            position_side = None
 
-            for pos in positions:
-                if float(pos.get('contracts', 0) or 0) != 0:
-                    current_position = pos
-                    position_side = pos['side']  # binance futures에서는 'long' 또는 'short' 반환
-                    break
+            # 초기 데이터 조회 및 검증
+            def fetch_market_data():
+                ticker = self.exchange.fetch_ticker(self.symbol)
+                current_price = ticker['last']
+                min_price_diff = current_price * 0.001
+                    
+                # TP/SL 가격 보정 로직
+                def adjust_prices(side, current_price, origin_sl_price, min_price_diff):
+                    sl_price = origin_sl_price
 
-            # 반대 방향 주문이 들어온 경우 포지션 축소/청산
-            if current_position and position_side:  # position_side가 있는 경우에만 실행
+                    if side == 'buy':
+                        # SL 가격 보정 (롱 포지션)
+                        if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
+                            sl_price = current_price * (1 - SAFETY_MARGIN)
+                        
+                        # TP 가격 계산
+                        tp_price = current_price + pl_ratio * (current_price - sl_price)
+                        if tp_price <= current_price or (tp_price - current_price) < min_price_diff:
+                            tp_price = current_price * (1 + SAFETY_MARGIN)
+                    
+                    else:  # sell
+                        # SL 가격 보정 (숏 포지션)
+                        if sl_price <= current_price or (sl_price - current_price) < min_price_diff:
+                            sl_price = current_price * (1 + SAFETY_MARGIN)
+                        
+                        # TP 가격 계산
+                        tp_price = current_price - pl_ratio * (sl_price - current_price)
+                        if tp_price >= current_price or (current_price - tp_price) < min_price_diff:
+                            tp_price = current_price * (1 - SAFETY_MARGIN)
+                    
+                    return sl_price, tp_price
+
+                return current_price, min_price_diff, adjust_prices
+
+            def validate_and_prepare_order(current_price):
+                # 주문 가능 금액 및 수량 검증
+                balance = self.exchange.fetch_balance()
+                available_balance = float(balance['USDT']['free'])
+                
+                if available_balance < 10:
+                    raise ValueError(f"Insufficient balance. Available: {available_balance} USDT")
+                
+                max_safe_amount = available_balance * 0.65
+                buy_amount = min(buy_amount, max_safe_amount)
+                
+                leveraged_amount = buy_amount * self.leverage
+                quantity = leveraged_amount / current_price
+                
+                notional_value = quantity * current_price
+                if notional_value < MINIMUM_ORDER_VALUE:
+                    raise ValueError(f"Order notional value ({notional_value} USDT) is below minimum")
+                
+                market_limits = self.exchange.markets[self.symbol]['limits']
+                min_amount = market_limits['amount']['min']
+                if quantity < min_amount:
+                    raise ValueError(f"Order quantity ({quantity}) is below minimum ({min_amount})")
+                
+                return quantity, leveraged_amount        
+
+            def manage_existing_positions(side, current_price, quantity, leveraged_amount):
+                nonlocal current_position, position_side
+                positions = self.exchange.fetch_positions([self.symbol])
+                current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
+                
+                if not current_position:
+                    return None, None, quantity, None
+                
+                position_side = current_position['side']
+                position_size = float(current_position.get('contracts', 0))
+                
+                # 안전한 position_notional 계산
+                try:
+                    position_notional = float(current_position.get('notional', 0))
+                except (TypeError, ValueError):
+                    position_notional = position_size * current_price
+                
+                # 포지션 축소/청산 로직
                 if (position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy'):
-                    position_size = float(current_position['contracts'])
-                    position_notional = float(current_position['notional'])
-                    self.logger.info(f"Reducing/Closing {position_side} position of {position_size} contracts")
-                    
-                    # 레버리지를 고려한 실제 주문 수량 계산
-                    leveraged_amount = buy_amount * self.leverage
-                    calculated_quantity = leveraged_amount / current_price
-                    
-                    # 청산하려는 금액이 현재 포지션보다 큰 경우 전량 청산
                     if leveraged_amount >= abs(position_notional):
                         quantity = abs(position_size)
-                        self.logger.info(f"Closing entire position of {quantity} contracts")
                         
-                        # 기존 열려있는 모든 주문 취소
+                        # 모든 오픈 주문 취소
                         try:
                             open_orders = self.exchange.fetch_open_orders(self.symbol)
                             for order in open_orders:
                                 self.exchange.cancel_order(order['id'], self.symbol)
-                                self.logger.info(f"Cancelled order {order['id']}")
                         except Exception as e:
                             self.logger.error(f"Error cancelling orders: {e}")
-                    else:
-                        # 부분 청산
-                        quantity = calculated_quantity
-                        self.logger.info(f"Partially reducing position by {quantity} contracts")
                     
                     # 포지션 축소/청산 주문
                     order = self.exchange.create_market_order(
-                        symbol=self.symbol,
-                        side=side,
-                        amount=quantity,
+                        symbol=self.symbol, 
+                        side=side, 
+                        amount=round(quantity, PRECISION),
                         params={'reduceOnly': True}
                     )
                     
-                    self.logger.info(f"Position {position_side} closed/reduced at price: {current_price}")
-                    return {
-                        'entry': order,
-                        'tp': None,
-                        'sl': None
-                    }
+                    return order, position_side, None, position_notional
+                
+                return None, position_side, quantity, None           
 
-            # 같은 방향 추가 진입인 경우
-            elif current_position and side == position_side:
-                # 레버리지를 고려한 실제 주문 수량 계산
-                leveraged_amount = buy_amount * self.leverage
-                quantity = leveraged_amount / current_price
-
-                # 최소 주문 금액 확인 (100 USDT)
-                notional_value = quantity * current_price
-                if notional_value < 100:
-                    self.logger.error(f"Order notional value ({notional_value} USDT) is below minimum (100 USDT)")
-                    return None
-
-                # 1. 기존 TP/SL 주문 정보 읽기
-                try:
-                    open_orders = self.exchange.fetch_open_orders(self.symbol)
-                    existing_sl_price = None
-                    for order in open_orders:
-                        if order['type'] == 'STOP_MARKET':
-                            existing_sl_price = float(order['info'].get('stopPrice', order.get('price', 0)))
-                            break
-                except Exception as e:
-                    self.logger.error(f"Error fetching existing SL price: {e}")
-                    existing_sl_price = None
-
-
-                # 2. 새로운 TP/SL 가격 계산
-                # 총 포지션 크기와 평균 진입 가격 계산
+            def calculate_position_metrics(current_price, quantity):
+                nonlocal current_position, position_side
                 if current_position and side == position_side:
-                    total_position_size = float(current_position['contracts']) + quantity
-                    total_position_value = (quantity * current_price) + (float(current_position['contracts']) * float(current_position['entryPrice']))
-                    new_avg_entry_price = total_position_value / total_position_size
+                    total_position_size = float(current_position.get('contracts', 0)) + quantity
                 else:
                     total_position_size = quantity
-                    new_avg_entry_price = current_price            
-
-                # 기존 TP/SL 주문 취소
-                try:
-                    for order in open_orders:
-                        if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-                            self.exchange.cancel_order(order['id'], self.symbol)
-                            self.logger.info(f"Cancelled existing TP/SL order: {order['id']}")
-                except Exception as e:
-                    self.logger.error(f"Error cancelling existing TP/SL orders: {e}")
-                    return None
-
-                # SL 가격 가중평균 계산
-                if existing_sl_price:
-                    total_sl_value = (quantity * sl_price) + (float(current_position['contracts']) * existing_sl_price)
-                    new_sl_price = total_sl_value / total_position_size
-                else:
-                    new_sl_price = sl_price
-
-                # TP 가격 계산
-                if side == 'buy':
-                    new_tp_price = new_avg_entry_price + (new_avg_entry_price - new_sl_price) * pl_ratio
-                else:  # sell
-                    new_tp_price = new_avg_entry_price - (new_sl_price - new_avg_entry_price) * pl_ratio
-
-                # 계산된 새 가격으로 업데이트
-                tp_price = new_tp_price
-                sl_price = new_sl_price
-
-            # 새로운 포지션 진입 또는 같은 방향 추가 진입을 위한 잔고 확인
-            # 가용 자금 조회
-            balance = self.exchange.fetch_balance()
-            available_balance = float(balance['USDT']['free'])
-            
-            if available_balance < 10:  # USDT 최소 주문금액
-                self.logger.error(f"Insufficient balance. Available: {available_balance} USDT")
-                return None
                 
-            # 안전 마진을 고려한 최대 사용 가능 금액 계산 (가용 자금의 65%까지만 사용)
-            max_safe_amount = available_balance * 0.65
-            
-            # 요청된 주문 금액이 최대 안전 금액을 초과하는 경우 조정
-            if buy_amount > max_safe_amount:
-                original_amount = buy_amount
-                buy_amount = max_safe_amount
-                self.logger.warning(
-                    f"Requested order amount ({original_amount} USDT) exceeds safe limit. "
-                    f"Adjusted to {buy_amount} USDT (65% of available balance)"
-                )
-            
-            # 레버리지를 고려한 실제 주문 수량 계산
-            leveraged_amount = buy_amount * self.leverage
-            quantity = leveraged_amount / current_price
+                return round(total_position_size, PRECISION)
 
-            # 최소 주문 금액 확인 (100 USDT)
-            notional_value = quantity * current_price
-            if notional_value < 100:
-                self.logger.error(f"Order notional value ({notional_value} USDT) is below minimum (100 USDT)")
-                return None
+                
 
-            # 최소 주문 수량 확인
-            market_limits = self.exchange.markets[self.symbol]['limits']
-            min_amount = market_limits['amount']['min']
-            if quantity < min_amount:
-                self.logger.error(f"Order quantity ({quantity}) is below minimum ({min_amount})")
-                return None       
+            # 주요 실행 흐름
+            current_price, min_price_diff, adjust_prices = fetch_market_data()
+            
+            # SL, TP 가격 보정
+            sl_price, tp_price = adjust_prices(side, current_price, sl_price, min_price_diff)
+            
+            # 주문 수량 및 금액 검증
+            quantity, leveraged_amount = validate_and_prepare_order(current_price)
+            
+            # 기존 포지션 관리
+            reduce_order, position_side, quantity, position_notional = manage_existing_positions(
+                side, current_price, quantity, leveraged_amount
+            )
+            
+            if reduce_order:
+                return {
+                    'entry': reduce_order, 
+                    'tp': None, 
+                    'sl': None,
+                    'position_side': position_side,
+                    'position_notional': position_notional
+                }
+            
+            # 포지션 메트릭스 계산
+            total_position_size = calculate_position_metrics(current_price, quantity)
             
             # 주문 실행
             order = self.exchange.create_market_order(
@@ -611,20 +541,53 @@ class BinanceFuturesTrader:
                 side=side,
                 amount=quantity
             )
+            
+            # TP/SL 주문 생성
+            tp_side = 'sell' if side == 'buy' else 'buy'
+            tp_order = sl_order = None
+            
+            # 주문 실행 및 예외 처리 개선
+            try:
+                # Take Profit 주문
+                tp_order = self.exchange.create_order(
+                    symbol=self.symbol,
+                    type='TAKE_PROFIT_MARKET',
+                    side=tp_side,
+                    amount=total_position_size,
+                    params={
+                        'stopPrice': tp_price,
+                        'clientOrderId': f"tp_{order['id']}"
+                    }
+                )
 
-            # 포지션 진입 가격 저장 (트레일링 SL을 위해)
-            entry_price = current_price
+                # Stop Loss 주문
+                sl_order = self.exchange.create_order(
+                    symbol=self.symbol,
+                    type='STOP_MARKET',
+                    side=tp_side,
+                    amount=total_position_size,
+                    params={
+                        'stopPrice': sl_price,
+                        'clientOrderId': f"sl_{order['id']}"
+                    }
+                )
 
-            # 트레일링 스탑로스 모니터링 함수
+            except Exception as e:
+                # TP/SL 주문 실패 시 처리 로직 간소화
+                self.logger.error(f"TP/SL order creation failed: {str(e)}")
+                
+                # 원래 주문 취소
+                self.exchange.cancel_order(order['id'], self.symbol)
+                
+                # 원래 예외 다시 발생
+                raise
+
+            # 트레일링 스탑 모니터링 함수 (이전과 동일)
             def monitor_and_adjust_sl():
                 try:
                     positions = self.exchange.fetch_positions([self.symbol])
-                    current_position = None
-                    for pos in positions:
-                        if float(pos.get('contracts', 0) or 0) != 0:
-                            current_position = pos
-                            break
-
+                    current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
+                    
                     if not current_position:
                         return None
 
@@ -633,139 +596,56 @@ class BinanceFuturesTrader:
                     position_size = float(current_position['contracts'])
                     position_side = current_position['side']
 
-                    # 수익률 계산
-                    if position_side == 'long':
-                        profit_percentage = (current_market_price - entry_price) / entry_price
-                    else:  # short
-                        profit_percentage = (entry_price - current_market_price) / entry_price
+                    # 실시간 수익률 계산
+                    entry_price = float(current_position['entryPrice'])
+                    profit_percentage = (current_market_price - entry_price) / entry_price if position_side == 'long' \
+                        else (entry_price - current_market_price) / entry_price
 
                     # 트레일링 스탑로스 로직
-                    if profit_percentage >= trailing_threshold:
-                        # 새로운 SL 가격 계산
-                        if position_side == 'long':
-                            new_sl_price = current_market_price * (1 - trailing_buffer)
-                        else:  # short
-                            new_sl_price = current_market_price * (1 + trailing_buffer)
+                    if profit_percentage >= TRAILING_THRESHOLD:
+                        new_sl_price = current_market_price * (1 - TRAILING_BUFFER) if position_side == 'long' \
+                            else current_market_price * (1 + TRAILING_BUFFER)
 
-                        # 기존 SL 주문 취소
                         try:
+                            # 기존 SL 주문 취소
                             open_orders = self.exchange.fetch_open_orders(self.symbol)
                             for order in open_orders:
                                 if order['type'] == 'STOP_MARKET':
                                     self.exchange.cancel_order(order['id'], self.symbol)
-                                    self.logger.info("기존 SL 주문 취소")
-                        except Exception as cancel_error:
-                            self.logger.error(f"SL 주문 취소 중 오류: {cancel_error}")
 
-                        # 새로운 SL 주문 생성
-                        tp_side = 'sell' if position_side == 'long' else 'buy'
-                        new_sl_order = self.exchange.create_order(
-                            symbol=self.symbol,
-                            type='STOP_MARKET',
-                            side=tp_side,
-                            amount=position_size,
-                            params={
-                                'stopPrice': new_sl_price,
-                                'reduceOnly': True
-                            }
-                        )
-
-                        self.logger.info(f"트레일링 SL 재설정: {new_sl_price}")
-                        return new_sl_order
-
-                except Exception as e:
-                    self.logger.error(f"SL 모니터링 중 오류: {e}")
-                    return None
-
-            # TP/SL 주문
-            tp_side = 'sell' if side == 'buy' else 'buy'
-            try:            
-                # 여기서 이전 TP/SL 취소
-                for old_order in old_orders:
-                    try:
-                        self.exchange.cancel_order(old_order['id'], self.symbol)
-                        self.logger.info(f"Cancelled old TP/SL order: {old_order['id']}")
-                    except Exception as e:
-                        self.logger.error(f"Error cancelling old TP/SL order: {e}")           
-
-                # Take Profit 주문 (전체 포지션 크기로 설정)
-                tp_order = self.exchange.create_order(
-                    symbol=self.symbol,
-                    type='TAKE_PROFIT_MARKET',
-                    side=tp_side,
-                    amount=total_position_size,  # 전체 포지션 크기 사용
-                    params={
-                        'stopPrice': tp_price,
-                        'reduceOnly': True,
-                        'clientOrderId': f"tp_{order['id']}"
-                    }
-                )            
-
-                # Stop Loss 주문 (전체 포지션 크기로 설정)
-                sl_order = self.exchange.create_order(
-                    symbol=self.symbol,
-                    type='STOP_MARKET',
-                    side=tp_side,
-                    amount=total_position_size,  # 전체 포지션 크기 사용
-                    params={
-                        'stopPrice': sl_price,
-                        'reduceOnly': True,
-                        'clientOrderId': f"sl_{order['id']}"
-                    }
-                )
-
-            except Exception as e:
-                self.logger.error(f"TP/SL order creation failed: {str(e)}")
-                
-                # 실패 시 이전 TP/SL 복구
-                try:
-                    # 실패한 주문이 있다면 취소
-                    if 'order' in locals():
-                        try:
-                            self.exchange.cancel_order(order['id'], self.symbol)
-                            self.logger.info(f"Cancelled failed new position order: {order['id']}")
-                        except:
-                            pass
-
-                    # 이전 TP/SL 재설정
-                    for old_order in old_orders:
-                        try:
-                            self.exchange.create_order(
+                            # 새로운 SL 주문 생성
+                            tp_side = 'sell' if position_side == 'long' else 'buy'
+                            new_sl_order = self.exchange.create_order(
                                 symbol=self.symbol,
-                                type=old_order['type'],
-                                side=old_order['side'],
-                                amount=old_order['amount'],
+                                type='STOP_MARKET',
+                                side=tp_side,
+                                amount=position_size,
                                 params={
-                                    'stopPrice': old_order['info']['stopPrice'],
-                                    'reduceOnly': True
+                                    'stopPrice': new_sl_price
                                 }
                             )
-                            self.logger.info(f"Restored old TP/SL order for: {old_order['id']}")
-                        except Exception as restore_err:
-                            self.logger.error(f"Error restoring old TP/SL order: {restore_err}")
-                except Exception as recovery_err:
-                    self.logger.error(f"Error in recovery process: {recovery_err}")
-                
-                raise
-
-            # TP/SL 주문 성공 후 로깅 및 반환
-            action_type = "Position increased" if current_position and side == position_side else "New position opened"
-            self.logger.info(f"{action_type} - Side: {side}, Amount: {buy_amount} USDT, Leverage: {self.leverage}x")
-            self.logger.info(f"Quantity: {quantity} BTC, Entry: {current_price}, TP: {tp_price}, SL: {sl_price}")
-            self.logger.info(f"Available balance after order: {available_balance - buy_amount} USDT")
+                            return new_sl_order
+                        except Exception as e:
+                            self.logger.error(f"Trailing SL setup error: {str(e)}")
+                    return None
+                except Exception as e:
+                    self.logger.error(f"SL monitoring error: {str(e)}")
+                    return None
 
             return {
                 'entry': order,
                 'tp': tp_order,
                 'sl': sl_order,
                 'monitor_sl': monitor_and_adjust_sl,
-                'entry_price': entry_price
+                'entry_price': current_price
             }
         
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
-            raise           
-        
+            raise
+
+
+
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
