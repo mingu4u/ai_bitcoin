@@ -55,21 +55,43 @@ class BinanceFuturesTrader:
         self.logger = logger
         self.exchange.load_markets()
 
-
     def is_ai_trade(self, order, last_ai_entry):
+        """
+        주문이 AI 거래인지 판별하는 함수
+        
+        Args:
+            order: 바이낸스 주문 객체
+            last_ai_entry: DB에서 조회한 가장 최근 AI 거래 정보 (order_id, timestamp)
+        
+        Returns:
+            bool: AI 거래 여부
+        """
         if not last_ai_entry:
             return False
             
-        # 주문 ID 직접 비교
-        if str(order['id']) == str(last_ai_entry[0]):
-            return True
-            
-        # AI 거래의 TP/SL 주문인지 확인
+        # 기본 주문 정보 확인
+        order_id = str(order['id'])
         client_order_id = order['info'].get('origClientOrderId', '')
         parent_order_id = order['info'].get('parentOrderId', '')
+        order_type = order['type']
         
-        return (client_order_id.startswith(str(last_ai_entry[0])) or 
-                str(parent_order_id) == str(last_ai_entry[0]))
+        # 1. 직접적인 AI 엔트리 주문인 경우
+        if order_id == str(last_ai_entry[0]):
+            return True
+        
+        # 2. TP/SL 주문인 경우
+        if order_type in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
+            # TP/SL 주문의 원본 주문 ID 추출
+            if client_order_id.startswith('tp_') or client_order_id.startswith('sl_'):
+                original_order_id = client_order_id.split('_')[-1]
+                if original_order_id == str(last_ai_entry[0]):
+                    return True
+        
+        # 3. 원본 주문의 자식 주문인 경우
+        if parent_order_id and str(parent_order_id) == str(last_ai_entry[0]):
+            return True
+        
+        return False
 
     def cancel_existing_tp_sl_orders(self):
         try:
@@ -101,10 +123,16 @@ class BinanceFuturesTrader:
     # 수동 거래 모니터링
     def monitor_manual_trades(self):
         try:
-            # 최근 주문 내역 직접 조회 (최근 5분)
             since = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)
             since_datetime = datetime.fromtimestamp(since/1000)
+
+            # 모든 주문 조회
             orders = self.exchange.fetch_orders(self.symbol, since)
+            
+            # TP/SL 주문 필터링
+            tp_orders = [order for order in orders if order['type'] == 'TAKE_PROFIT_MARKET' and order['status'] == 'FILLED']
+            sl_orders = [order for order in orders if order['type'] == 'STOP_MARKET' and order['status'] == 'FILLED']
+            market_orders = [order for order in orders if order['type'] == 'MARKET' and order['status'] == 'FILLED']
             
             # DB 연결
             conn = sqlite3.connect('bitcoin_trades.db')
@@ -113,24 +141,13 @@ class BinanceFuturesTrader:
             try:
                 # 최근 거래 내역 조회
                 c.execute("""
-                    SELECT timestamp, order_id 
+                    SELECT timestamp, order_id, trade_type 
                     FROM trades 
                     WHERE timestamp >= ? 
                 """, (since_datetime.isoformat(),))
                 recent_trades = c.fetchall()
-                recorded_trades = set((ts, oid) for ts, oid in recent_trades)
+                recorded_trades = set((ts, oid) for ts, oid, _ in recent_trades)
                 
-                # 가장 최근의 reflection 조회
-                c.execute("""
-                    SELECT reflection 
-                    FROM trades 
-                    WHERE reflection IS NOT NULL 
-                    ORDER BY timestamp DESC 
-                    LIMIT 1
-                """)
-                last_reflection = c.fetchone()
-                last_reflection = last_reflection[0] if last_reflection else None
-
                 # AI Entry 주문 조회
                 c.execute("""
                     SELECT t.order_id, t.timestamp
@@ -141,19 +158,37 @@ class BinanceFuturesTrader:
                 """)
                 last_ai_entry = c.fetchone()
 
-                for order in orders:
-                    # 완료된 주문만 처리
-                    if order['status'] != 'closed':
-                        continue
-                    
+                # 모든 주문 처리 (MARKET, TP, SL)
+                for order in market_orders + tp_orders + sl_orders:
                     order_id = str(order['id'])
                     order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
                     
-                    # 중복 기록 방지
+                    # 중복 체크
                     if (order_timestamp, order_id) in recorded_trades:
                         continue
+
+                    # 거래 타입 결정
+                    trade_type = 'MANUAL'
+                    reason = 'Manual Trade'
                     
-                    # 거래 방향 결정
+                    # TP/SL 주문인 경우 원본 주문 확인
+                    if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
+                        client_order_id = order['info'].get('origClientOrderId', '')
+                        for orig_order in market_orders:
+                            if str(orig_order['id']) == client_order_id.split('_')[-1]:
+                                if self.is_ai_trade(orig_order, last_ai_entry):
+                                    trade_type = 'AI'
+                                    reason = 'Take Profit' if order['type'] == 'TAKE_PROFIT_MARKET' else 'Stop Loss'
+                                break
+                    else:
+                        # MARKET 주문인 경우 직접 AI 거래 여부 확인
+                        if self.is_ai_trade(order, last_ai_entry):
+                            trade_type = 'AI'
+
+                    # AI 거래는 별도로 기록되므로 건너뛰기
+                    if trade_type == 'AI':
+                        continue
+
                     decision = 'buy' if order['side'] == 'buy' else 'sell'
                     
                     # 잔고 정보 조회
@@ -166,25 +201,6 @@ class BinanceFuturesTrader:
                     # 레버리지를 고려한 실제 거래 비율 계산
                     actual_trade_amount = abs(order['cost']) / self.leverage
                     trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
-                    
-                    # 기본값으로 MANUAL 설정
-                    trade_type = 'MANUAL'
-                    reason = 'Manual Trade'
-                    
-                    # AI 거래 여부 확인
-                    if self.is_ai_trade(order, last_ai_entry):
-                        trade_type = 'AI'
-                        order_type = order['info'].get('type', '').upper()
-                        if order_type == 'TAKE_PROFIT_MARKET':
-                            reason = 'Take Profit'
-                        elif order_type == 'STOP_MARKET':
-                            reason = 'Stop Loss'
-                        
-                        # AI 트레이딩 타임스탬프 고려
-                        order_timestamp = max(
-                            order_timestamp, 
-                            last_ai_entry[1] if last_ai_entry and last_ai_entry[1] else order_timestamp
-                        )
                     
                     # 포지션 정보 조회
                     positions = self.exchange.fetch_positions([self.symbol])
@@ -199,8 +215,8 @@ class BinanceFuturesTrader:
                     c.execute("""
                         INSERT INTO trades 
                         (timestamp, trade_type, order_id, decision, percentage, reason, 
-                        btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         order_timestamp,
                         trade_type,
@@ -212,8 +228,7 @@ class BinanceFuturesTrader:
                         free_usdt,
                         total_usdt,
                         btc_avg_buy_price,
-                        current_btc_price,
-                        last_reflection
+                        current_btc_price
                     ))
                     conn.commit()
                     
@@ -226,6 +241,8 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error monitoring trades: {e}")
             if 'conn' in locals():
                 conn.close()
+
+
 
     def setup_leverage_and_margin(self, leverage: int):
         try:
