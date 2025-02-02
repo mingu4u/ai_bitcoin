@@ -1315,9 +1315,10 @@ def ai_trading():
                         You can find the BlackFlag FTS, UT Bot Alerts indicators, Volume Oscillator from the TradingView chart screenshot provided in the image of the user message. 
                         These technical indicators are essential for following the trading strategy outlined above.
                         "stop loss price" should be based on trading method above.
-                        For optimal timing of entry, the occurrence of these three indicators should be recent on a 5-minute timeframe. otherwise, don't enter.
+                        For optimal timing of entry, when deciding to enter a position, the more recent the Buy or Sell signal from the three indicators, the better.
+                        because of the high fees associated with futures leverage, you should trade with caution. Prioritize the entry signals from the three indicators.
                         However, if other factors are sufficient reasons to enter a long(buy) or short(sell) position, you may trade.
-                        because of the high fees associated with futures leverage, you shouldn't trade too often. Prioritize the entry signals from the three indicators.
+                        
 
                         Based on this trading method, analyze the current market situation and make a judgment by synthesizing it with the provided data and recent performance reflection.
 
