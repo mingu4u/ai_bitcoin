@@ -60,110 +60,100 @@ class BinanceFuturesTrader:
     # 수동 거래 모니터링
     def monitor_manual_trades(self):
         try:
-            # 최근 거래 내역 조회 (최근 5분)
+            # 최근 주문 내역 직접 조회 (최근 5분)
             since = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)
-            trades = self.exchange.fetch_my_trades(self.symbol, since)
+            orders = self.exchange.fetch_orders(self.symbol, since)
             
             # DB 연결
             conn = sqlite3.connect('bitcoin_trades.db')
             c = conn.cursor()
             
             try:
-                # AI 거래의 TP/SL 주문 ID 조회
+                # 가장 최근의 reflection 조회
                 c.execute("""
-                    SELECT t.order_id, t.decision 
+                    SELECT reflection 
+                    FROM trades 
+                    WHERE reflection IS NOT NULL 
+                    ORDER BY timestamp DESC 
+                    LIMIT 1
+                """)
+                last_reflection = c.fetchone()
+                last_reflection = last_reflection[0] if last_reflection else None
+
+                # AI Entry 주문 조회
+                c.execute("""
+                    SELECT t.order_id 
                     FROM trades t 
-                    WHERE t.trade_type = 'AI' 
+                    WHERE t.trade_type = 'AI' AND t.reason LIKE 'AI%'
                     ORDER BY t.timestamp DESC 
                     LIMIT 1
                 """)
-                last_ai_trade = c.fetchone()
+                last_ai_entry = c.fetchone()
                 
-                if last_ai_trade:
-                    last_ai_order_id = last_ai_trade[0]
-                    last_ai_decision = last_ai_trade[1]
-                    
-                    # TP/SL 주문 ID 조회
-                    try:
-                        ai_orders = self.exchange.fetch_orders(self.symbol, since=since)
-                        tp_sl_order_ids = []
-                        for order in ai_orders:
-                            if (order['info'].get('origType') in ['TAKE_PROFIT_MARKET', 'STOP_MARKET'] and 
-                                order['info'].get('origClientOrderId', '').startswith(last_ai_order_id)):
-                                tp_sl_order_ids.append(order['id'])
-                    except Exception as e:
-                        self.logger.error(f"Error fetching TP/SL orders: {e}")
-                        tp_sl_order_ids = []
-                else:
-                    tp_sl_order_ids = []
-                    last_ai_decision = None
-
                 # 가장 최근 기록된 거래의 ID 조회
                 c.execute("SELECT MAX(id) FROM trades")
                 last_recorded_id = c.fetchone()[0]
                 
-                # 포지션 정보 조회
-                positions = self.exchange.fetch_positions([self.symbol])
-                current_position = None
-                for pos in positions:
-                    if float(pos.get('contracts', 0) or 0) != 0:
-                        current_position = pos
-                        break
+                for order in orders:
+                    # 완료된 주문만 처리
+                    if order['status'] != 'closed':
+                        continue
                         
-                # 잔고 정보 조회
-                balance = self.exchange.fetch_balance()
-                usdt_balance = balance['USDT']
-                free_usdt = usdt_balance['free']
-                used_usdt = usdt_balance['used']
-                total_usdt = usdt_balance['total']
-                
-                # BTC 현재가 조회
-                ticker = self.exchange.fetch_ticker(self.symbol)
-                current_btc_price = ticker['last']
-
-                for trade in trades:
-                    trade_id = str(trade['id'])
+                    order_id = str(order['id'])
                     
                     # 이미 기록된 거래는 건너뛰기
-                    if last_recorded_id is not None and trade_id == str(last_recorded_id):
+                    if last_recorded_id is not None and order_id == str(last_recorded_id):
                         continue
                     
                     # 거래 방향 결정
-                    decision = 'buy' if trade['side'] == 'buy' else 'sell'
+                    decision = 'buy' if order['side'] == 'buy' else 'sell'
+                    
+                    # 잔고 정보 조회
+                    balance = self.exchange.fetch_balance()
+                    usdt_balance = balance['USDT']
+                    free_usdt = usdt_balance['free']
+                    used_usdt = usdt_balance['used']
+                    total_usdt = usdt_balance['total']
                     
                     # 레버리지를 고려한 실제 거래 비율 계산
-                    actual_trade_amount = abs(trade['cost']) / self.leverage
+                    actual_trade_amount = abs(order['cost']) / self.leverage
                     trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
                     
-                    # TP/SL 주문인지 확인하고 이유 설정
-                    if trade_id in tp_sl_order_ids:
-                        order_info = next((order for order in ai_orders if order['id'] == trade_id), None)
-                        if order_info and order_info['info'].get('origType') == 'TAKE_PROFIT_MARKET':
-                            trade_type = 'AI'
-                            reason = 'Take Profit'
-                        elif order_info and order_info['info'].get('origType') == 'STOP_MARKET':
-                            trade_type = 'AI'
-                            reason = 'Stop Loss'
-                        else:
-                            trade_type = 'MANUAL'
-                            reason = 'Manual Trade'
-                    else:
-                        trade_type = 'MANUAL'
-                        reason = 'Manual Trade'
+                    # 기본값으로 MANUAL 설정
+                    trade_type = 'MANUAL'
+                    reason = 'Manual Trade'
                     
-                    # 평균 진입가격
+                    # AI의 TP/SL 주문인지 확인
+                    if last_ai_entry:
+                        client_order_id = order['info'].get('origClientOrderId', '')
+                        order_type = order['info'].get('type', '').upper()
+                        
+                        if client_order_id.startswith(str(last_ai_entry[0])):
+                            trade_type = 'AI'
+                            if order_type == 'TAKE_PROFIT_MARKET':
+                                reason = 'Take Profit'
+                            elif order_type == 'STOP_MARKET':
+                                reason = 'Stop Loss'
+                    
+                    # 포지션 정보 조회
+                    positions = self.exchange.fetch_positions([self.symbol])
+                    current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
                     btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
+                    
+                    # BTC 현재가 조회
+                    ticker = self.exchange.fetch_ticker(self.symbol)
+                    current_btc_price = ticker['last']
 
                     # DB에 거래 기록
                     c.execute("""
                         INSERT INTO trades 
                         (timestamp, trade_type, order_id, decision, percentage, reason, 
-                        btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        datetime.now().isoformat(),
+                        datetime.fromtimestamp(order['timestamp']/1000).isoformat(),
                         trade_type,
-                        trade_id,
+                        order_id,
                         decision,
                         int(trade_percentage),
                         reason,
@@ -171,7 +161,8 @@ class BinanceFuturesTrader:
                         free_usdt,
                         total_usdt,
                         btc_avg_buy_price,
-                        current_btc_price
+                        current_btc_price,
+                        last_reflection
                     ))
                     conn.commit()
                     
@@ -284,6 +275,17 @@ class BinanceFuturesTrader:
 
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         try:
+            # 시작하기 전에 불필요한 주문만 취소 (같은 방향 추가 진입을 위한 TP/SL은 아직 유지)
+            try:
+                open_orders = self.exchange.fetch_open_orders(self.symbol)
+                for order in open_orders:
+                    # TP/SL 주문이 아닌 경우에만 취소
+                    if order['type'] not in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
+                        self.exchange.cancel_order(order['id'], self.symbol)
+                        self.logger.info(f"Cancelled non-TP/SL order: {order['id']}")
+            except Exception as e:
+                self.logger.error(f"Error cancelling non-TP/SL orders: {e}")
+
             # 현재가 조회
             ticker = self.exchange.fetch_ticker(self.symbol)
             current_price = ticker['last']
@@ -328,8 +330,8 @@ class BinanceFuturesTrader:
                 if tp_price >= current_price or (current_price - tp_price) < pl_ratio * min_price_diff:
                     adjusted_tp_price = current_price * (1 - SAFETY_MARGIN)
                     self.logger.warning(f"Invalid TP price for short position. Adjusting TP from {tp_price} to {adjusted_tp_price}")
-                    tp_price = adjusted_tp_price 
-                                
+                    tp_price = adjusted_tp_price
+
             # 현재 포지션 확인
             positions = self.exchange.fetch_positions([self.symbol])
             current_position = None
@@ -384,32 +386,32 @@ class BinanceFuturesTrader:
                         'tp': None,
                         'sl': None
                     }
-                            
+
             # 같은 방향 추가 진입인 경우
             elif current_position and side == position_side:
-                # 현재 오픈된 주문들 중 SL 주문의 가격 찾기
+                # 1. 기존 TP/SL 주문 정보 읽기
                 try:
                     open_orders = self.exchange.fetch_open_orders(self.symbol)
                     existing_sl_price = None
                     for order in open_orders:
                         if order['type'] == 'STOP_MARKET':
-                            existing_sl_price = order['price']
+                            existing_sl_price = float(order['info'].get('stopPrice', order.get('price', 0)))
                             break
                 except Exception as e:
-                    self.logger.error(f"기존 SL 주문 가격 조회 중 오류: {e}")
+                    self.logger.error(f"Error fetching existing SL price: {e}")
                     existing_sl_price = None
 
+                # 2. 새로운 TP/SL 가격 계산
                 # 총 포지션 크기와 평균 진입 가격 계산
                 total_position_size = quantity + float(current_position['contracts'])
                 total_position_value = (quantity * current_price) + (float(current_position['contracts']) * float(current_position['entryPrice']))
                 new_avg_entry_price = total_position_value / total_position_size
 
-                # SL 가격 가중평균 계산 (기존 SL 가격이 있는 경우)
+                # SL 가격 가중평균 계산
                 if existing_sl_price:
                     total_sl_value = (quantity * sl_price) + (float(current_position['contracts']) * existing_sl_price)
                     new_sl_price = total_sl_value / total_position_size
                 else:
-                    # 기존 SL 주문이 없으면 현재 제공된 sl_price 사용
                     new_sl_price = sl_price
 
                 # TP 가격 계산
@@ -418,22 +420,21 @@ class BinanceFuturesTrader:
                 else:  # sell
                     new_tp_price = new_avg_entry_price - (new_sl_price - new_avg_entry_price) * pl_ratio
 
-                # 기존 TP/SL 주문 취소
+                # 3. 기존 TP/SL 주문 취소
                 try:
-                    open_orders = self.exchange.fetch_open_orders(self.symbol)
                     for order in open_orders:
                         if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
                             self.exchange.cancel_order(order['id'], self.symbol)
-                            self.logger.info(f"Cancelled existing TP/SL order {order['id']}")
+                            self.logger.info(f"Cancelled existing TP/SL order after calculation: {order['id']}")
                 except Exception as e:
                     self.logger.error(f"Error cancelling existing TP/SL orders: {e}")
                     return None
 
-                # 이후 코드에서 tp_price와 sl_price를 새로 계산된 값으로 대체
+                # 계산된 새 가격으로 업데이트
                 tp_price = new_tp_price
                 sl_price = new_sl_price
-                
-            # 새로운 포지션 진입 또는 같은 방향 추가 진입
+
+            # 새로운 포지션 진입 또는 같은 방향 추가 진입을 위한 잔고 확인
             # 가용 자금 조회
             balance = self.exchange.fetch_balance()
             available_balance = float(balance['USDT']['free'])
@@ -535,7 +536,6 @@ class BinanceFuturesTrader:
                     self.logger.error(f"SL 모니터링 중 오류: {e}")
                     return None
 
-
             # 총 포지션 크기 계산
             total_position_size = quantity
             if current_position and side == position_side:
@@ -550,7 +550,6 @@ class BinanceFuturesTrader:
                         self.logger.info(f"Cancelled existing TP/SL order: {order['id']}")
             except Exception as e:
                 self.logger.error(f"Error cancelling existing orders: {e}")
-
 
             # TP/SL 주문
             tp_side = 'sell' if side == 'buy' else 'buy'
@@ -608,11 +607,10 @@ class BinanceFuturesTrader:
                 'monitor_sl': monitor_and_adjust_sl,
                 'entry_price': entry_price
             }
-        
+            
         except Exception as e:
             self.logger.error(f"Order execution error: {str(e)}")
-            raise
-        
+            raise   
      
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
