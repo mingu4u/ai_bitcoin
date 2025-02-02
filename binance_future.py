@@ -464,6 +464,16 @@ class BinanceFuturesTrader:
 
             # 같은 방향 추가 진입인 경우
             elif current_position and side == position_side:
+                # 레버리지를 고려한 실제 주문 수량 계산
+                leveraged_amount = buy_amount * self.leverage
+                quantity = leveraged_amount / current_price
+
+                # 최소 주문 금액 확인 (100 USDT)
+                notional_value = quantity * current_price
+                if notional_value < 100:
+                    self.logger.error(f"Order notional value ({notional_value} USDT) is below minimum (100 USDT)")
+                    return None
+
                 # 1. 기존 TP/SL 주문 정보 읽기
                 try:
                     open_orders = self.exchange.fetch_open_orders(self.symbol)
@@ -475,6 +485,7 @@ class BinanceFuturesTrader:
                 except Exception as e:
                     self.logger.error(f"Error fetching existing SL price: {e}")
                     existing_sl_price = None
+
 
                 # 2. 새로운 TP/SL 가격 계산
                 # 총 포지션 크기와 평균 진입 가격 계산
@@ -533,13 +544,19 @@ class BinanceFuturesTrader:
             # 레버리지를 고려한 실제 주문 수량 계산
             leveraged_amount = buy_amount * self.leverage
             quantity = leveraged_amount / current_price
-            
+
+            # 최소 주문 금액 확인 (100 USDT)
+            notional_value = quantity * current_price
+            if notional_value < 100:
+                self.logger.error(f"Order notional value ({notional_value} USDT) is below minimum (100 USDT)")
+                return None
+
             # 최소 주문 수량 확인
             market_limits = self.exchange.markets[self.symbol]['limits']
             min_amount = market_limits['amount']['min']
             if quantity < min_amount:
                 self.logger.error(f"Order quantity ({quantity}) is below minimum ({min_amount})")
-                return None
+                return None       
             
             # 주문 실행
             order = self.exchange.create_market_order(
