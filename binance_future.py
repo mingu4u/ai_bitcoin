@@ -636,13 +636,6 @@ class BinanceFuturesTrader:
                     self.logger.error(f"SL 모니터링 중 오류: {e}")
                     return None
 
-            # 총 포지션 크기 계산
-            total_position_size = quantity
-            if current_position and side == position_side:
-                total_position_size += float(current_position['contracts'])
-
-
-
             # TP/SL 주문
             tp_side = 'sell' if side == 'buy' else 'buy'
             try:            
@@ -654,12 +647,17 @@ class BinanceFuturesTrader:
                     except Exception as e:
                         self.logger.error(f"Error cancelling old TP/SL order: {e}")
 
-                # Take Profit 주문
+                # 전체 포지션 크기 계산 (기존 포지션 + 신규 주문)
+                total_position_size = quantity
+                if current_position and side == position_side:
+                    total_position_size = float(current_position['contracts']) + quantity
+
+                # Take Profit 주문 (전체 포지션 크기로 설정)
                 tp_order = self.exchange.create_order(
                     symbol=self.symbol,
                     type='TAKE_PROFIT_MARKET',
                     side=tp_side,
-                    amount=quantity,
+                    amount=total_position_size,  # 전체 포지션 크기 사용
                     params={
                         'stopPrice': tp_price,
                         'reduceOnly': True,
@@ -667,12 +665,12 @@ class BinanceFuturesTrader:
                     }
                 )            
 
-                # Stop Loss 주문
+                # Stop Loss 주문 (전체 포지션 크기로 설정)
                 sl_order = self.exchange.create_order(
                     symbol=self.symbol,
                     type='STOP_MARKET',
                     side=tp_side,
-                    amount=quantity,
+                    amount=total_position_size,  # 전체 포지션 크기 사용
                     params={
                         'stopPrice': sl_price,
                         'reduceOnly': True,
