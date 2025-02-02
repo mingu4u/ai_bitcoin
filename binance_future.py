@@ -517,9 +517,13 @@ class BinanceFuturesTrader:
 
                 # 2. 새로운 TP/SL 가격 계산
                 # 총 포지션 크기와 평균 진입 가격 계산
-                total_position_size = quantity + float(current_position['contracts'])
-                total_position_value = (quantity * current_price) + (float(current_position['contracts']) * float(current_position['entryPrice']))
-                new_avg_entry_price = total_position_value / total_position_size
+                if current_position and side == position_side:
+                    total_position_size = float(current_position['contracts']) + quantity
+                    total_position_value = (quantity * current_price) + (float(current_position['contracts']) * float(current_position['entryPrice']))
+                    new_avg_entry_price = total_position_value / total_position_size
+                else:
+                    total_position_size = quantity
+                    new_avg_entry_price = current_price
 
                 # 기존 TP/SL 주문 취소
                 try:
@@ -667,12 +671,7 @@ class BinanceFuturesTrader:
                         self.exchange.cancel_order(old_order['id'], self.symbol)
                         self.logger.info(f"Cancelled old TP/SL order: {old_order['id']}")
                     except Exception as e:
-                        self.logger.error(f"Error cancelling old TP/SL order: {e}")
-
-                # 전체 포지션 크기 계산 (기존 포지션 + 신규 주문)
-                total_position_size = quantity
-                if current_position and side == position_side:
-                    total_position_size = float(current_position['contracts']) + quantity
+                        self.logger.error(f"Error cancelling old TP/SL order: {e}")           
 
                 # Take Profit 주문 (전체 포지션 크기로 설정)
                 tp_order = self.exchange.create_order(
