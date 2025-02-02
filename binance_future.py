@@ -56,12 +56,54 @@ class BinanceFuturesTrader:
         self.exchange.load_markets()
 
 
+    def is_ai_trade(self, order, last_ai_entry):
+        if not last_ai_entry:
+            return False
+            
+        # 주문 ID 직접 비교
+        if str(order['id']) == str(last_ai_entry[0]):
+            return True
+            
+        # AI 거래의 TP/SL 주문인지 확인
+        client_order_id = order['info'].get('origClientOrderId', '')
+        parent_order_id = order['info'].get('parentOrderId', '')
+        
+        return (client_order_id.startswith(str(last_ai_entry[0])) or 
+                str(parent_order_id) == str(last_ai_entry[0]))
+
+    def cancel_existing_tp_sl_orders(self):
+        try:
+            open_orders = self.exchange.fetch_open_orders(self.symbol)
+            cancelled_orders = []
+            
+            for order in open_orders:
+                if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
+                    try:
+                        self.exchange.cancel_order(order['id'], self.symbol)
+                        cancelled_orders.append(order['id'])
+                        self.logger.info(f"Cancelled TP/SL order: {order['id']}")
+                    except Exception as e:
+                        self.logger.error(f"Error cancelling order {order['id']}: {e}")
+                        
+            # 취소 확인
+            time.sleep(1)  # API 제한 고려
+            remaining_orders = self.exchange.fetch_open_orders(self.symbol)
+            for order in remaining_orders:
+                if order['id'] in cancelled_orders:
+                    self.logger.warning(f"Order {order['id']} was not properly cancelled")
+                    
+        except Exception as e:
+            self.logger.error(f"Error in cancel_existing_tp_sl_orders: {e}")
+            raise
+
+
 
     # 수동 거래 모니터링
     def monitor_manual_trades(self):
         try:
             # 최근 주문 내역 직접 조회 (최근 5분)
             since = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)
+            since_datetime = datetime.fromtimestamp(since/1000)
             orders = self.exchange.fetch_orders(self.symbol, since)
             
             # DB 연결
@@ -69,14 +111,14 @@ class BinanceFuturesTrader:
             c = conn.cursor()
             
             try:
-                # 1. 중복 기록 방지를 위한 최근 주문 정보 조회 (timestamp와 order_id 함께 사용)
+                # 최근 거래 내역 조회
                 c.execute("""
                     SELECT timestamp, order_id 
                     FROM trades 
-                    ORDER BY timestamp DESC 
-                    LIMIT 1
-                """)
-                last_recorded_trade = c.fetchone()
+                    WHERE timestamp >= ? 
+                """, (since_datetime.isoformat(),))
+                recent_trades = c.fetchall()
+                recorded_trades = set((ts, oid) for ts, oid in recent_trades)
                 
                 # 가장 최근의 reflection 조회
                 c.execute("""
@@ -89,7 +131,7 @@ class BinanceFuturesTrader:
                 last_reflection = c.fetchone()
                 last_reflection = last_reflection[0] if last_reflection else None
 
-                # AI Entry 주문 조회 (최근 AI 트레이딩 정보 포함)
+                # AI Entry 주문 조회
                 c.execute("""
                     SELECT t.order_id, t.timestamp
                     FROM trades t 
@@ -107,8 +149,8 @@ class BinanceFuturesTrader:
                     order_id = str(order['id'])
                     order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
                     
-                    # 1. 중복 기록 방지 (timestamp와 order_id 모두 고려)
-                    if last_recorded_trade and last_recorded_trade[0] == order_timestamp and last_recorded_trade[1] == order_id:
+                    # 중복 기록 방지
+                    if (order_timestamp, order_id) in recorded_trades:
                         continue
                     
                     # 거래 방향 결정
@@ -129,24 +171,20 @@ class BinanceFuturesTrader:
                     trade_type = 'MANUAL'
                     reason = 'Manual Trade'
                     
-                    # 2. AI의 TP/SL 주문 및 포지션 추적
-                    if last_ai_entry:
-                        client_order_id = order['info'].get('origClientOrderId', '')
+                    # AI 거래 여부 확인
+                    if self.is_ai_trade(order, last_ai_entry):
+                        trade_type = 'AI'
                         order_type = order['info'].get('type', '').upper()
+                        if order_type == 'TAKE_PROFIT_MARKET':
+                            reason = 'Take Profit'
+                        elif order_type == 'STOP_MARKET':
+                            reason = 'Stop Loss'
                         
-                        # AI 트레이딩 주문 ID와 연관된 경우
-                        if client_order_id.startswith(str(last_ai_entry[0])):
-                            trade_type = 'AI'
-                            if order_type == 'TAKE_PROFIT_MARKET':
-                                reason = 'Take Profit'
-                            elif order_type == 'STOP_MARKET':
-                                reason = 'Stop Loss'
-                            
-                            # 3. AI 트레이딩 타임스탬프 고려
-                            order_timestamp = max(
-                                order_timestamp, 
-                                last_ai_entry[1] if last_ai_entry and last_ai_entry[1] else order_timestamp
-                            )
+                        # AI 트레이딩 타임스탬프 고려
+                        order_timestamp = max(
+                            order_timestamp, 
+                            last_ai_entry[1] if last_ai_entry and last_ai_entry[1] else order_timestamp
+                        )
                     
                     # 포지션 정보 조회
                     positions = self.exchange.fetch_positions([self.symbol])
@@ -557,14 +595,7 @@ class BinanceFuturesTrader:
                 total_position_size += float(current_position['contracts'])
 
             # TP/SL 주문 전에 기존 대기 중인 주문 취소
-            try:
-                open_orders = self.exchange.fetch_open_orders(self.symbol)
-                for order in open_orders:
-                    if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-                        self.exchange.cancel_order(order['id'], self.symbol)
-                        self.logger.info(f"Cancelled existing TP/SL order: {order['id']}")
-            except Exception as e:
-                self.logger.error(f"Error cancelling existing orders: {e}")
+            self.cancel_existing_tp_sl_orders()
 
             # TP/SL 주문
             tp_side = 'sell' if side == 'buy' else 'buy'
@@ -577,7 +608,8 @@ class BinanceFuturesTrader:
                     amount=quantity,
                     params={
                         'stopPrice': tp_price,
-                        'reduceOnly': True
+                        'reduceOnly': True,
+                        'clientOrderId': f"tp_{order['id']}"
                     }
                 )            
 
@@ -589,7 +621,8 @@ class BinanceFuturesTrader:
                     amount=quantity,
                     params={
                         'stopPrice': sl_price,
-                        'reduceOnly': True
+                        'reduceOnly': True,
+                        'clientOrderId': f"sl_{order['id']}"
                     }
                 )
 
@@ -773,8 +806,6 @@ def get_recent_trades(conn, num_trades=40):
     """
     try:
         c = conn.cursor()
-        
-        # 단순히 시간 역순으로 정렬하여 최근 n개의 거래 내역 조회
         c.execute("""
             SELECT * FROM trades 
             ORDER BY timestamp DESC
@@ -783,10 +814,13 @@ def get_recent_trades(conn, num_trades=40):
         
         columns = [column[0] for column in c.description]
         return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
-        
+    
     except Exception as e:
         logging.error(f"Error fetching recent trades: {e}")
-        return pd.DataFrame()  # 에러 발생 시 빈 데이터프레임 반환
+        return pd.DataFrame()
+    finally:
+        if 'c' in locals():
+            c.close()
 
 
 # 최근 투자 기록을 기반으로 퍼포먼스 계산 (초기 잔고 대비 최종 잔고)
@@ -1263,10 +1297,11 @@ def ai_trading():
 
                         You can find the BlackFlag FTS, UT Bot Alerts indicators, Volume Oscillator from the TradingView chart screenshot provided in the image of the user message. 
                         These technical indicators are essential for following the trading strategy outlined above.
-                        For optimal timing of entry, the occurrence of these three indicators should be recent on a 5-minute timeframe.
-                        and "stop loss price" should be based on trading method above.
-                        Also, because of the high fees associated with futures leverage, you shouldn't trade too often. Prioritize the entry signals from the three indicators.
+                        "stop loss price" should be based on trading method above.
+                        For optimal timing of entry, the occurrence of these three indicators should be recent on a 5-minute timeframe. otherwise, don't enter.
                         However, if other factors are sufficient reasons to enter a long(buy) or short(sell) position, you may trade.
+                        because of the high fees associated with futures leverage, you shouldn't trade too often. Prioritize the entry signals from the three indicators.
+
                         Based on this trading method, analyze the current market situation and make a judgment by synthesizing it with the provided data and recent performance reflection.
 
                         Response format:
