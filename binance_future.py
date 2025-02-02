@@ -69,6 +69,16 @@ class BinanceFuturesTrader:
             c = conn.cursor()
             
             try:
+                # 가장 최근의 기록된 주문 ID 조회 (중복 방지)
+                c.execute("""
+                    SELECT order_id 
+                    FROM trades 
+                    ORDER BY timestamp DESC 
+                    LIMIT 1
+                """)
+                last_recorded_order_id = c.fetchone()
+                last_recorded_order_id = last_recorded_order_id[0] if last_recorded_order_id else None
+
                 # 가장 최근의 reflection 조회
                 c.execute("""
                     SELECT reflection 
@@ -89,20 +99,16 @@ class BinanceFuturesTrader:
                     LIMIT 1
                 """)
                 last_ai_entry = c.fetchone()
-                
-                # 가장 최근 기록된 거래의 ID 조회
-                c.execute("SELECT MAX(id) FROM trades")
-                last_recorded_id = c.fetchone()[0]
-                
+
                 for order in orders:
                     # 완료된 주문만 처리
                     if order['status'] != 'closed':
                         continue
-                        
+                    
                     order_id = str(order['id'])
                     
-                    # 이미 기록된 거래는 건너뛰기
-                    if last_recorded_id is not None and order_id == str(last_recorded_id):
+                    # 이미 기록된 주문은 건너뛰기 (중복 방지)
+                    if last_recorded_order_id == order_id:
                         continue
                     
                     # 거래 방향 결정
@@ -175,6 +181,7 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error monitoring trades: {e}")
             if 'conn' in locals():
                 conn.close()
+
 
     def setup_leverage_and_margin(self, leverage: int):
         try:
