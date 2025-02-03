@@ -289,48 +289,6 @@ class BinanceFuturesTrader:
             self.leverage = leverage
             raise    
 
-    def cancel_existing_orders(self, order_id=None):
-        """기존 주문 취소 함수"""
-        try:
-            # 주문 상태 확인
-            if order_id and self.exchange.has['fetchOrder']:
-                try:
-                    order_status = self.exchange.fetch_order(order_id, self.symbol)
-                    if order_status['status'] == 'closed':
-                        return
-                except Exception as e:
-                    self.logger.error(f"Error fetching order status: {e}")
-            
-            # 열린 주문 조회
-            open_orders = self.exchange.fetch_open_orders(self.symbol)
-            cancelled_orders = []
-            
-            for order in open_orders:
-                # 특정 주문 ID가 제공된 경우 해당 주문만 취소
-                if order_id and order['id'] != order_id:
-                    continue
-                    
-                try:
-                    self.exchange.cancel_order(order['id'], self.symbol)
-                    cancelled_orders.append(order['id'])
-                    self.logger.info(f"Cancelled order: {order['id']}")
-                except Exception as e:
-                    self.logger.error(f"Error cancelling order {order['id']}: {e}")
-                    
-            # 취소 확인
-            time.sleep(1)
-            remaining_orders = self.exchange.fetch_open_orders(self.symbol)
-            for order in remaining_orders:
-                if order['id'] in cancelled_orders:
-                    self.logger.warning(f"Order {order['id']} was not properly cancelled")
-                    
-        except Exception as e:
-            self.logger.error(f"Error in cancel_existing_orders: {e}")
-            raise
-
-
-
-
     async def get_position_size(self, usdt_amount: float) -> float:
         try:
             ticker = await self.exchange.fetch_ticker(self.symbol)
@@ -693,7 +651,6 @@ class BinanceFuturesTrader:
                         symbol=self.symbol,
                         type='STOP_MARKET',
                         side=tp_side,
-                        amount=0,
                         params={
                             'stopPrice': new_sl_price,
                             'closePosition': 'true'
@@ -724,7 +681,6 @@ class BinanceFuturesTrader:
                 symbol=self.symbol,
                 type='TAKE_PROFIT_MARKET',
                 side=tp_side,
-                amount=0,
                 params={
                     'stopPrice': tp_price,
                     'closePosition': 'true',
@@ -737,7 +693,6 @@ class BinanceFuturesTrader:
                 symbol=self.symbol,
                 type='STOP_MARKET',
                 side=tp_side,
-                amount=0,
                 params={
                     'stopPrice': sl_price,
                     'closePosition': 'true',
@@ -750,30 +705,22 @@ class BinanceFuturesTrader:
             
             # 10. 실패 시 복구 처리
             try:
-                # 기존 주문 취소 시도
                 if 'order' in locals():
-                    self.cancel_existing_orders(order['id'])
+                    self.exchange.cancel_order(order['id'], self.symbol)
                     
-                # 이전 TP/SL 주문 복구
                 for old_order in last_tp_sl_orders:
-                    try:
-                        self.exchange.create_order(
-                            symbol=self.symbol,
-                            type=old_order['type'],
-                            side=old_order['side'],
-                            amount=float(old_order['amount']),  # 명시적 형변환 추가
-                            params={
-                                'stopPrice': float(old_order['info']['stopPrice']),
-                                'clientOrderId': old_order['clientOrderId']
-                            }
-                        )
-                        self.logger.info(f"Restored old TP/SL order: {old_order['id']}")
-                    except Exception as e:
-                        self.logger.error(f"Error restoring old TP/SL order: {e}")
-                        
+                    self.exchange.create_order(
+                        symbol=self.symbol,
+                        type=old_order['type'],
+                        side=old_order['side'],
+                        params={
+                            'stopPrice': old_order['info']['stopPrice'],
+                            'closePosition': 'true'
+                        }
+                    )
             except Exception as recovery_err:
                 self.logger.error(f"Error in recovery process: {recovery_err}")
-                        
+            
             return None
 
         self.logger.info(f"Position opened - Side: {side}, Amount: {buy_amount} USDT")
@@ -890,8 +837,6 @@ def init_db():
                   timestamp TEXT,
                   trade_type TEXT,
                   order_id TEXT,
-                  tp_order_id TEXT,
-                  sl_order_id TEXT,
                   decision TEXT,
                   percentage INTEGER,
                   reason TEXT,
@@ -904,23 +849,19 @@ def init_db():
     conn.commit()
     return conn
 
+
 # 거래 기록을 DB에 저장하는 함수
 
 # 거래 기록 함수 수정
-def log_trade(conn, trade_type, order_id, tp_order_id=None, sl_order_id=None, decision=None, 
-              percentage=0, reason=None, btc_balance=0, usdt_balance=0, total_assets=0, 
-              btc_avg_buy_price=0, btc_current_price=0, reflection=''):
+def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection=''):
     c = conn.cursor()
     timestamp = datetime.now().isoformat()
     c.execute("""INSERT INTO trades 
-                 (timestamp, trade_type, order_id, tp_order_id, sl_order_id, decision, 
-                  percentage, reason, btc_balance, usdt_balance, total_assets, 
-                  btc_avg_buy_price, btc_current_price, reflection) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-              (timestamp, trade_type, order_id, tp_order_id, sl_order_id, decision, 
-               percentage, reason, btc_balance, usdt_balance, total_assets, 
-               btc_avg_buy_price, btc_current_price, reflection))
+                 (timestamp, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              (timestamp, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection))
     conn.commit()
+
 # 최근 투자 기록 조회
 # def get_recent_trades(conn, days=1):
 #     c = conn.cursor()
@@ -991,13 +932,13 @@ def generate_reflection(trades_df, current_market_data):
             {
                 "role": "user",
                 "content": f"""
-                Recent 20 trading data:
+                Recent 40 trading data:
                 {trades_df.to_json(orient='records')}
                 
                 Current market data:
                 {current_market_data}
                 
-                Overall performance over the last 20 trades : {performance:.2f}%
+                Overall performance over the last 40 trades : {performance:.2f}%
                 
                 Please analyze this data and provide:
                 1. A brief reflection on the recent trading decisions
@@ -1043,6 +984,21 @@ def add_indicators(df):
     # 이동평균선 (단기, 장기)
     df['sma_20'] = ta.trend.SMAIndicator(close=df['close'], window=20).sma_indicator()
     df['ema_12'] = ta.trend.EMAIndicator(close=df['close'], window=12).ema_indicator()
+    
+    # Stochastic Oscillator 추가
+    stoch = ta.momentum.StochasticOscillator(
+        high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3)
+    df['stoch_k'] = stoch.stoch()
+    df['stoch_d'] = stoch.stoch_signal()
+
+    # Average True Range (ATR) 추가
+    df['atr'] = ta.volatility.AverageTrueRange(
+        high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
+
+    # On-Balance Volume (OBV) 추가
+    df['obv'] = ta.volume.OnBalanceVolumeIndicator(
+        close=df['close'], volume=df['volume']).on_balance_volume()    
+    
     
     return df
 
@@ -1300,15 +1256,16 @@ def modify_orderbook(orderbook):
 ### 메인 AI 트레이딩 로직
 def ai_trading():
     ### 데이터 가져오기
+    time.sleep(1)
     # 7. Selenium으로 차트 캡처
     driver = None
     try:
         # TradingView 차트 캡처
         driver = login_with_cookies()
-        driver.get("https://kr.tradingview.com/chart/QYZJBUKS/?symbol=BINANCE%3ABTCUSDT.P")
+        driver.get("https://kr.tradingview.com/chart/zcDfxQQ8/?symbol=BINANCE%3ABTCUSDT.P")
         logger.info("TradingView 페이지 로드 완료")
         time.sleep(3)
-        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
+        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="yes")
         logger.info(f"TradingView 스크린샷 캡처 완료.")
     except WebDriverException as e:
         logger.error(f"캡쳐시 WebDriver 오류 발생: {e}")
@@ -1329,16 +1286,17 @@ def ai_trading():
     used_usdt = usdt_balance['used']      # 주문에 묶인 잔고
     total_usdt = usdt_balance['total']    # 전체 잔고
     filtered_balances = [used_usdt, free_usdt]
+    positions = trader.exchange.fetch_positions([trader.symbol])
+    btc_avg_buy_price = float(position['entryPrice']) 
 
     # 2. 오더북(호가 데이터) 조회
     orderbook = trader.exchange.fetch_order_book('BTC/USDT')
     modified_orderbook = modify_orderbook(orderbook)
 
-    # 3. 차트 데이터 조회 및 보조지표 추가
-    # df_daily = pyupbit.get_ohlcv("KRW-BTC", interval="day", count=30)
-    # df_daily = dropna(df_daily)
-    # df_daily = add_indicators(df_daily)
-    
+    # 3. 차트 데이터 조회 및 보조지표 추가   
+    # Binance 거래소의 BTC/USDT Perpetual 현재가격
+    ticker = trader.exchange.fetch_ticker(trader.symbol)
+    current_price = ticker['last']
 
     # 바이낸스 5분봉 데이터 조회 (최근 2.5시간)
     df_5min = pd.DataFrame(
@@ -1369,7 +1327,6 @@ def ai_trading():
     df_hourly = add_indicators(df_hourly)
 
 
-
     # 4. 공포 탐욕 지수 가져오기
     fear_greed_index = get_fear_and_greed_index()
 
@@ -1395,6 +1352,7 @@ def ai_trading():
             
             # 현재 시장 데이터 수집 (기존 코드에서 가져온 데이터 사용)
             current_market_data = {
+                "Current Price": current_price,
                 "fear_greed_index": fear_greed_index,
                 "news_headlines": news_headlines,
                 "orderbook": modified_orderbook,
@@ -1424,10 +1382,24 @@ def ai_trading():
                         - Quick trend reversals and continuation patterns
                         - Support and resistance levels visible on 5-minute charts
                         - Recent news headlines and their immediate impact on Bitcoin price
-                        - The Fear and Greed Index and its implications
+                        - Fear/Greed Index can provide market sentiment context but should not be the primary decision driver.
                         - Overall market sentiment
                         - Patterns and trends visible in the chart image
                         - Recent trading performance and reflection
+                        
+                        [Market Data]
+                        - Current Price: {current_price:.2f} USDT
+                        - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
+                        - MACD: {df_5min['macd'].iloc[-1]:.2f}
+                        - Fear/Greed Index: {get_fear_and_greed_index()['value']} ({get_fear_and_greed_index()['classification']})
+                        - Bollinger Bands (20): Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}, Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}, Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
+                        - Stochastic Oscillator (14, 3): %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
+                        - Average True Range (ATR): {df_5min['atr'].iloc[-1]:.2f}
+
+                        [Portfolio]
+                        - free USDT Balance: {free_usdt:.0f}
+                        - used USDT Holdings: {used_usdt:.4f}
+                        - BTC Average Purchase Price: {btc_avg_buy_price:.0f} USDT
 
                         Recent trading reflection:
                         {reflection}
@@ -1438,11 +1410,11 @@ def ai_trading():
 
                         You can find the BlackFlag FTS, UT Bot Alerts indicators, Volume Oscillator from the TradingView chart screenshot provided in the image of the user message. 
                         These technical indicators are essential for following the trading strategy outlined above.
-                        "stop loss price" should be based on trading method above.
+                        "stop loss price" should be based on trading method above and ATR indicator.
                         For optimal timing of entry, when deciding to enter a position, the more recent the Buy or Sell signal from the three indicators, the better.
-                        because of the high fees associated with futures leverage, you should trade with caution. Prioritize the entry signals from the three indicators.
+                        **Minimize unnecessary trades to reduce fees.** Only trade when strong signals of these three indicators align.
                         However, if other factors are sufficient reasons to enter a long(buy) or short(sell) position, you may trade.
-                        
+                        Aim for long-term profit maximization, being mindful of trading fees, and improving portfolio performance.
 
                         Based on this trading method, analyze the current market situation and make a judgment by synthesizing it with the provided data and recent performance reflection.
 
@@ -1465,8 +1437,8 @@ def ai_trading():
                                 "type": "text",
                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
                                 Orderbook: {json.dumps(modified_orderbook)}
-                                5-minute OHLCV with indicators (30 days): {df_5min.to_json()}
-                                Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
+                                5-minute OHLCV with indicators (2.5 hours): {df_5min.to_json()}
+                                Hourly OHLCV with indicators (12 hours): {df_hourly.to_json()}
                                 Recent news headlines: {json.dumps(news_headlines)}
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}"""
                             },
