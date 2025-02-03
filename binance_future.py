@@ -1323,12 +1323,12 @@ def ai_trading():
     df_5min = dropna(df_5min)
     df_5min = add_indicators(df_5min)
     
-    # 바이낸스 60분봉 데이터 조회 (최근 12시간)
+    # 바이낸스 60분봉 데이터 조회 (최근 24시간)
     df_hourly = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT", 
             timeframe='1h',
-            limit=12
+            limit=24
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
@@ -1449,7 +1449,7 @@ def ai_trading():
                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
                                 Orderbook: {json.dumps(modified_orderbook)}
                                 5-minute OHLCV with indicators (2.5 hours): {df_5min.to_json()}
-                                Hourly OHLCV with indicators (12 hours): {df_hourly.to_json()}
+                                Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
                                 Recent news headlines: {json.dumps(news_headlines)}
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}"""
                             },
