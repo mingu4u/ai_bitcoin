@@ -68,55 +68,24 @@ class BinanceFuturesTrader:
         """
         if not last_ai_entry:
             return False
-            
+        
         # 기본 주문 정보 확인
         order_id = str(order['id'])
-        client_order_id = order['info'].get('origClientOrderId', '')
-        parent_order_id = order['info'].get('parentOrderId', '')
-        order_type = order['type']
+        client_order_id = order['clientOrderId']
         
-        # 1. 직접적인 AI 엔트리 주문인 경우
+        # 1. AI가 생성한 주문 ID 패턴 확인 
+        if client_order_id and (
+            client_order_id.startswith('tp_') or 
+            client_order_id.startswith('sl_') or 
+            client_order_id == str(last_ai_entry[0])
+        ):
+            return True
+        
+        # 2. 최근 AI 엔트리 주문과 동일한 order_id 확인
         if order_id == str(last_ai_entry[0]):
             return True
         
-        # 2. TP/SL 주문인 경우
-        if order_type in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-            # TP/SL 주문의 원본 주문 ID 추출
-            if client_order_id.startswith('tp_') or client_order_id.startswith('sl_'):
-                original_order_id = client_order_id.split('_')[-1]
-                if original_order_id == str(last_ai_entry[0]):
-                    return True
-        
-        # 3. 원본 주문의 자식 주문인 경우
-        if parent_order_id and str(parent_order_id) == str(last_ai_entry[0]):
-            return True
-        
         return False
-
-    def cancel_existing_tp_sl_orders(self):
-        try:
-            open_orders = self.exchange.fetch_open_orders(self.symbol)
-            cancelled_orders = []
-            
-            for order in open_orders:
-                if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-                    try:
-                        self.exchange.cancel_order(order['id'], self.symbol)
-                        cancelled_orders.append(order['id'])
-                        self.logger.info(f"Cancelled TP/SL order: {order['id']}")
-                    except Exception as e:
-                        self.logger.error(f"Error cancelling order {order['id']}: {e}")
-                        
-            # 취소 확인
-            time.sleep(1)  # API 제한 고려
-            remaining_orders = self.exchange.fetch_open_orders(self.symbol)
-            for order in remaining_orders:
-                if order['id'] in cancelled_orders:
-                    self.logger.warning(f"Order {order['id']} was not properly cancelled")
-                    
-        except Exception as e:
-            self.logger.error(f"Error in cancel_existing_tp_sl_orders: {e}")
-            raise
 
 
 
@@ -124,159 +93,157 @@ class BinanceFuturesTrader:
     def monitor_manual_trades(self):
         try:
             since = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)
-            since_datetime = datetime.fromtimestamp(since/1000)
 
-            # 모든 주문 조회
             orders = self.exchange.fetch_orders(self.symbol, since)
             
-            # TP/SL 및 일반 주문 필터링
-            tp_orders = [order for order in orders if order['type'] == 'TAKE_PROFIT_MARKET' and order['status'] == 'FILLED']
-            sl_orders = [order for order in orders if order['type'] == 'STOP_MARKET' and order['status'] == 'FILLED']
-            market_orders = [order for order in orders if 
-                            order['type'] == 'MARKET' and 
-                            order['status'] == 'FILLED' and 
-                            not order.get('info', {}).get('reduceOnly', False)]  # reduceOnly가 아닌 것만
-            reduce_orders = [order for order in orders if 
-                            order['status'] == 'FILLED' and 
-                            order.get('info', {}).get('reduceOnly', False) == True]
+            # TP/SL 실현 주문 필터링
+            realized_tp_orders = [order for order in orders 
+                        if (order['info']['origType'] == 'TAKE_PROFIT_MARKET'
+                            or order['clientOrderId'].startswith('tp_'))
+                        and order['type'] == 'market'
+                        and order['triggerPrice'] is not None
+                        and order['status'] == 'closed'
+                        and order['filled'] > 0]
+
+            realized_sl_orders = [order for order in orders 
+                        if (order['info']['origType'] == 'STOP_MARKET'
+                            or order['clientOrderId'].startswith('sl_'))
+                        and order['type'] == 'market'
+                        and order['triggerPrice'] is not None
+                        and order['status'] == 'closed'
+                        and order['filled'] > 0]
+
+            # parent_id로 매핑
+            tp_orders_by_parent = {
+                order['clientOrderId'].split('_')[-1]: order 
+                for order in realized_tp_orders 
+                if order['clientOrderId'].startswith('tp_')
+            }
             
-            # DB 연결
+            sl_orders_by_parent = {
+                order['clientOrderId'].split('_')[-1]: order 
+                for order in realized_sl_orders 
+                if order['clientOrderId'].startswith('sl_')
+            }
+
             conn = sqlite3.connect('bitcoin_trades.db')
             c = conn.cursor()
             
             try:
-                # 최근 거래 내역 조회
+                # 최근 AI 포지션 조회
                 c.execute("""
-                    SELECT timestamp, order_id, trade_type 
+                    SELECT order_id, timestamp, decision 
                     FROM trades 
-                    WHERE timestamp >= ? 
-                """, (since_datetime.isoformat(),))
-                recent_trades = c.fetchall()
-                recorded_trades = set((ts, oid) for ts, oid, _ in recent_trades)
-                
-                # AI Entry 주문 조회
-                c.execute("""
-                    SELECT t.order_id, t.timestamp
-                    FROM trades t 
-                    WHERE t.trade_type = 'AI'
-                    ORDER BY t.timestamp DESC 
+                    WHERE trade_type = 'AI' 
+                    AND decision != 'hold'
+                    ORDER BY timestamp DESC 
                     LIMIT 1
                 """)
-                last_ai_entry = c.fetchone()
+                last_ai_position = c.fetchone()
 
-                # 모든 주문 처리 (MARKET, TP, SL, Reduce)
-                for order in market_orders + tp_orders + sl_orders + reduce_orders:
-                    order_id = str(order['id'])
-                    order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
-                    
-                    # 중복 체크
-                    if (order_timestamp, order_id) in recorded_trades:
-                        continue
-
-                    # 거래 타입 결정
-                    trade_type = 'MANUAL'
-                    reason = 'Manual Trade'
-
-                    # AI 거래 여부 먼저 확인
-                    is_ai = False
-                    if order['type'] in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-                        client_order_id = order['info'].get('origClientOrderId', '')
-                        for orig_order in market_orders:
-                            if str(orig_order['id']) == client_order_id.split('_')[-1]:
-                                if self.is_ai_trade(orig_order, last_ai_entry):
-                                    is_ai = True
-                                break
-                    else:
-                        is_ai = self.is_ai_trade(order, last_ai_entry)
-
-                    # reduceOnly 주문 처리
-                    if order.get('info', {}).get('reduceOnly', False):
-                        # 최근 AI 포지션 진입 주문 확인
-                        c.execute("""
-                            SELECT order_id, trade_type
-                            FROM trades
-                            WHERE trade_type = 'AI' AND decision != 'hold' 
-                            ORDER BY timestamp DESC 
-                            LIMIT 1
-                        """)
-                        last_ai_position = c.fetchone()
+                for order in orders:
+                    if order['type'] == 'market':
+                        order_id = str(order['id'])
+                        order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
                         
-                        if last_ai_position:
-                            trade_type = 'MANUAL'
-                            reason = 'Manual Close of AI Position'
-                            
-                            # AI 포지션의 원래 주문 ID와 현재 reduceOnly 주문의 연관성 확인 추가
-                            c.execute("""
-                                SELECT order_id 
-                                FROM trades 
-                                WHERE trade_type = 'AI' AND order_id = ?
-                            """, (last_ai_position[0],))
-                            ai_trade_exists = c.fetchone()
-                            
-                            if not ai_trade_exists:
-                                reason = 'Position Close'
+                        # 중복 체크
+                        c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
+                        if c.fetchone():
+                            continue
+
+                        is_reduce_only = order.get('info', {}).get('reduceOnly', False)
+                        is_ai = self.is_ai_trade(order, last_ai_position)
+                        
+                        # 거래 유형 판별
+                        if is_ai:
+                            if not is_reduce_only:
+                                trade_type = 'AI'
+                                reason = 'AI Entry'
+                            else:
+                                continue  # AI의 TP/SL은 이미 AI 트레이딩에서 처리됨
                         else:
-                            trade_type = 'MANUAL'
-                            reason = 'Position Close'
+                            if is_reduce_only:
+                                # 포지션 종료 케이스 분석
+                                if last_ai_position:
+                                    last_ai_id, last_ai_time, last_ai_decision = last_ai_position
+                                    # AI 포지션을 수동으로 종료하는 경우
+                                    if (datetime.fromisoformat(last_ai_time) > datetime.fromisoformat(order_timestamp) - timedelta(hours=24) and
+                                        ((last_ai_decision == 'buy' and order['side'] == 'sell') or 
+                                        (last_ai_decision == 'sell' and order['side'] == 'buy'))):
+                                        trade_type = 'MANUAL'
+                                        reason = 'Manual Close of AI Position'
+                                    else:
+                                        trade_type = 'MANUAL'
+                                        reason = 'Manual Close of Manual Position'
+                                else:
+                                    trade_type = 'MANUAL'
+                                    reason = 'Manual Close of Manual Position'
+                            else:
+                                # TP/SL 실현 체크
+                                tp_order = tp_orders_by_parent.get(order_id)
+                                sl_order = sl_orders_by_parent.get(order_id)
+                                
+                                if tp_order:
+                                    trade_type = 'MANUAL'
+                                    reason = 'Manual TP Realized'
+                                elif sl_order:
+                                    trade_type = 'MANUAL'
+                                    reason = 'Manual SL Realized'
+                                else:
+                                    trade_type = 'MANUAL'
+                                    reason = 'Manual Entry'
 
-                        # 로깅 추가
-                        self.logger.info(f"Reduce Order Processing: reduceOnly={order.get('info', {}).get('reduceOnly', False)}, "
-                                            f"Last AI Position={last_ai_position}, "
-                                            f"Trade Type={trade_type}, Reason={reason}")
+                        decision = 'buy' if order['side'] == 'buy' else 'sell'
+                        
+                        # 잔고 정보
+                        balance = self.exchange.fetch_balance()
+                        usdt_balance = balance['USDT']
+                        free_usdt = usdt_balance['free']
+                        used_usdt = usdt_balance['used']
+                        total_usdt = usdt_balance['total']
+                        
+                        # 거래 비율 계산
+                        actual_trade_amount = abs(order['cost']) / self.leverage
+                        trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
+                        
+                        # 포지션 정보
+                        positions = self.exchange.fetch_positions([self.symbol])
+                        current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
+                        btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
+                        
+                        # 현재가
+                        ticker = self.exchange.fetch_ticker(self.symbol)
+                        current_btc_price = ticker['last']
 
-                    # AI 주문 자체는 건너뛰기 (TP/SL/신규 진입)
-                    if is_ai and not order.get('info', {}).get('reduceOnly', False):
-                        continue
+                        # TP/SL 주문 ID
+                        tp_order_id = tp_order['id'] if tp_order else None
+                        sl_order_id = sl_order['id'] if sl_order else None
 
-                    decision = 'buy' if order['side'] == 'buy' else 'sell'
-                    
-                    # 잔고 정보 조회
-                    balance = self.exchange.fetch_balance()
-                    usdt_balance = balance['USDT']
-                    free_usdt = usdt_balance['free']
-                    used_usdt = usdt_balance['used']
-                    total_usdt = usdt_balance['total']
-                    
-                    # 레버리지를 고려한 실제 거래 비율 계산
-                    actual_trade_amount = abs(order['cost']) / self.leverage
-                    trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
-                    
-                    # 포지션 정보 조회
-                    positions = self.exchange.fetch_positions([self.symbol])
-                    current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
-                    btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
-                    
-                    # BTC 현재가 조회
-                    ticker = self.exchange.fetch_ticker(self.symbol)
-                    current_btc_price = ticker['last']
-
-                    # 로깅 추가
-                    self.logger.info(f"Trade Processing: order_id={order_id}, "
-                                        f"trade_type={trade_type}, reason={reason}, "
-                                        f"is_ai={is_ai}, decision={decision}")
-
-                    # DB에 거래 기록
-                    c.execute("""
-                        INSERT INTO trades 
-                        (timestamp, trade_type, order_id, decision, percentage, reason, 
-                        btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        order_timestamp,
-                        trade_type,
-                        order_id,
-                        decision,
-                        int(trade_percentage),
-                        reason,
-                        used_usdt,
-                        free_usdt,
-                        total_usdt,
-                        btc_avg_buy_price,
-                        current_btc_price
-                    ))
-                    conn.commit()
-                    
-                    self.logger.info(f"{trade_type} trade recorded: {decision.upper()} at {current_btc_price} (Reason: {reason})")
+                        # DB 기록
+                        c.execute("""
+                            INSERT INTO trades 
+                            (timestamp, trade_type, order_id, decision, percentage, reason, 
+                            btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
+                            tp_order_id, sl_order_id) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            order_timestamp,
+                            trade_type,
+                            order_id,
+                            decision,
+                            int(trade_percentage),
+                            reason,
+                            used_usdt,
+                            free_usdt,
+                            total_usdt,
+                            btc_avg_buy_price,
+                            current_btc_price,
+                            tp_order_id,
+                            sl_order_id
+                        ))
+                        conn.commit()
+                        
+                        self.logger.info(f"{trade_type} trade recorded: {decision.upper()} at {current_btc_price} (Reason: {reason})")
                 
             finally:
                 conn.close()
@@ -386,266 +353,388 @@ class BinanceFuturesTrader:
 
 
 
-    def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
-        try:
-            # 공통 상수 및 초기 설정
-            SAFETY_MARGIN = 0.002
-            TRAILING_THRESHOLD = 0.01
-            TRAILING_BUFFER = 0.004
-            MINIMUM_ORDER_VALUE = 100
-            PRECISION = 8  # 소수점 처리를 위한 정밀도
 
-            # 초기 변수 설정
+
+ 
+    def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
+        """
+        시장가 주문과 TP/SL 설정을 처리하는 함수
+        
+        Args:
+            side (str): 'buy' 또는 'sell'
+            buy_amount (float): 주문 금액 (USDT)
+            pl_ratio (float): 수익률 비율
+            sl_price (float): 스탑로스 가격
+        """
+        # 공통 상수 및 초기 설정
+        SAFETY_MARGIN = 0.002          # 안전 마진 (0.2%)
+        TRAILING_THRESHOLD = 0.01      # 트레일링 시작 기준 수익률 (1%)
+        TRAILING_BUFFER = 0.003        # 트레일링 버퍼 (0.3%)
+        MINIMUM_ORDER_VALUE = 100      # 최소 주문 금액 (USDT)
+        MIN_PRICE_DIFF = 0.001        # 최소 가격 차이 (0.1%)
+        MAX_BALANCE_USE = 0.65        # 최대 사용 가능 잔고 비율 (65%)
+
+        def _handle_position_reduction(self, current_position, side, buy_amount, current_price):
+            """포지션 축소/청산 처리"""
+            position_size = float(current_position['contracts'])
+            position_notional = float(current_position['notional'])
+            self.logger.info(f"Reducing/Closing position of {position_size} contracts")
+            
+            leveraged_amount = buy_amount * self.leverage
+            calculated_quantity = leveraged_amount / current_price
+            
+            # 청산량 결정
+            if leveraged_amount >= abs(position_notional):
+                quantity = abs(position_size)
+                self.logger.info(f"Closing entire position of {quantity} contracts")
+                
+                # 기존 주문 전체 취소
+                try:
+                    open_orders = self.exchange.fetch_open_orders(self.symbol)
+                    for order in open_orders:
+                        self.exchange.cancel_order(order['id'], self.symbol)
+                except Exception as e:
+                    self.logger.error(f"Error cancelling orders: {e}")
+            else:
+                quantity = calculated_quantity
+                self.logger.info(f"Partially reducing position by {quantity} contracts")
+            
+            # 포지션 축소/청산 주문
+            try:
+                order = self.exchange.create_market_order(
+                    symbol=self.symbol,
+                    side=side,
+                    amount=quantity,
+                    params={'reduceOnly': True}
+                )
+                
+                self.logger.info(f"Position reduced/closed at price: {current_price}")
+                return {
+                    'entry': order,
+                    'tp': None,
+                    'sl': None
+                }
+            except Exception as e:
+                self.logger.error(f"Error creating reduction order: {e}")
+                return None
+
+        def _handle_position_increase(self, current_position, side, buy_amount, current_price,
+                                    sl_price, tp_price, pl_ratio, min_order_value):
+            """같은 방향 추가 진입 처리"""
+            # 레버리지 적용된 수량 계산
+            leveraged_amount = buy_amount * self.leverage
+            quantity = leveraged_amount / current_price
+
+            # 최소 주문 금액 확인
+            if quantity * current_price < min_order_value:
+                self.logger.error(f"Order value too small: {quantity * current_price} USDT")
+                return None
+
+            # 기존 SL 가격 조회
+            try:
+                open_orders = self.exchange.fetch_open_orders(self.symbol)
+                existing_sl_price = None
+                for order in open_orders:
+                    if order['info']['origType'] == 'STOP_MARKET' and order['type'] == 'market':
+                        existing_sl_price = float(order['info'].get('stopPrice', order.get('price', 0)))
+                        break
+            except Exception as e:
+                self.logger.error(f"Error fetching existing SL price: {e}")
+                existing_sl_price = None
+
+            # 총 포지션 정보 계산
+            total_position_size = quantity + float(current_position['contracts'])
+            total_position_value = (quantity * current_price) + \
+                                (float(current_position['contracts']) * float(current_position['entryPrice']))
+            new_avg_entry_price = total_position_value / total_position_size
+
+            # 기존 TP/SL 주문 취소
+            try:
+                for order in open_orders:
+                    if ((order['info']['origType'] == 'TAKE_PROFIT_MARKET' or 
+                        order['info']['origType'] == 'STOP_MARKET') and
+                        order['type'] == 'market'):
+                        self.exchange.cancel_order(order['id'], self.symbol)
+            except Exception as e:
+                self.logger.error(f"Error cancelling existing TP/SL orders: {e}")
+                return None
+
+            # 새로운 SL 가격 계산
+            if existing_sl_price:
+                total_sl_value = (quantity * sl_price) + \
+                            (float(current_position['contracts']) * existing_sl_price)
+                new_sl_price = total_sl_value / total_position_size
+            else:
+                new_sl_price = sl_price
+
+            # 새로운 TP 가격 계산
+            if side == 'buy':
+                new_tp_price = new_avg_entry_price + \
+                            (new_avg_entry_price - new_sl_price) * pl_ratio
+            else:
+                new_tp_price = new_avg_entry_price - \
+                            (new_sl_price - new_avg_entry_price) * pl_ratio
+
+            return new_tp_price, new_sl_price
+
+        # 1. 기존 마지막 TP/SL 주문 정보 백업
+        last_tp_sl_orders = []
+        try:
+            open_orders = self.exchange.fetch_open_orders(self.symbol)
+            
+            tp_orders = [order for order in open_orders 
+                        if (order['info']['origType'] == 'TAKE_PROFIT_MARKET' 
+                            or order['clientOrderId'].startswith('tp_')) 
+                        and order['type'] == 'market']
+            
+            sl_orders = [order for order in open_orders 
+                        if (order['info']['origType'] == 'STOP_MARKET' 
+                            or order['clientOrderId'].startswith('sl_')) 
+                        and order['type'] == 'market']
+            
+            if tp_orders and sl_orders:
+                last_tp_sl_orders = [tp_orders[-1], sl_orders[-1]]
+        except Exception as e:
+            self.logger.error(f"Error fetching existing TP/SL orders: {e}")
+
+        # 2. 현재가 조회 및 TP/SL 가격 계산
+        try:
+            ticker = self.exchange.fetch_ticker(self.symbol)
+            current_price = ticker['last']
+            
+            # TP/SL 가격 보정
+            min_price_diff = current_price * MIN_PRICE_DIFF
+            
+            if side == 'buy':
+                if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
+                    sl_price = current_price * (1 - SAFETY_MARGIN)
+                    self.logger.warning(f"Invalid SL price for long position. Adjusted to {sl_price}")
+                
+                tp_price = current_price + pl_ratio * (current_price - sl_price)
+                if tp_price <= current_price or (tp_price - current_price) < pl_ratio * min_price_diff:
+                    tp_price = current_price * (1 + SAFETY_MARGIN)
+                    self.logger.warning(f"Invalid TP price for long position. Adjusted to {tp_price}")
+            
+            else:  # sell
+                if sl_price <= current_price or (sl_price - current_price) < min_price_diff:
+                    sl_price = current_price * (1 + SAFETY_MARGIN)
+                    self.logger.warning(f"Invalid SL price for short position. Adjusted to {sl_price}")
+                
+                tp_price = current_price - pl_ratio * (sl_price - current_price)
+                if tp_price >= current_price or (current_price - tp_price) < pl_ratio * min_price_diff:
+                    tp_price = current_price * (1 - SAFETY_MARGIN)
+                    self.logger.warning(f"Invalid TP price for short position. Adjusted to {tp_price}")
+
+        except Exception as e:
+            self.logger.error(f"Error calculating prices: {e}")
+            return None
+
+        # 3. 현재 포지션 확인
+        try:
+            positions = self.exchange.fetch_positions([self.symbol])
             current_position = None
             position_side = None
 
-            # 초기 데이터 조회 및 검증
-            def fetch_market_data():
-                ticker = self.exchange.fetch_ticker(self.symbol)
-                current_price = ticker['last']
-                min_price_diff = current_price * 0.001
-                    
-                # TP/SL 가격 보정 로직
-                def adjust_prices(order_side, current_price, input_sl_price, input_pl_ratio, min_price_diff):
-                    sl_price = input_sl_price
+            for pos in positions:
+                if float(pos.get('contracts', 0) or 0) != 0:
+                    current_position = pos
+                    position_side = pos['side']
+                    break
 
-                    if order_side == 'buy':
-                        # SL 가격 보정 (롱 포지션)
-                        if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
-                            sl_price = current_price * (1 - SAFETY_MARGIN)
-                        
-                        # TP 가격 계산
-                        tp_price = current_price + input_pl_ratio * (current_price - sl_price)
-                        if tp_price <= current_price or (tp_price - current_price) < min_price_diff:
-                            tp_price = current_price * (1 + SAFETY_MARGIN)
-                    
-                    else:  # sell
-                        # SL 가격 보정 (숏 포지션)
-                        if sl_price <= current_price or (sl_price - current_price) < min_price_diff:
-                            sl_price = current_price * (1 + SAFETY_MARGIN)
-                        
-                        # TP 가격 계산
-                        tp_price = current_price - input_pl_ratio * (sl_price - current_price)
-                        if tp_price >= current_price or (current_price - tp_price) < min_price_diff:
-                            tp_price = current_price * (1 - SAFETY_MARGIN)
-                    
-                    return sl_price, tp_price
+        except Exception as e:
+            self.logger.error(f"Error fetching positions: {e}")
+            return None
 
-                return current_price, min_price_diff, lambda order_side, current_price, input_sl_price, min_price_diff: adjust_prices(order_side, current_price, input_sl_price, pl_ratio, min_price_diff)
+        # 4. 반대 방향 주문 처리 (포지션 축소/청산)
+        if current_position and position_side:
+            if (position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy'):
+                return _handle_position_reduction(current_position, side, buy_amount, current_price)
 
-            def validate_and_prepare_order(current_price, input_buy_amount):
-                # 주문 가능 금액 및 수량 검증
-                balance = self.exchange.fetch_balance()
-                available_balance = float(balance['USDT']['free'])
-                
-                if available_balance < 10:
-                    raise ValueError(f"Insufficient balance. Available: {available_balance} USDT")
-                
-                max_safe_amount = available_balance * 0.65
-                adjusted_buy_amount = min(input_buy_amount, max_safe_amount)
-                
-                leveraged_amount = adjusted_buy_amount * self.leverage
-                quantity = leveraged_amount / current_price
-                
-                notional_value = quantity * current_price
-                if notional_value < MINIMUM_ORDER_VALUE:
-                    raise ValueError(f"Order notional value ({notional_value} USDT) is below minimum")
-                
-                market_limits = self.exchange.markets[self.symbol]['limits']
-                min_amount = market_limits['amount']['min']
-                if quantity < min_amount:
-                    raise ValueError(f"Order quantity ({quantity}) is below minimum ({min_amount})")
-                
-                return quantity, leveraged_amount
-
-            def manage_existing_positions(input_side, current_price, quantity, leveraged_amount):
-                nonlocal current_position, position_side
-                positions = self.exchange.fetch_positions([self.symbol])
-                current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
-                
-                if not current_position:
-                    return None, None, quantity, None
-                
-                position_side = current_position['side']
-                position_size = float(current_position.get('contracts', 0))
-                
-                # 안전한 position_notional 계산
-                try:
-                    position_notional = float(current_position.get('notional', 0))
-                except (TypeError, ValueError):
-                    position_notional = position_size * current_price
-                
-                # 포지션 축소/청산 로직
-                if (position_side == 'long' and input_side == 'sell') or (position_side == 'short' and input_side == 'buy'):
-                    if leveraged_amount >= abs(position_notional):
-                        quantity = abs(position_size)
-                        
-                        # 모든 오픈 주문 취소
-                        try:
-                            open_orders = self.exchange.fetch_open_orders(self.symbol)
-                            for order in open_orders:
-                                self.exchange.cancel_order(order['id'], self.symbol)
-                        except Exception as e:
-                            self.logger.error(f"Error cancelling orders: {e}")
-                    
-                    # 포지션 축소/청산 주문
-                    order = self.exchange.create_market_order(
-                        symbol=self.symbol, 
-                        side=input_side, 
-                        amount=round(quantity, PRECISION),
-                        params={'reduceOnly': True}
-                    )
-                    
-                    return order, position_side, None, position_notional
-                
-                return None, position_side, quantity, None
-
-            def calculate_position_metrics(current_price, quantity, input_side):
-                nonlocal current_position, position_side
-                if current_position and input_side == position_side:
-                    total_position_size = float(current_position.get('contracts', 0)) + quantity
-                else:
-                    total_position_size = quantity
-                
-                return round(total_position_size, PRECISION)
-
-            # 주요 실행 흐름
-            current_price, min_price_diff, adjust_prices_func = fetch_market_data()
-            
-            # SL, TP 가격 보정
-            sl_price, tp_price = adjust_prices_func(side, current_price, sl_price, min_price_diff)
-            
-            # 주문 수량 및 금액 검증
-            quantity, leveraged_amount = validate_and_prepare_order(current_price, buy_amount)
-            
-            # 기존 포지션 관리
-            reduce_order, position_side, quantity, position_notional = manage_existing_positions(
-                side, current_price, quantity, leveraged_amount
+        # 5. 같은 방향 추가 진입 처리
+        if current_position and side == position_side:
+            new_tp_price, new_sl_price = _handle_position_increase(
+                current_position, side, buy_amount, current_price,
+                sl_price, tp_price, pl_ratio, MINIMUM_ORDER_VALUE
             )
+            tp_price = new_tp_price
+            sl_price = new_sl_price
+
+        # 6. 신규 포지션 진입을 위한 잔고 확인 및 주문 수량 계산
+        try:
+            balance = self.exchange.fetch_balance()
+            available_balance = float(balance['USDT']['free'])
             
-            if reduce_order:
-                return {
-                    'entry': reduce_order, 
-                    'tp': None, 
-                    'sl': None,
-                    'position_side': position_side,
-                    'position_notional': position_notional
-                }
+            if available_balance < MINIMUM_ORDER_VALUE:
+                self.logger.error(f"Insufficient balance: {available_balance} USDT")
+                return None
             
-            # 포지션 메트릭스 계산
-            total_position_size = calculate_position_metrics(current_price, quantity, side)
+            max_safe_amount = available_balance * MAX_BALANCE_USE
+            if buy_amount > max_safe_amount:
+                buy_amount = max_safe_amount
+                self.logger.warning(f"Order amount adjusted to {buy_amount} USDT")
             
-            # 주문 실행
+            quantity = (buy_amount * self.leverage) / current_price
+            
+            # 최소 주문 금액 확인
+            if quantity * current_price < MINIMUM_ORDER_VALUE:
+                self.logger.error(f"Order value too small: {quantity * current_price} USDT")
+                return None
+            
+            # 최소 주문 수량 확인
+            min_amount = self.exchange.markets[self.symbol]['limits']['amount']['min']
+            if quantity < min_amount:
+                self.logger.error(f"Order quantity too small: {quantity}")
+                return None
+
+        except Exception as e:
+            self.logger.error(f"Error calculating order quantity: {e}")
+            return None
+
+        # 7. 포지션 주문 실행
+        try:
             order = self.exchange.create_market_order(
                 symbol=self.symbol,
                 side=side,
                 amount=quantity
             )
-            
-            # TP/SL 주문 생성
-            tp_side = 'sell' if side == 'buy' else 'buy'
-            tp_order = sl_order = None
-            
-            # 주문 실행 및 예외 처리 개선
-            try:
-                # Take Profit 주문
-                tp_order = self.exchange.create_order(
-                    symbol=self.symbol,
-                    type='TAKE_PROFIT_MARKET',
-                    side=tp_side,
-                    amount=total_position_size,
-                    params={
-                        'stopPrice': tp_price,
-                        'clientOrderId': f"tp_{order['id']}"
-                    }
-                )
+            entry_price = current_price
 
-                # Stop Loss 주문
-                sl_order = self.exchange.create_order(
-                    symbol=self.symbol,
-                    type='STOP_MARKET',
-                    side=tp_side,
-                    amount=total_position_size,
-                    params={
-                        'stopPrice': sl_price,
-                        'clientOrderId': f"sl_{order['id']}"
-                    }
-                )
+        except Exception as e:
+            self.logger.error(f"Error creating position order: {e}")
+            return None
+
+        # 8. 트레일링 스탑로스 설정
+        def monitor_and_adjust_sl():
+            try:
+                positions = self.exchange.fetch_positions([self.symbol])
+                current_position = None
+                for pos in positions:
+                    if float(pos.get('contracts', 0) or 0) != 0:
+                        current_position = pos
+                        break
+
+                if not current_position:
+                    return None
+
+                current_ticker = self.exchange.fetch_ticker(self.symbol)
+                current_market_price = current_ticker['last']
+                position_size = float(current_position['contracts'])
+                position_side = current_position['side']
+
+                # 수익률 계산
+                if position_side == 'long':
+                    profit_percentage = (current_market_price - entry_price) / entry_price
+                else:  # short
+                    profit_percentage = (entry_price - current_market_price) / entry_price
+
+                # 트레일링 스탑로스 로직
+                if profit_percentage >= TRAILING_THRESHOLD:
+                    # 새로운 SL 가격 계산
+                    if position_side == 'long':
+                        new_sl_price = current_market_price * (1 - TRAILING_BUFFER)
+                    else:  # short
+                        new_sl_price = current_market_price * (1 + TRAILING_BUFFER)
+
+                    # 기존 SL 주문 취소
+                    try:
+                        open_orders = self.exchange.fetch_open_orders(self.symbol)
+                        for order in open_orders:
+                            if order['info']['origType'] == 'STOP_MARKET' and order['type'] == 'market':
+                                self.exchange.cancel_order(order['id'], self.symbol)
+                                self.logger.info("기존 SL 주문 취소")
+                    except Exception as cancel_error:
+                        self.logger.error(f"SL 주문 취소 중 오류: {cancel_error}")
+
+                    # 새로운 SL 주문 생성
+                    tp_side = 'sell' if position_side == 'long' else 'buy'
+                    new_sl_order = self.exchange.create_order(
+                        symbol=self.symbol,
+                        type='STOP_MARKET',
+                        side=tp_side,
+                        params={
+                            'stopPrice': new_sl_price,
+                            'closePosition': 'true'
+                        }
+                    )
+
+                    self.logger.info(f"트레일링 SL 재설정: {new_sl_price}")
+                    return new_sl_order
 
             except Exception as e:
-                # TP/SL 주문 실패 시 처리 로직 간소화
-                self.logger.error(f"TP/SL order creation failed: {str(e)}")
-                
-                # 원래 주문 취소
+                self.logger.error(f"SL 모니터링 중 오류: {e}")
+                return None
+
+        # 9. TP/SL 주문 생성
+        try:
+            tp_side = 'sell' if side == 'buy' else 'buy'
+            
+            # 기존 TP/SL 주문 취소
+            for old_order in last_tp_sl_orders:
                 try:
-                    self.exchange.cancel_order(order['id'], self.symbol)
-                except Exception as cancel_error:
-                    self.logger.error(f"Error cancelling order: {cancel_error}")
-                
-                # 원래 예외 다시 발생
-                raise
-
-            # 트레일링 스탑 모니터링 함수
-            def monitor_and_adjust_sl():
-                try:
-                    positions = self.exchange.fetch_positions([self.symbol])
-                    current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
-                    
-                    if not current_position:
-                        return None
-
-                    current_ticker = self.exchange.fetch_ticker(self.symbol)
-                    current_market_price = current_ticker['last']
-                    position_size = float(current_position['contracts'])
-                    position_side = current_position['side']
-
-                    # 실시간 수익률 계산
-                    entry_price = float(current_position['entryPrice'])
-                    profit_percentage = (current_market_price - entry_price) / entry_price if position_side == 'long' \
-                        else (entry_price - current_market_price) / entry_price
-
-                    # 트레일링 스탑로스 로직
-                    if profit_percentage >= TRAILING_THRESHOLD:
-                        new_sl_price = current_market_price * (1 - TRAILING_BUFFER) if position_side == 'long' \
-                            else current_market_price * (1 + TRAILING_BUFFER)
-
-                        try:
-                            # 기존 SL 주문 취소
-                            open_orders = self.exchange.fetch_open_orders(self.symbol)
-                            for order in open_orders:
-                                if order['type'] == 'STOP_MARKET':
-                                    self.exchange.cancel_order(order['id'], self.symbol)
-
-                            # 새로운 SL 주문 생성
-                            tp_side = 'sell' if position_side == 'long' else 'buy'
-                            new_sl_order = self.exchange.create_order(
-                                symbol=self.symbol,
-                                type='STOP_MARKET',
-                                side=tp_side,
-                                amount=position_size,
-                                params={
-                                    'stopPrice': new_sl_price
-                                }
-                            )
-                            return new_sl_order
-                        except Exception as e:
-                            self.logger.error(f"Trailing SL setup error: {str(e)}")
-                    return None
+                    self.exchange.cancel_order(old_order['id'], self.symbol)
+                    self.logger.info(f"Cancelled old TP/SL order: {old_order['id']}")
                 except Exception as e:
-                    self.logger.error(f"SL monitoring error: {str(e)}")
-                    return None
+                    self.logger.error(f"Error cancelling old TP/SL order: {e}")
 
-            return {
-                'entry': order,
-                'tp': tp_order,
-                'sl': sl_order,
-                'monitor_sl': monitor_and_adjust_sl,
-                'entry_price': current_price
-            }
-        
+            # TP 주문 생성
+            tp_order = self.exchange.create_order(
+                symbol=self.symbol,
+                type='TAKE_PROFIT_MARKET',
+                side=tp_side,
+                params={
+                    'stopPrice': tp_price,
+                    'closePosition': 'true',
+                    'clientOrderId': f"tp_{order['id']}"
+                }
+            )
+
+            # SL 주문 생성
+            sl_order = self.exchange.create_order(
+                symbol=self.symbol,
+                type='STOP_MARKET',
+                side=tp_side,
+                params={
+                    'stopPrice': sl_price,
+                    'closePosition': 'true',
+                    'clientOrderId': f"sl_{order['id']}"
+                }
+            )
+
         except Exception as e:
-            self.logger.error(f"Order execution error: {str(e)}")
-            raise
+            self.logger.error(f"Error creating TP/SL orders: {e}")
+            
+            # 10. 실패 시 복구 처리
+            try:
+                if 'order' in locals():
+                    self.exchange.cancel_order(order['id'], self.symbol)
+                    
+                for old_order in last_tp_sl_orders:
+                    self.exchange.create_order(
+                        symbol=self.symbol,
+                        type=old_order['type'],
+                        side=old_order['side'],
+                        params={
+                            'stopPrice': old_order['info']['stopPrice'],
+                            'closePosition': 'true'
+                        }
+                    )
+            except Exception as recovery_err:
+                self.logger.error(f"Error in recovery process: {recovery_err}")
+            
+            return None
+
+        self.logger.info(f"Position opened - Side: {side}, Amount: {buy_amount} USDT")
+        return {
+            'entry': order,
+            'tp': tp_order,
+            'sl': sl_order,
+            'monitor_sl': monitor_and_adjust_sl,
+            'entry_price': entry_price
+        }
+
+
+
+
 
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
@@ -1152,6 +1241,27 @@ def modify_orderbook(orderbook):
 ### 메인 AI 트레이딩 로직
 def ai_trading():
     ### 데이터 가져오기
+    # 7. Selenium으로 차트 캡처
+    driver = None
+    try:
+        # TradingView 차트 캡처
+        driver = login_with_cookies()
+        driver.get("https://kr.tradingview.com/chart/QYZJBUKS/?symbol=BINANCE%3ABTCUSDT.P")
+        logger.info("TradingView 페이지 로드 완료")
+        time.sleep(3)
+        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
+        logger.info(f"TradingView 스크린샷 캡처 완료.")
+    except WebDriverException as e:
+        logger.error(f"캡쳐시 WebDriver 오류 발생: {e}")
+        chart_image = None
+    except Exception as e:
+        logger.error(f"차트 캡처 중 오류 발생: {e}")
+        chart_image = None        
+    finally:
+        if driver:
+            driver.quit()
+            # cleanup_chrome_processes()
+
     # 1. 현재 투자 상태 조회
     # USDT 잔고 조회
     balance = trader.exchange.fetch_balance()
@@ -1212,26 +1322,6 @@ def ai_trading():
     youtube_transcript2 = f2.read()
     f2.close()    
 
-    # 7. Selenium으로 차트 캡처
-    driver = None
-    try:
-        # TradingView 차트 캡처
-        driver = login_with_cookies()
-        driver.get("https://kr.tradingview.com/chart/QYZJBUKS/?symbol=BINANCE%3ABTCUSDT.P")
-        logger.info("TradingView 페이지 로드 완료")
-        time.sleep(3)
-        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
-        logger.info(f"TradingView 스크린샷 캡처 완료.")
-    except WebDriverException as e:
-        logger.error(f"캡쳐시 WebDriver 오류 발생: {e}")
-        chart_image = None
-    except Exception as e:
-        logger.error(f"차트 캡처 중 오류 발생: {e}")
-        chart_image = None        
-    finally:
-        if driver:
-            driver.quit()
-            # cleanup_chrome_processes()
 
     ### AI에게 데이터 제공하고 판단 받기
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -1262,7 +1352,11 @@ def ai_trading():
                     {
                         "role": "system",
                         "content": f"""You are a Bitcoin futures day trader who specializes in short-term trading based on 5-minute candlestick charts. You are trading two-way positions (buy or sell) and focus on analyzing 5-minute timeframes to identify quick market moves and opportunities while also considering the broader market conditions. You analyze the data provided to determine whether to take a buy(long), sell(short), or hold position at the current time. Consider the following when analyzing
-                        
+                        - Cryptocurrency exchange : Binance
+                        - leverage setting : {trader.leverage}
+                        - Position Mode : One-way Mode
+                        - Margin Mode : isolated
+                        - Asset Mode : Single-Asset Mode
                         - Manage risk by only investing up to 65 percent of your assets in a single order
                         - Technical indicators and market data
                         - Focus on 5-minute chart patterns and movements for primary analysis, but use 60-minute data for medium-term trends
