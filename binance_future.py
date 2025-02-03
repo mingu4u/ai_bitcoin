@@ -215,7 +215,11 @@ class BinanceFuturesTrader:
                         ticker = self.exchange.fetch_ticker(self.symbol)
                         current_btc_price = ticker['last']
 
-                        # TP/SL 주문 ID
+                        # TP/SL 주문 ID 초기화
+                        tp_order = tp_orders_by_parent.get(order_id)
+                        sl_order = sl_orders_by_parent.get(order_id)
+
+                        # TP/SL 주문 ID 설정
                         tp_order_id = tp_order['id'] if tp_order else None
                         sl_order_id = sl_order['id'] if sl_order else None
 
@@ -1265,7 +1269,7 @@ def ai_trading():
         driver.get("https://kr.tradingview.com/chart/zcDfxQQ8/?symbol=BINANCE%3ABTCUSDT.P")
         logger.info("TradingView 페이지 로드 완료")
         time.sleep(3)
-        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="yes")
+        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
         logger.info(f"TradingView 스크린샷 캡처 완료.")
     except WebDriverException as e:
         logger.error(f"캡쳐시 WebDriver 오류 발생: {e}")
@@ -1286,8 +1290,15 @@ def ai_trading():
     used_usdt = usdt_balance['used']      # 주문에 묶인 잔고
     total_usdt = usdt_balance['total']    # 전체 잔고
     filtered_balances = [used_usdt, free_usdt]
+
+    # 포지션 정보 조회
     positions = trader.exchange.fetch_positions([trader.symbol])
-    btc_avg_buy_price = float(position['entryPrice']) 
+    btc_avg_buy_price = 0  # 기본값 설정
+
+    for position in positions:
+        if float(position.get('contracts', 0) or 0) != 0:
+            btc_avg_buy_price = float(position['entryPrice'])
+            break
 
     # 2. 오더북(호가 데이터) 조회
     orderbook = trader.exchange.fetch_order_book('BTC/USDT')
