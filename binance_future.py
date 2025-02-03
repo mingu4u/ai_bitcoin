@@ -1402,7 +1402,7 @@ def ai_trading():
                         - Current Price: {current_price:.2f} USDT
                         - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
                         - MACD: {df_5min['macd'].iloc[-1]:.2f}
-                        - Fear/Greed Index: {get_fear_and_greed_index()['value']} ({get_fear_and_greed_index()['classification']})
+                        - Fear/Greed Index: {fear_greed_index['value']} ({fear_greed_index['value_classification']})
                         - Bollinger Bands (20): Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}, Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}, Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
                         - Stochastic Oscillator (14, 3): %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
                         - Average True Range (ATR): {df_5min['atr'].iloc[-1]:.2f}
