@@ -289,6 +289,48 @@ class BinanceFuturesTrader:
             self.leverage = leverage
             raise    
 
+    def cancel_existing_orders(self, order_id=None):
+        """기존 주문 취소 함수"""
+        try:
+            # 주문 상태 확인
+            if order_id and self.exchange.has['fetchOrder']:
+                try:
+                    order_status = self.exchange.fetch_order(order_id, self.symbol)
+                    if order_status['status'] == 'closed':
+                        return
+                except Exception as e:
+                    self.logger.error(f"Error fetching order status: {e}")
+            
+            # 열린 주문 조회
+            open_orders = self.exchange.fetch_open_orders(self.symbol)
+            cancelled_orders = []
+            
+            for order in open_orders:
+                # 특정 주문 ID가 제공된 경우 해당 주문만 취소
+                if order_id and order['id'] != order_id:
+                    continue
+                    
+                try:
+                    self.exchange.cancel_order(order['id'], self.symbol)
+                    cancelled_orders.append(order['id'])
+                    self.logger.info(f"Cancelled order: {order['id']}")
+                except Exception as e:
+                    self.logger.error(f"Error cancelling order {order['id']}: {e}")
+                    
+            # 취소 확인
+            time.sleep(1)
+            remaining_orders = self.exchange.fetch_open_orders(self.symbol)
+            for order in remaining_orders:
+                if order['id'] in cancelled_orders:
+                    self.logger.warning(f"Order {order['id']} was not properly cancelled")
+                    
+        except Exception as e:
+            self.logger.error(f"Error in cancel_existing_orders: {e}")
+            raise
+
+
+
+
     async def get_position_size(self, usdt_amount: float) -> float:
         try:
             ticker = await self.exchange.fetch_ticker(self.symbol)
@@ -651,6 +693,7 @@ class BinanceFuturesTrader:
                         symbol=self.symbol,
                         type='STOP_MARKET',
                         side=tp_side,
+                        amount=0,
                         params={
                             'stopPrice': new_sl_price,
                             'closePosition': 'true'
@@ -681,6 +724,7 @@ class BinanceFuturesTrader:
                 symbol=self.symbol,
                 type='TAKE_PROFIT_MARKET',
                 side=tp_side,
+                amount=0,
                 params={
                     'stopPrice': tp_price,
                     'closePosition': 'true',
@@ -693,6 +737,7 @@ class BinanceFuturesTrader:
                 symbol=self.symbol,
                 type='STOP_MARKET',
                 side=tp_side,
+                amount=0,
                 params={
                     'stopPrice': sl_price,
                     'closePosition': 'true',
@@ -705,22 +750,30 @@ class BinanceFuturesTrader:
             
             # 10. 실패 시 복구 처리
             try:
+                # 기존 주문 취소 시도
                 if 'order' in locals():
-                    self.exchange.cancel_order(order['id'], self.symbol)
+                    self.cancel_existing_orders(order['id'])
                     
+                # 이전 TP/SL 주문 복구
                 for old_order in last_tp_sl_orders:
-                    self.exchange.create_order(
-                        symbol=self.symbol,
-                        type=old_order['type'],
-                        side=old_order['side'],
-                        params={
-                            'stopPrice': old_order['info']['stopPrice'],
-                            'closePosition': 'true'
-                        }
-                    )
+                    try:
+                        self.exchange.create_order(
+                            symbol=self.symbol,
+                            type=old_order['type'],
+                            side=old_order['side'],
+                            amount=float(old_order['amount']),  # 명시적 형변환 추가
+                            params={
+                                'stopPrice': float(old_order['info']['stopPrice']),
+                                'clientOrderId': old_order['clientOrderId']
+                            }
+                        )
+                        self.logger.info(f"Restored old TP/SL order: {old_order['id']}")
+                    except Exception as e:
+                        self.logger.error(f"Error restoring old TP/SL order: {e}")
+                        
             except Exception as recovery_err:
                 self.logger.error(f"Error in recovery process: {recovery_err}")
-            
+                        
             return None
 
         self.logger.info(f"Position opened - Side: {side}, Amount: {buy_amount} USDT")
@@ -837,6 +890,8 @@ def init_db():
                   timestamp TEXT,
                   trade_type TEXT,
                   order_id TEXT,
+                  tp_order_id TEXT,
+                  sl_order_id TEXT,
                   decision TEXT,
                   percentage INTEGER,
                   reason TEXT,
@@ -849,19 +904,23 @@ def init_db():
     conn.commit()
     return conn
 
-
 # 거래 기록을 DB에 저장하는 함수
 
 # 거래 기록 함수 수정
-def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection=''):
+def log_trade(conn, trade_type, order_id, tp_order_id=None, sl_order_id=None, decision=None, 
+              percentage=0, reason=None, btc_balance=0, usdt_balance=0, total_assets=0, 
+              btc_avg_buy_price=0, btc_current_price=0, reflection=''):
     c = conn.cursor()
     timestamp = datetime.now().isoformat()
     c.execute("""INSERT INTO trades 
-                 (timestamp, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-              (timestamp, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection))
+                 (timestamp, trade_type, order_id, tp_order_id, sl_order_id, decision, 
+                  percentage, reason, btc_balance, usdt_balance, total_assets, 
+                  btc_avg_buy_price, btc_current_price, reflection) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              (timestamp, trade_type, order_id, tp_order_id, sl_order_id, decision, 
+               percentage, reason, btc_balance, usdt_balance, total_assets, 
+               btc_avg_buy_price, btc_current_price, reflection))
     conn.commit()
-
 # 최근 투자 기록 조회
 # def get_recent_trades(conn, days=1):
 #     c = conn.cursor()

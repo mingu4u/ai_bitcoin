@@ -10,7 +10,22 @@ def get_connection():
 def load_data():
     try:
         conn = get_connection()
-        query = "SELECT * FROM trades"
+        query = """SELECT 
+                    timestamp,
+                    trade_type,
+                    order_id,
+                    tp_order_id,
+                    sl_order_id,
+                    decision,
+                    percentage,
+                    reason,
+                    btc_balance,
+                    usdt_balance,
+                    total_assets,
+                    btc_avg_buy_price,
+                    btc_current_price,
+                    reflection
+                 FROM trades"""
         df = pd.read_sql_query(query, conn)
         conn.close()
         return df
@@ -25,6 +40,15 @@ def paginate_dataframe(df, page_size=30):
     if df.empty:
         return 1
     return math.ceil(len(df) / page_size)
+
+def format_order_ids(row):
+    """주문 ID들을 포맷팅하는 함수"""
+    order_info = f"Order: {row['order_id'] if pd.notna(row['order_id']) else 'N/A'}"
+    if pd.notna(row['tp_order_id']):
+        order_info += f"\nTP: {row['tp_order_id']}"
+    if pd.notna(row['sl_order_id']):
+        order_info += f"\nSL: {row['sl_order_id']}"
+    return order_info
 
 def main():
     st.title("Ming9's Bitcoin Trading Bot Dashboard 😊")
@@ -51,14 +75,12 @@ def main():
         st.write(f"First trade date: {filtered_df['timestamp'].min()}")
         st.write(f"Last trade date: {filtered_df['timestamp'].max()}")
         
-        # reflection 표시 (데이터가 있을 경우에만)
-        if not df.empty and 'reflection' in df.columns and pd.notna(df.iloc[0]['reflection']):
-            st.write("Recent trade reflection:")
-            st.write(df.iloc[0]['reflection'])
-    else:
-        st.write("No trades found for the selected type.")
+        # reflection 표시
+        if not df.empty and pd.notna(df.iloc[0]['reflection']):
+            with st.expander("Recent trade reflection", expanded=False):
+                st.write(df.iloc[0]['reflection'])
 
-    # 거래 내역 표시
+    # 주문 내역 표시
     st.header('Trade History')
     if not filtered_df.empty:
         page_size = 30
@@ -69,7 +91,21 @@ def main():
         
         start_idx = (page_number - 1) * page_size
         end_idx = min(start_idx + page_size, len(filtered_df))
-        st.dataframe(filtered_df.iloc[start_idx:end_idx])
+        
+        # 표시할 데이터 준비
+        display_df = filtered_df.iloc[start_idx:end_idx].copy()
+        
+        # 주문 ID 정보를 하나의 컬럼으로 통합
+        display_df['order_info'] = display_df.apply(format_order_ids, axis=1)
+        
+        # 표시할 컬럼 선택
+        display_columns = [
+            'timestamp', 'trade_type', 'order_info', 'decision', 
+            'percentage', 'reason', 'btc_balance', 'usdt_balance', 
+            'total_assets', 'btc_current_price'
+        ]
+        
+        st.dataframe(display_df[display_columns])
     else:
         st.info("No trade history available for the selected type.")
 
@@ -90,8 +126,6 @@ def main():
                 }
             )
             st.plotly_chart(fig)
-    else:
-        st.info("No decision data available for visualization.")
 
     # 자산 변화 그래프
     if not filtered_df.empty:
@@ -122,8 +156,6 @@ def main():
                 fig = px.line(filtered_df, x='timestamp', y='btc_current_price', 
                             title=f'BTC Price ({trade_type})')
                 st.plotly_chart(fig)
-    else:
-        st.info("No balance data available for visualization.")
 
     # AI와 수동 거래 비교 분석
     if trade_type == 'ALL' and not df.empty:
