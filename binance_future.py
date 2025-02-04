@@ -393,8 +393,8 @@ class BinanceFuturesTrader:
                 return None
 
         def _handle_position_increase(self, current_position, side, buy_amount, current_price,
-                                    sl_price, tp_price, pl_ratio, min_order_value):
-            """같은 방향 추가 진입 처리"""
+                                sl_price, tp_price, pl_ratio, min_order_value):
+            """같은 방향 추가 진입 처리 - 가격 계산만 수행"""
             # 레버리지 적용된 수량 계산
             leveraged_amount = buy_amount * self.leverage
             quantity = leveraged_amount / current_price
@@ -404,7 +404,7 @@ class BinanceFuturesTrader:
                 self.logger.error(f"Order value too small: {quantity * current_price} USDT")
                 return None
 
-            # 기존 SL 가격 조회
+            # 기존 SL 가격 조회 (취소하지 않고 조회만)
             try:
                 open_orders = self.exchange.fetch_open_orders(self.symbol)
                 existing_sl_price = None
@@ -421,17 +421,6 @@ class BinanceFuturesTrader:
             total_position_value = (quantity * current_price) + \
                                 (float(current_position['contracts']) * float(current_position['entryPrice']))
             new_avg_entry_price = total_position_value / total_position_size
-
-            # 기존 TP/SL 주문 취소
-            try:
-                for order in open_orders:
-                    if ((order['info']['origType'] == 'TAKE_PROFIT_MARKET' or 
-                        order['info']['origType'] == 'STOP_MARKET') and
-                        order['type'] == 'market'):
-                        self.exchange.cancel_order(order['id'], self.symbol)
-            except Exception as e:
-                self.logger.error(f"Error cancelling existing TP/SL orders: {e}")
-                return None
 
             # 새로운 SL 가격 계산
             if existing_sl_price:
@@ -451,25 +440,9 @@ class BinanceFuturesTrader:
 
             return new_tp_price, new_sl_price
 
+
         # 1. 기존 마지막 TP/SL 주문 정보 백업
-        last_tp_sl_orders = []
-        try:
-            open_orders = self.exchange.fetch_open_orders(self.symbol)
-            
-            tp_orders = [order for order in open_orders 
-                        if (order['info']['origType'] == 'TAKE_PROFIT_MARKET' 
-                            or order['clientOrderId'].startswith('tp_')) 
-                        and order['type'] == 'market']
-            
-            sl_orders = [order for order in open_orders 
-                        if (order['info']['origType'] == 'STOP_MARKET' 
-                            or order['clientOrderId'].startswith('sl_')) 
-                        and order['type'] == 'market']
-            
-            if tp_orders and sl_orders:
-                last_tp_sl_orders = [tp_orders[-1], sl_orders[-1]]
-        except Exception as e:
-            self.logger.error(f"Error fetching existing TP/SL orders: {e}")
+        ## 백업 기능 제거, 불필요
 
         # 2. 현재가 조회 및 TP/SL 가격 계산
         try:
@@ -564,6 +537,27 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error calculating order quantity: {e}")
             return None
 
+        # 모든 열린 TP/SL 주문 취소
+        try:
+            open_orders = self.exchange.fetch_open_orders(self.symbol)
+            for order in open_orders:
+                if ((order['info']['origType'] == 'TAKE_PROFIT_MARKET' or 
+                    order['info']['origType'] == 'STOP_MARKET') and
+                    order['type'] == 'market'):
+                    try:
+                        self.exchange.cancel_order(order['id'], self.symbol)
+                        self.logger.info(f"Cancelled existing TP/SL order: {order['id']}")
+                        time.sleep(0.1)
+                    except Exception as cancel_error:
+                        self.logger.error(f"Error cancelling TP/SL order {order['id']}: {cancel_error}")
+            
+            # 주문 취소 후 잠시 대기
+            time.sleep(0.5)
+        except Exception as e:
+            self.logger.error(f"Error fetching open orders for cancellation: {e}")
+            return None
+
+
         # 7. 포지션 주문 실행
         try:
             order = self.exchange.create_market_order(
@@ -643,14 +637,6 @@ class BinanceFuturesTrader:
         try:
             tp_side = 'sell' if side == 'buy' else 'buy'
             
-            # 기존 TP/SL 주문 취소
-            for old_order in last_tp_sl_orders:
-                try:
-                    self.exchange.cancel_order(old_order['id'], self.symbol)
-                    self.logger.info(f"Cancelled old TP/SL order: {old_order['id']}")
-                except Exception as e:
-                    self.logger.error(f"Error cancelling old TP/SL order: {e}")
-
             # TP 주문 생성
             tp_order = self.exchange.create_order(
                 symbol=self.symbol,
@@ -680,24 +666,13 @@ class BinanceFuturesTrader:
         except Exception as e:
             self.logger.error(f"Error creating TP/SL orders: {e}")
             
-            # 10. 실패 시 복구 처리
-            try:
-                if 'order' in locals():
+            # 10. 실패 시 복구 처리 제거 (이전 TP/SL 복구하지 않음)
+            if 'order' in locals():
+                try:
                     self.exchange.cancel_order(order['id'], self.symbol)
-                    
-                for old_order in last_tp_sl_orders:
-                    self.exchange.create_order(
-                        symbol=self.symbol,
-                        type=old_order['type'],
-                        side=old_order['side'],
-                        amount=quantity,  # 수량 추가
-                        params={
-                            'stopPrice': old_order['info']['stopPrice'],
-                            'closePosition': 'true'
-                        }
-                    )
-            except Exception as recovery_err:
-                self.logger.error(f"Error in recovery process: {recovery_err}")
+                    self.logger.info("Cancelled main order after TP/SL creation failure")
+                except Exception as cancel_error:
+                    self.logger.error(f"Error cancelling main order during recovery: {cancel_error}")
             
             return None
 
