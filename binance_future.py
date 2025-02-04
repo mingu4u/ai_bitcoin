@@ -541,12 +541,14 @@ class BinanceFuturesTrader:
         try:
             open_orders = self.exchange.fetch_open_orders(self.symbol)
             for order in open_orders:
-                if ((order['info']['origType'] == 'TAKE_PROFIT_MARKET' or 
-                    order['info']['origType'] == 'STOP_MARKET') and
-                    order['type'] == 'market'):
+                order_type = order['info'].get('origType', '').upper()
+                is_tp_sl = (order_type in ['TAKE_PROFIT_MARKET', 'STOP_MARKET'] or
+                        order['clientOrderId'].startswith(('tp_', 'sl_')))
+                
+                if is_tp_sl:
                     try:
                         self.exchange.cancel_order(order['id'], self.symbol)
-                        self.logger.info(f"Cancelled existing TP/SL order: {order['id']}")
+                        self.logger.info(f"Cancelled existing TP/SL order: {order['id']} (Type: {order_type})")
                         time.sleep(0.1)
                     except Exception as cancel_error:
                         self.logger.error(f"Error cancelling TP/SL order {order['id']}: {cancel_error}")
