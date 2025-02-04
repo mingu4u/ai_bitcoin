@@ -176,8 +176,9 @@ class BinanceFuturesTrader:
 
                         self.logger.info(f"Processing realized TP/SL order: {order_id}")
                         
-                        order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
-
+                        # order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
+                        order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
+                        
                         # AI 포지션 여부 확인
                         is_ai_tp_sl = order['clientOrderId'].startswith(('tp_', 'sl_')) and last_ai_position
 
@@ -239,7 +240,8 @@ class BinanceFuturesTrader:
                     for order in orders:
                         if order['type'] == 'market':
                             order_id = str(order['id'])
-                            order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
+                            # order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
+                            order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
                             
                             # 중복 체크
                             c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
