@@ -93,7 +93,6 @@ class BinanceFuturesTrader:
     def monitor_manual_trades(self):
         try:
             since = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)
-
             orders = self.exchange.fetch_orders(self.symbol, since)
             
             # TP/SL 실현 주문 필터링
@@ -101,7 +100,6 @@ class BinanceFuturesTrader:
                         if (order['info']['origType'] == 'TAKE_PROFIT_MARKET'
                             or order['clientOrderId'].startswith('tp_'))
                         and order['type'] == 'market'
-                        and order['triggerPrice'] is not None
                         and order['status'] == 'closed'
                         and order['filled'] > 0]
 
@@ -109,7 +107,6 @@ class BinanceFuturesTrader:
                         if (order['info']['origType'] == 'STOP_MARKET'
                             or order['clientOrderId'].startswith('sl_'))
                         and order['type'] == 'market'
-                        and order['triggerPrice'] is not None
                         and order['status'] == 'closed'
                         and order['filled'] > 0]
 
@@ -130,72 +127,47 @@ class BinanceFuturesTrader:
             c = conn.cursor()
             
             try:
-                # 최근 AI 포지션 조회
-                c.execute("""
-                    SELECT order_id, timestamp, decision 
-                    FROM trades 
-                    WHERE trade_type = 'AI' 
-                    AND decision != 'hold'
-                    ORDER BY timestamp DESC 
-                    LIMIT 1
-                """)
-                last_ai_position = c.fetchone()
-
                 for order in orders:
                     if order['type'] == 'market':
                         order_id = str(order['id'])
+                        client_order_id = order['clientOrderId']
                         order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
                         
                         # 중복 체크
                         c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
                         if c.fetchone():
                             continue
-
+                        
+                        # 거래 타입 및 이유 결정
                         is_reduce_only = order.get('info', {}).get('reduceOnly', False)
-                        is_ai = self.is_ai_trade(order, last_ai_position)
                         
-                        # 거래 유형 판별
-                        if is_ai:
-                            if not is_reduce_only:
+                        # TP/SL 실현 여부 확인
+                        tp_order = tp_orders_by_parent.get(order_id)
+                        sl_order = sl_orders_by_parent.get(order_id)
+                        
+                        if tp_order or sl_order:
+                            # TP/SL 실현된 경우 parent 주문 확인
+                            parent_order_id = order_id.split('_')[-1]
+                            c.execute("""
+                                SELECT trade_type FROM trades 
+                                WHERE order_id = ? AND trade_type = 'AI'
+                            """, (parent_order_id,))
+                            parent_trade = c.fetchone()
+                            
+                            if parent_trade:
                                 trade_type = 'AI'
-                                reason = 'AI Entry'
+                                reason = 'AI TP Realized' if tp_order else 'AI SL Realized'
                             else:
-                                continue  # AI의 TP/SL은 이미 AI 트레이딩에서 처리됨
+                                trade_type = 'MANUAL'
+                                reason = 'Manual TP Realized' if tp_order else 'Manual SL Realized'
                         else:
+                            trade_type = 'MANUAL'
                             if is_reduce_only:
-                                # 포지션 종료 케이스 분석
-                                if last_ai_position:
-                                    last_ai_id, last_ai_time, last_ai_decision = last_ai_position
-                                    # AI 포지션을 수동으로 종료하는 경우
-                                    if (datetime.fromisoformat(last_ai_time) > datetime.fromisoformat(order_timestamp) - timedelta(hours=24) and
-                                        ((last_ai_decision == 'buy' and order['side'] == 'sell') or 
-                                        (last_ai_decision == 'sell' and order['side'] == 'buy'))):
-                                        trade_type = 'MANUAL'
-                                        reason = 'Manual Close of AI Position'
-                                    else:
-                                        trade_type = 'MANUAL'
-                                        reason = 'Manual Close of Manual Position'
-                                else:
-                                    trade_type = 'MANUAL'
-                                    reason = 'Manual Close of Manual Position'
+                                reason = 'Manual Close Position'
                             else:
-                                # TP/SL 실현 체크
-                                tp_order = tp_orders_by_parent.get(order_id)
-                                sl_order = sl_orders_by_parent.get(order_id)
-                                
-                                if tp_order:
-                                    trade_type = 'MANUAL'
-                                    reason = 'Manual TP Realized'
-                                elif sl_order:
-                                    trade_type = 'MANUAL'
-                                    reason = 'Manual SL Realized'
-                                else:
-                                    trade_type = 'MANUAL'
-                                    reason = 'Manual Entry'
+                                reason = 'Manual Entry'
 
-                        decision = 'buy' if order['side'] == 'buy' else 'sell'
-                        
-                        # 잔고 정보
+                        # 잔고 정보 조회
                         balance = self.exchange.fetch_balance()
                         usdt_balance = balance['USDT']
                         free_usdt = usdt_balance['free']
@@ -206,22 +178,21 @@ class BinanceFuturesTrader:
                         actual_trade_amount = abs(order['cost']) / self.leverage
                         trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
                         
-                        # 포지션 정보
+                        # 포지션 정보 조회
                         positions = self.exchange.fetch_positions([self.symbol])
                         current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
                         btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
                         
-                        # 현재가
+                        # 현재가 조회
                         ticker = self.exchange.fetch_ticker(self.symbol)
                         current_btc_price = ticker['last']
 
-                        # TP/SL 주문 ID 초기화
-                        tp_order = tp_orders_by_parent.get(order_id)
-                        sl_order = sl_orders_by_parent.get(order_id)
-
-                        # TP/SL 주문 ID 설정
+                        # TP/SL 주문 ID
                         tp_order_id = tp_order['id'] if tp_order else None
                         sl_order_id = sl_order['id'] if sl_order else None
+
+                        # 거래 방향 결정
+                        decision = 'buy' if order['side'] == 'buy' else 'sell'
 
                         # DB 기록
                         c.execute("""
@@ -256,7 +227,6 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error monitoring trades: {e}")
             if 'conn' in locals():
                 conn.close()
-
 
     def setup_leverage_and_margin(self, leverage: int):
         try:
@@ -655,6 +625,7 @@ class BinanceFuturesTrader:
                         symbol=self.symbol,
                         type='STOP_MARKET',
                         side=tp_side,
+                        amount=position_size,
                         params={
                             'stopPrice': new_sl_price,
                             'closePosition': 'true'
