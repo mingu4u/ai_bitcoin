@@ -685,6 +685,7 @@ class BinanceFuturesTrader:
                 symbol=self.symbol,
                 type='TAKE_PROFIT_MARKET',
                 side=tp_side,
+                amount=quantity,
                 params={
                     'stopPrice': tp_price,
                     'closePosition': 'true',
@@ -697,6 +698,7 @@ class BinanceFuturesTrader:
                 symbol=self.symbol,
                 type='STOP_MARKET',
                 side=tp_side,
+                amount=quantity,
                 params={
                     'stopPrice': sl_price,
                     'closePosition': 'true',
@@ -717,6 +719,7 @@ class BinanceFuturesTrader:
                         symbol=self.symbol,
                         type=old_order['type'],
                         side=old_order['side'],
+                        amount=quantity,  # 수량 추가
                         params={
                             'stopPrice': old_order['info']['stopPrice'],
                             'closePosition': 'true'
