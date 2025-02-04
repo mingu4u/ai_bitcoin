@@ -99,7 +99,7 @@ class BinanceFuturesTrader:
             orders = self.exchange.fetch_orders(self.symbol, since)
             self.logger.info(f"Fetched {len(orders)} orders")
             
-            # TP/SL 실현 주문 필터링
+            # TP/SL 실현 주문 필터링 (AI 및 수동 거래 모두 포함)
             realized_tp_orders = [order for order in orders 
                         if (order['info']['origType'] == 'TAKE_PROFIT_MARKET'
                             or order['clientOrderId'].startswith('tp_'))
@@ -152,7 +152,7 @@ class BinanceFuturesTrader:
                 last_ai_position = c.fetchone()
                 self.logger.info(f"Last AI position: {last_ai_position}")
 
-                # TP/SL 실현 주문 처리
+                # TP/SL 실현 주문 처리 (AI 및 수동 거래 모두 포함)
                 for order_list in [realized_tp_orders, realized_sl_orders]:
                     for order in order_list:
                         order_id = str(order['id'])
@@ -166,8 +166,15 @@ class BinanceFuturesTrader:
                         self.logger.info(f"Processing realized TP/SL order: {order_id}")
                         
                         order_timestamp = datetime.fromtimestamp(order['timestamp']/1000).isoformat()
-                        trade_type = 'MANUAL'  # TP/SL 실현은 MANUAL로 처리
-                        reason = 'Manual TP Realized' if order['info']['origType'] == 'TAKE_PROFIT_MARKET' else 'Manual SL Realized'
+
+                        # AI 포지션 여부 확인
+                        is_ai_tp_sl = order['clientOrderId'].startswith(('tp_', 'sl_')) and last_ai_position
+
+                        trade_type = 'AI' if is_ai_tp_sl else 'MANUAL'
+                        reason = 'AI TP Realized' if order['info']['origType'] == 'TAKE_PROFIT_MARKET' and is_ai_tp_sl \
+                            else 'AI SL Realized' if order['info']['origType'] == 'STOP_MARKET' and is_ai_tp_sl \
+                            else 'Manual TP Realized' if order['info']['origType'] == 'TAKE_PROFIT_MARKET' \
+                            else 'Manual SL Realized'
                         decision = 'sell' if order['side'] == 'sell' else 'buy'
                         
                         # 잔고 정보
@@ -211,8 +218,8 @@ class BinanceFuturesTrader:
                             total_usdt,
                             btc_avg_buy_price,
                             current_btc_price,
-                            None,  # TP/SL 실현 시에는 새로운 TP/SL이 없음
-                            None
+                            None if reason != 'AI TP Realized' else order_id,
+                            None if reason != 'AI SL Realized' else order_id
                         ))
                         conn.commit()
                         self.logger.info(f"Successfully recorded TP/SL trade: {order_id}")
@@ -237,7 +244,7 @@ class BinanceFuturesTrader:
                                 trade_type = 'AI'
                                 reason = 'AI Entry'
                             else:
-                                continue  # AI의 TP/SL은 이미 AI 트레이딩에서 처리됨
+                                continue  # AI의 TP/SL은 이미 위에서 처리됨
                         else:
                             if is_reduce_only:
                                 # 포지션 종료 케이스 분석
@@ -323,13 +330,15 @@ class BinanceFuturesTrader:
             finally:
                 conn.close()
                 self.logger.info("Database connection closed")
-                    
+                        
         except Exception as e:
             self.logger.error(f"Error monitoring trades: {e}")
             if 'conn' in locals():
                 conn.close()
-                self.logger.info("Database connection closed after error") 
-
+                self.logger.info("Database connection closed after error")
+                
+            
+            
     def setup_leverage_and_margin(self, leverage: int):
         try:
             # 현재 포지션 확인
