@@ -492,7 +492,7 @@ class BinanceFuturesTrader:
                 }
             except Exception as e:
                 self.logger.error(f"Error creating reduction order: {e}")
-                return None
+                return None   
 
         def _handle_position_increase(self, current_position, side, buy_amount, current_price,
                                 sl_price, tp_price, pl_ratio, min_order_value):
