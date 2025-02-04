@@ -275,10 +275,14 @@ class BinanceFuturesTrader:
                                     # 포지션 종료 케이스 분석
                                     if last_ai_position:
                                         last_ai_id, last_ai_time, last_ai_decision = last_ai_position
-                                        # AI 포지션을 수동으로 종료하는 경우
-                                        if (datetime.fromisoformat(last_ai_time) > datetime.fromisoformat(order_timestamp) - timedelta(hours=24) and
-                                            ((last_ai_decision == 'buy' and order['side'] == 'sell') or 
-                                            (last_ai_decision == 'sell' and order['side'] == 'buy'))):
+                                        
+                                        # 이전 AI 포지션과 현재 포지션의 방향 비교
+                                        is_closing_ai_position = (
+                                            (last_ai_decision == 'buy' and order['side'] == 'sell') or 
+                                            (last_ai_decision == 'sell' and order['side'] == 'buy')
+                                        )
+                                        
+                                        if is_closing_ai_position:
                                             trade_type = 'MANUAL'
                                             reason = 'Manual Close of AI Position'
                                         else:
@@ -287,6 +291,7 @@ class BinanceFuturesTrader:
                                     else:
                                         trade_type = 'MANUAL'
                                         reason = 'Manual Close of Manual Position'
+
                                 else:
                                     # TP/SL 실현 체크
                                     if tp_order:
