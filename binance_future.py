@@ -823,23 +823,30 @@ def init_db():
                   total_assets REAL,
                   btc_avg_buy_price REAL,
                   btc_current_price REAL,
-                  reflection TEXT)''')
+                  reflection TEXT,
+                  tp_order_id TEXT,
+                  sl_order_id TEXT)''')
     conn.commit()
     return conn
-
 
 # 거래 기록을 DB에 저장하는 함수
 
 # 거래 기록 함수 수정
-def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection=''):
+def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, 
+              usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, 
+              reflection='', tp_order_id=None, sl_order_id=None):
     c = conn.cursor()
     timestamp = datetime.now().isoformat()
     c.execute("""INSERT INTO trades 
-                 (timestamp, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-              (timestamp, trade_type, order_id, decision, percentage, reason, btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, reflection))
+                 (timestamp, trade_type, order_id, decision, percentage, reason, 
+                 btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                 btc_current_price, reflection, tp_order_id, sl_order_id) 
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+              (timestamp, trade_type, order_id, decision, percentage, reason, 
+               btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+               btc_current_price, reflection, tp_order_id, sl_order_id))
     conn.commit()
-
+    
 # 최근 투자 기록 조회
 # def get_recent_trades(conn, days=1):
 #     c = conn.cursor()
@@ -1539,9 +1546,13 @@ def ai_trading():
         # 거래 기록을 DB에 저장하기
         if order_executed and order_info != None:
             order_id = order_info['entry']['id']
+            tp_order_id = order_info['tp']['id'] if order_info.get('tp') else None
+            sl_order_id = order_info['sl']['id'] if order_info.get('sl') else None
+            
             log_trade(conn, 'AI', order_id, result.decision, result.percentage, result.reason, 
-                used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
-        
+                    used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
+                    reflection, tp_order_id, sl_order_id)
+            
             # 트레일링 스탑로스 모니터링 추가
             if 'monitor_sl' in order_info:
                 def periodic_sl_monitoring():
@@ -1556,9 +1567,9 @@ def ai_trading():
         else:
             # 거래가 실행되지 않은 경우 (hold 또는 실패)
             log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
-                    used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, reflection)
-    
-    
+                    used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
+                    reflection, None, None)
+            
     
     
     except sqlite3.Error as e:
