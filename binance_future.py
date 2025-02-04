@@ -1005,12 +1005,13 @@ def generate_reflection(trades_df, current_market_data):
                 Overall performance over the last 40 trades : {performance:.2f}%
                 
                 Please analyze this data and provide:
-                1. A brief reflection on the recent trading decisions
-                2. Insights on what worked well and what didn't
-                3. Suggestions for improvement in future trading decisions
-                4. Any patterns or trends you notice in the market data
-                
-                Limit your response to 250 words or less.
+                1. Evaluate recent trade decisions: were they justified?
+                2. Analyze success/failure factors, impact of trade frequency & fees.
+                3. Suggest improvements for fewer trades, higher profit, considering current performance.
+                4. Identify market trends, better exploitation strategies.
+                5. Suggest optimal trade holding periods.
+                                
+                Limit your response to 350 words or less.
                 """
             }
         ]
@@ -1448,6 +1449,8 @@ def ai_trading():
                         - Manage risk by only investing up to 65 percent of your assets in a single order
                         - Technical indicators and market data
                         - Focus on 5-minute chart patterns and movements for primary analysis, but use 60-minute data for medium-term trends
+                        - Prioritize clear buy or sell signals based on a combination of trading method(BlackFlag FTS, UT Bot Alerts, Volume oscillator) and indicators(RSI, MACD, Bollinger Bands, Stochastic Oscillator).
+                        - Use ATR to understand market volatility, be cautious during high volatility unless signals are very strong.
                         - Short-term price action and momentum
                         - Volume analysis on 5-minute timeframes
                         - Quick trend reversals and continuation patterns
@@ -1457,7 +1460,7 @@ def ai_trading():
                         - Overall market sentiment
                         - Patterns and trends visible in the chart image
                         - Recent trading performance and reflection
-                        
+
                         [Market Data]
                         - Current Price: {current_price:.2f} USDT
                         - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
