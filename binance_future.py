@@ -87,6 +87,99 @@ class BinanceFuturesTrader:
         
         return False
 
+    def _handle_position_reduction(self, current_position, side, buy_amount, current_price):
+        """포지션 축소/청산 처리"""
+        position_size = float(current_position['contracts'])
+        position_notional = float(current_position['notional'])
+        self.logger.info(f"Reducing/Closing position of {position_size} contracts")
+        
+        leveraged_amount = buy_amount * self.leverage
+        calculated_quantity = leveraged_amount / current_price
+        
+        # 청산량 결정
+        if leveraged_amount >= abs(position_notional):
+            quantity = abs(position_size)
+            self.logger.info(f"Closing entire position of {quantity} contracts")
+            
+            # 기존 주문 전체 취소
+            try:
+                open_orders = self.exchange.fetch_open_orders(self.symbol)
+                for order in open_orders:
+                    self.exchange.cancel_order(order['id'], self.symbol)
+            except Exception as e:
+                self.logger.error(f"Error cancelling orders: {e}")
+        else:
+            quantity = calculated_quantity
+            self.logger.info(f"Partially reducing position by {quantity} contracts")
+        
+        # 포지션 축소/청산 주문
+        try:
+            order = self.exchange.create_market_order(
+                symbol=self.symbol,
+                side=side,
+                amount=quantity,
+                params={'reduceOnly': True}
+            )
+            
+            self.logger.info(f"Position reduced/closed at price: {current_price}")
+            return {
+                'entry': order,
+                'tp': None,
+                'sl': None
+            }
+        except Exception as e:
+            self.logger.error(f"Error creating reduction order: {e}")
+            return None   
+
+    def _handle_position_increase(self, current_position, side, buy_amount, current_price,
+                            sl_price, tp_price, pl_ratio, min_order_value):
+        """같은 방향 추가 진입 처리 - 가격 계산만 수행"""
+        # 레버리지 적용된 수량 계산
+        leveraged_amount = buy_amount * self.leverage
+        quantity = leveraged_amount / current_price
+
+        # 최소 주문 금액 확인
+        if quantity * current_price < min_order_value:
+            self.logger.error(f"Order value too small: {quantity * current_price} USDT")
+            return None
+
+        # 기존 SL 가격 조회 (취소하지 않고 조회만)
+        try:
+            open_orders = self.exchange.fetch_open_orders(self.symbol)
+            existing_sl_price = None
+            for order in open_orders:
+                if order['info']['origType'] == 'STOP_MARKET' and order['type'] == 'market':
+                    existing_sl_price = float(order['info'].get('stopPrice', order.get('price', 0)))
+                    break
+        except Exception as e:
+            self.logger.error(f"Error fetching existing SL price: {e}")
+            existing_sl_price = None
+
+        # 총 포지션 정보 계산
+        total_position_size = quantity + float(current_position['contracts'])
+        total_position_value = (quantity * current_price) + \
+                            (float(current_position['contracts']) * float(current_position['entryPrice']))
+        new_avg_entry_price = total_position_value / total_position_size
+
+        # 새로운 SL 가격 계산
+        if existing_sl_price:
+            total_sl_value = (quantity * sl_price) + \
+                        (float(current_position['contracts']) * existing_sl_price)
+            new_sl_price = total_sl_value / total_position_size
+        else:
+            new_sl_price = sl_price
+
+        # 새로운 TP 가격 계산
+        if side == 'buy':
+            new_tp_price = new_avg_entry_price + \
+                        (new_avg_entry_price - new_sl_price) * pl_ratio
+        else:
+            new_tp_price = new_avg_entry_price - \
+                        (new_sl_price - new_avg_entry_price) * pl_ratio
+
+        return new_tp_price, new_sl_price
+
+
 
 
     # 수동 거래 모니터링
@@ -486,98 +579,6 @@ class BinanceFuturesTrader:
         MIN_PRICE_DIFF = 0.001        # 최소 가격 차이 (0.1%)
         MAX_BALANCE_USE = 0.65        # 최대 사용 가능 잔고 비율 (65%)
 
-        def _handle_position_reduction(self, current_position, side, buy_amount, current_price):
-            """포지션 축소/청산 처리"""
-            position_size = float(current_position['contracts'])
-            position_notional = float(current_position['notional'])
-            self.logger.info(f"Reducing/Closing position of {position_size} contracts")
-            
-            leveraged_amount = buy_amount * self.leverage
-            calculated_quantity = leveraged_amount / current_price
-            
-            # 청산량 결정
-            if leveraged_amount >= abs(position_notional):
-                quantity = abs(position_size)
-                self.logger.info(f"Closing entire position of {quantity} contracts")
-                
-                # 기존 주문 전체 취소
-                try:
-                    open_orders = self.exchange.fetch_open_orders(self.symbol)
-                    for order in open_orders:
-                        self.exchange.cancel_order(order['id'], self.symbol)
-                except Exception as e:
-                    self.logger.error(f"Error cancelling orders: {e}")
-            else:
-                quantity = calculated_quantity
-                self.logger.info(f"Partially reducing position by {quantity} contracts")
-            
-            # 포지션 축소/청산 주문
-            try:
-                order = self.exchange.create_market_order(
-                    symbol=self.symbol,
-                    side=side,
-                    amount=quantity,
-                    params={'reduceOnly': True}
-                )
-                
-                self.logger.info(f"Position reduced/closed at price: {current_price}")
-                return {
-                    'entry': order,
-                    'tp': None,
-                    'sl': None
-                }
-            except Exception as e:
-                self.logger.error(f"Error creating reduction order: {e}")
-                return None   
-
-        def _handle_position_increase(self, current_position, side, buy_amount, current_price,
-                                sl_price, tp_price, pl_ratio, min_order_value):
-            """같은 방향 추가 진입 처리 - 가격 계산만 수행"""
-            # 레버리지 적용된 수량 계산
-            leveraged_amount = buy_amount * self.leverage
-            quantity = leveraged_amount / current_price
-
-            # 최소 주문 금액 확인
-            if quantity * current_price < min_order_value:
-                self.logger.error(f"Order value too small: {quantity * current_price} USDT")
-                return None
-
-            # 기존 SL 가격 조회 (취소하지 않고 조회만)
-            try:
-                open_orders = self.exchange.fetch_open_orders(self.symbol)
-                existing_sl_price = None
-                for order in open_orders:
-                    if order['info']['origType'] == 'STOP_MARKET' and order['type'] == 'market':
-                        existing_sl_price = float(order['info'].get('stopPrice', order.get('price', 0)))
-                        break
-            except Exception as e:
-                self.logger.error(f"Error fetching existing SL price: {e}")
-                existing_sl_price = None
-
-            # 총 포지션 정보 계산
-            total_position_size = quantity + float(current_position['contracts'])
-            total_position_value = (quantity * current_price) + \
-                                (float(current_position['contracts']) * float(current_position['entryPrice']))
-            new_avg_entry_price = total_position_value / total_position_size
-
-            # 새로운 SL 가격 계산
-            if existing_sl_price:
-                total_sl_value = (quantity * sl_price) + \
-                            (float(current_position['contracts']) * existing_sl_price)
-                new_sl_price = total_sl_value / total_position_size
-            else:
-                new_sl_price = sl_price
-
-            # 새로운 TP 가격 계산
-            if side == 'buy':
-                new_tp_price = new_avg_entry_price + \
-                            (new_avg_entry_price - new_sl_price) * pl_ratio
-            else:
-                new_tp_price = new_avg_entry_price - \
-                            (new_sl_price - new_avg_entry_price) * pl_ratio
-
-            return new_tp_price, new_sl_price
-
 
         # 1. 기존 마지막 TP/SL 주문 정보 백업
         ## 백업 기능 제거, 불필요
@@ -635,11 +636,11 @@ class BinanceFuturesTrader:
             ticker = self.exchange.fetch_ticker(self.symbol)
             current_price = ticker['last']
             if (position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy'):
-                return _handle_position_reduction(current_position, side, buy_amount, current_price)
+                return self._handle_position_reduction(current_position, side, buy_amount, current_price)
 
         # 5. 같은 방향 추가 진입 처리
         if current_position and side == position_side:
-            new_tp_price, new_sl_price = _handle_position_increase(
+            new_tp_price, new_sl_price = self._handle_position_increase(
                 current_position, side, buy_amount, current_price,
                 sl_price, tp_price, pl_ratio, MINIMUM_ORDER_VALUE
             )
