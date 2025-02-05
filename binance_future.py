@@ -210,37 +210,7 @@ class BinanceFuturesTrader:
             if 'conn' in locals():
                 conn.close()
 
-
-    def is_ai_tp_sl_order(self, order, active_positions):
-        """주문이 AI의 TP/SL 주문인지 확인"""
-        if not active_positions:
-            return False, None
-            
-        client_order_id = order.get('clientOrderId', '')
-        if not client_order_id:
-            return False, None
-            
-        try:
-            # TP/SL 주문인지 확인
-            is_tp_sl = (isinstance(client_order_id, str) and 
-                    client_order_id.startswith(('tp_', 'sl_')))
-            if not is_tp_sl:
-                return False, None
-                
-            # parent_id 추출
-            parent_id = client_order_id.split('_')[-1]
-            
-            # active_positions에 있는지 확인
-            for position_id, decision in active_positions:
-                if str(position_id) == parent_id:
-                    return True, decision
-                    
-            return False, None
-        except Exception as e:
-            self.logger.error(f"Error checking AI TP/SL order: {e}")
-            return False, None
-
-    # 수동 거래 모니터링
+        # 수동 거래 모니터링
     def monitor_manual_trades(self):
         try:
             since = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)
@@ -250,6 +220,24 @@ class BinanceFuturesTrader:
             # 활성화된 AI 포지션 조회
             active_ai_positions = self.get_active_ai_positions()
             self.logger.info(f"Active AI positions: {active_ai_positions}")
+
+            # 초기 데이터 한 번만 조회
+            try:
+                balance = self.exchange.fetch_balance()
+                positions = self.exchange.fetch_positions([self.symbol])
+                ticker = self.exchange.fetch_ticker(self.symbol)
+                
+                usdt_balance = balance['USDT']
+                free_usdt = usdt_balance['free']
+                used_usdt = usdt_balance['used'] 
+                total_usdt = usdt_balance['total']
+                
+                current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
+                btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
+                current_btc_price = ticker['last']
+            except Exception as e:
+                self.logger.error(f"Error fetching initial market data: {e}")
+                return
 
             # 주문 가져오기
             orders = self.exchange.fetch_orders(self.symbol, since=since, limit=100)
@@ -303,221 +291,205 @@ class BinanceFuturesTrader:
                 sl_orders_by_parent[parent_id] = order
                 self.logger.info(f"Mapped SL order: {order['id']} for parent {parent_id}")
 
+            # 처리된 주문 ID 추적을 위한 set
+            processed_orders = set()
+
             conn = sqlite3.connect('bitcoin_trades.db')
             c = conn.cursor()
             
             try:
-                # TP/SL 실현 주문 처리
-                for order_list in [realized_tp_orders, realized_sl_orders]:
-                    for order in order_list:
-                        try:
-                            order_id = str(order['id'])
+                def process_tp_sl_order(order, is_tp=True):
+                    """TP/SL 주문 처리 함수"""
+                    try:
+                        order_id = str(order['id'])
+                        if order_id in processed_orders:
+                            return
                             
-                            # 중복 체크
-                            c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
-                            if c.fetchone():
-                                self.logger.info(f"Skipping duplicate order: {order_id}")
-                                continue
+                        # 중복 체크
+                        c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
+                        if c.fetchone():
+                            self.logger.info(f"Skipping duplicate order: {order_id}")
+                            return
 
-                            self.logger.info(f"Processing TP/SL order: {order_id}")
-                            
-                            order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
-                            
-                            # AI TP/SL 주문 여부 확인
-                            is_ai_tp_sl, ai_position_decision = self.is_ai_tp_sl_order(order, active_ai_positions)
-                            
-                            if is_ai_tp_sl:
-                                self.logger.info(f"AI TP/SL Order detected: ID={order['id']}, "
-                                            f"ClientID={order.get('clientOrderId')}, "
-                                            f"Type={order.get('info', {}).get('origType')}")
-                            
-                            # 거래 유형과 이유 판별
-                            trade_type = 'AI' if is_ai_tp_sl else 'MANUAL'
-                            orig_type = order.get('info', {}).get('origType', '')
-                            
-                            reason = (
-                                'AI TP Realized' if orig_type == 'TAKE_PROFIT_MARKET' and is_ai_tp_sl
-                                else 'AI SL Realized' if orig_type == 'STOP_MARKET' and is_ai_tp_sl
-                                else 'Manual TP Realized' if orig_type == 'TAKE_PROFIT_MARKET'
-                                else 'Manual SL Realized'
-                            )
-                            
-                            decision = 'sell' if order['side'] == 'sell' else 'buy'
-                            
-                            # 잔고 및 가격 정보 조회
-                            balance = self.exchange.fetch_balance()
-                            usdt_balance = balance['USDT']
-                            free_usdt = usdt_balance['free']
-                            used_usdt = usdt_balance['used']
-                            total_usdt = usdt_balance['total']
-                            
-                            actual_trade_amount = abs(order['cost']) / self.leverage
-                            trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
-                            
-                            positions = self.exchange.fetch_positions([self.symbol])
-                            current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
-                            btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
-                            
-                            ticker = self.exchange.fetch_ticker(self.symbol)
-                            current_btc_price = ticker['last']
+                        self.logger.info(f"Processing {'TP' if is_tp else 'SL'} order: {order_id}")
+                        
+                        order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
+                        
+                        # AI 주문 여부 확인
+                        client_order_id = order.get('clientOrderId', '')
+                        is_ai_order = False
+                        if client_order_id and client_order_id.startswith(('tp_', 'sl_')):
+                            parent_id = client_order_id.split('_')[-1]
+                            is_ai_order = any(str(pos_id) == parent_id for pos_id, _ in active_ai_positions)
+                            self.logger.info(f"TP/SL order for parent {parent_id}: {'AI' if is_ai_order else 'Manual'} position")
+                        
+                        trade_type = 'AI' if is_ai_order else 'MANUAL'
+                        reason = (f"AI {('TP' if is_tp else 'SL')} Realized" if is_ai_order 
+                                else f"Manual {('TP' if is_tp else 'SL')} Realized")
+                        
+                        decision = 'sell' if order['side'] == 'sell' else 'buy'
+                        
+                        # 거래 비율 계산
+                        actual_trade_amount = abs(order['cost']) / self.leverage
+                        trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
 
-                            self.logger.info(f"Recording {trade_type} {reason} at {current_btc_price}")
+                        # DB 기록
+                        c.execute("""
+                            INSERT INTO trades 
+                            (timestamp, trade_type, order_id, decision, percentage, reason, 
+                            btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
+                            tp_order_id, sl_order_id) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            order_timestamp, trade_type, order_id, decision,
+                            int(trade_percentage), reason,
+                            used_usdt, free_usdt, total_usdt,
+                            btc_avg_buy_price, current_btc_price,
+                            order_id if reason == 'AI TP Realized' else None,
+                            order_id if reason == 'AI SL Realized' else None
+                        ))
+                        conn.commit()
+                        processed_orders.add(order_id)
+                        self.logger.info(f"Recorded {trade_type} trade: {order_id}")
+                    except Exception as e:
+                        self.logger.error(f"Error processing TP/SL order {order.get('id')}: {e}")
+                        self.logger.error(f"Order details: {json.dumps(order, indent=2)}")
 
-                            # DB 기록
-                            c.execute("""
-                                INSERT INTO trades 
-                                (timestamp, trade_type, order_id, decision, percentage, reason, 
-                                btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
-                                tp_order_id, sl_order_id) 
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (
-                                order_timestamp,
-                                trade_type,
-                                order_id,
-                                decision,
-                                int(trade_percentage),
-                                reason,
-                                used_usdt,
-                                free_usdt,
-                                total_usdt,
-                                btc_avg_buy_price,
-                                current_btc_price,
-                                None if reason != 'AI TP Realized' else order_id,
-                                None if reason != 'AI SL Realized' else order_id
-                            ))
-                            conn.commit()
-                            self.logger.info(f"Recorded {trade_type} trade: {order_id}")
-                        except Exception as e:
-                            self.logger.error(f"Error processing order {order.get('id')}: {str(e)}")
-                            self.logger.error(f"Order details: {json.dumps(order, indent=2)}")
-
-                    # 일반 거래 처리
-                for order in orders:
-                    if order['type'] == 'market':
-                        try:
-                            order_id = str(order['id'])
-                            order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
+                def process_market_order(order):
+                    """일반 거래 처리 함수"""
+                    try:
+                        order_id = str(order['id'])
+                        if order_id in processed_orders:
+                            return
                             
-                            # 중복 체크
-                            c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
-                            if c.fetchone():
-                                continue
+                        # 중복 체크
+                        c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
+                        if c.fetchone():
+                            return
 
-                            # tp_order와 sl_order를 안전하게 초기화
-                            tp_order = tp_orders_by_parent.get(order_id)
-                            sl_order = sl_orders_by_parent.get(order_id)
+                        order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
+                        
+                        # TP/SL 주문 확인
+                        tp_order = tp_orders_by_parent.get(order_id)
+                        sl_order = sl_orders_by_parent.get(order_id)
+                        is_reduce_only = order.get('info', {}).get('reduceOnly', False)
 
-                            is_reduce_only = order.get('info', {}).get('reduceOnly', False)
-                            
-                            # AI 포지션 체크
-                            is_ai_entry = False
-                            for position_id, decision in active_ai_positions:
-                                if str(position_id) == order_id:
+                        # AI 포지션 체크
+                        is_ai_entry = False
+                        ai_position_decision = None
+                        
+                        # ClientOrderId로 AI 주문 여부 확인
+                        client_order_id = order.get('clientOrderId', '')
+                        parent_id = None
+                        if client_order_id:
+                            if client_order_id.startswith(('tp_', 'sl_')):
+                                parent_id = client_order_id.split('_')[-1]
+                        
+                        if parent_id:
+                            for pos_id, decision in active_ai_positions:
+                                if str(pos_id) == parent_id:
                                     is_ai_entry = True
                                     ai_position_decision = decision
                                     break
-                            
-                            # 거래 유형 판별
-                            if is_ai_entry:
-                                if not is_reduce_only:
-                                    trade_type = 'AI'
-                                    reason = 'AI Entry'
-                                else:
-                                    # TP/SL 실현 체크
-                                    if tp_order:
-                                        trade_type = 'AI'
-                                        reason = 'AI TP Realized'
-                                    elif sl_order:
-                                        trade_type = 'AI'
-                                        reason = 'AI SL Realized'
-                                    else:
-                                        continue
+                        else:
+                            for pos_id, decision in active_ai_positions:
+                                if str(pos_id) == order_id:
+                                    is_ai_entry = True
+                                    ai_position_decision = decision
+                                    break
+
+                        # 거래 유형 판별
+                        if is_ai_entry:
+                            if not is_reduce_only:
+                                trade_type = 'AI'
+                                reason = 'AI Entry'
                             else:
-                                if is_reduce_only:
-                                    # 포지션 종료 케이스 분석
-                                    if active_ai_positions:
-                                        for position_id, ai_decision in active_ai_positions:
-                                            is_closing_ai_position = (
-                                                (ai_decision == 'buy' and order['side'] == 'sell') or 
-                                                (ai_decision == 'sell' and order['side'] == 'buy')
-                                            )
-                                            if is_closing_ai_position:
-                                                trade_type = 'MANUAL'
-                                                reason = 'Manual Close of AI Position'
-                                                break
-                                        else:
-                                            trade_type = 'MANUAL'
-                                            reason = 'Manual Close of Manual Position'
-                                    else:
-                                        trade_type = 'MANUAL'
-                                        reason = 'Manual Close of Manual Position'
+                                if tp_order:
+                                    trade_type = 'AI'
+                                    reason = 'AI TP Realized'
+                                elif sl_order:
+                                    trade_type = 'AI'
+                                    reason = 'AI SL Realized'
                                 else:
-                                    # TP/SL 실현 체크
-                                    if tp_order:
-                                        trade_type = 'MANUAL'
-                                        reason = 'Manual TP Realized'
-                                    elif sl_order:
-                                        trade_type = 'MANUAL'
-                                        reason = 'Manual SL Realized'
+                                    return
+                        else:
+                            if is_reduce_only:
+                                # 포지션 종료 케이스 분석
+                                trade_type = 'MANUAL'
+                                
+                                # 1. TP/SL 주문인지 먼저 확인
+                                client_order_id = order.get('clientOrderId', '')
+                                if client_order_id and client_order_id.startswith(('tp_', 'sl_')):
+                                    # 2. parent_id를 통해 AI 포지션과 연관되어 있는지 확인
+                                    parent_id = client_order_id.split('_')[-1]
+                                    is_ai_tp_sl = any(str(pos_id) == parent_id for pos_id, _ in active_ai_positions)
+                                    reason = 'Manual Close of AI Position' if is_ai_tp_sl else 'Manual Close of Manual Position'
+                                    self.logger.info(f"TP/SL order for parent {parent_id}: {'AI' if is_ai_tp_sl else 'Manual'} position")
+                                else:
+                                    # 3. 일반 청산 주문인 경우
+                                    for pos_id, ai_decision in active_ai_positions:
+                                        is_closing_ai_position = (
+                                            (ai_decision == 'buy' and order['side'] == 'sell') or 
+                                            (ai_decision == 'sell' and order['side'] == 'buy')
+                                        )
+                                        if is_closing_ai_position:
+                                            reason = 'Manual Close of AI Position'
+                                            self.logger.info(f"Manual close of AI position: {pos_id}")
+                                            break
                                     else:
-                                        trade_type = 'MANUAL'
-                                        reason = 'Manual Entry'
+                                        reason = 'Manual Close of Manual Position'
+                            else:
+                                trade_type = 'MANUAL'
+                                if tp_order:
+                                    reason = 'Manual TP Realized'
+                                elif sl_order:
+                                    reason = 'Manual SL Realized'
+                                else:
+                                    reason = 'Manual Entry'
 
-                            decision = 'buy' if order['side'] == 'buy' else 'sell'
-                            
-                            # 잔고 정보
-                            balance = self.exchange.fetch_balance()
-                            usdt_balance = balance['USDT']
-                            free_usdt = usdt_balance['free']
-                            used_usdt = usdt_balance['used']
-                            total_usdt = usdt_balance['total']
-                            
-                            # 거래 비율 계산
-                            actual_trade_amount = abs(order['cost']) / self.leverage
-                            trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
-                            
-                            # 포지션 정보
-                            positions = self.exchange.fetch_positions([self.symbol])
-                            current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
-                            btc_avg_buy_price = float(current_position['entryPrice']) if current_position else 0
-                            
-                            # 현재가
-                            ticker = self.exchange.fetch_ticker(self.symbol)
-                            current_btc_price = ticker['last']
+                        decision = 'buy' if order['side'] == 'buy' else 'sell'
+                        
+                        # 거래 비율 계산
+                        actual_trade_amount = abs(order['cost']) / self.leverage
+                        trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
 
-                            # TP/SL 주문 ID
-                            tp_order_id = tp_order['id'] if tp_order else None
-                            sl_order_id = sl_order['id'] if sl_order else None
+                        # TP/SL 주문 ID
+                        tp_order_id = tp_order['id'] if tp_order else None
+                        sl_order_id = sl_order['id'] if sl_order else None
 
-                            # DB 기록
-                            c.execute("""
-                                INSERT INTO trades 
-                                (timestamp, trade_type, order_id, decision, percentage, reason, 
-                                btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
-                                tp_order_id, sl_order_id) 
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (
-                                order_timestamp,
-                                trade_type,
-                                order_id,
-                                decision,
-                                int(trade_percentage),
-                                reason,
-                                used_usdt,
-                                free_usdt,
-                                total_usdt,
-                                btc_avg_buy_price,
-                                current_btc_price,
-                                tp_order_id,
-                                sl_order_id
-                            ))
-                            conn.commit()
-                            
-                            self.logger.info(f"{trade_type} trade recorded: {decision.upper()} at {current_btc_price} (Reason: {reason})")
-                        except Exception as e:
-                            self.logger.error(f"Error processing order {order.get('id')}: {str(e)}")
-                            self.logger.error(f"Order details: {json.dumps(order, indent=2)}")
+                        # DB 기록
+                        c.execute("""
+                            INSERT INTO trades 
+                            (timestamp, trade_type, order_id, decision, percentage, reason, 
+                            btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
+                            tp_order_id, sl_order_id) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            order_timestamp, trade_type, order_id, decision,
+                            int(trade_percentage), reason,
+                            used_usdt, free_usdt, total_usdt,
+                            btc_avg_buy_price, current_btc_price,
+                            tp_order_id, sl_order_id
+                        ))
+                        conn.commit()
+                        processed_orders.add(order_id)
+                        self.logger.info(f"{trade_type} trade recorded: {decision.upper()} at {current_btc_price} (Reason: {reason})")
+                        
+                    except Exception as e:
+                        self.logger.error(f"Error processing market order {order.get('id')}: {e}")
+                        self.logger.error(f"Order details: {json.dumps(order, indent=2)}")
+
+                # 메인 처리 로직 실행
+                for tp_order in realized_tp_orders:
+                    process_tp_sl_order(tp_order, True)
+                for sl_order in realized_sl_orders:
+                    process_tp_sl_order(sl_order, False)
                 
+                # 일반 거래 처리 (TP/SL 제외)
+                for order in orders:
+                    if order['type'] == 'market' and str(order['id']) not in processed_orders:
+                        process_market_order(order)
+                        
             finally:
                 conn.close()
                 self.logger.info("Database connection closed")
@@ -527,7 +499,7 @@ class BinanceFuturesTrader:
             if 'conn' in locals():
                 conn.close()
                 self.logger.info("Database connection closed after error")
-                    
+
     def setup_leverage_and_margin(self, leverage: int):
         try:
             # 현재 포지션 확인
@@ -1234,7 +1206,7 @@ def get_bitcoin_news():
     url = "https://serpapi.com/search.json"
     params = {
         "engine": "google_news",
-        "q": "btc",
+        "q": "bitcoin OR btc",
         "api_key": serpapi_key
     }
     
@@ -1248,7 +1220,7 @@ def get_bitcoin_news():
         for item in news_results:
             headlines.append({
                 "title": item.get("title", ""),
-                "timestamp": convert_utc_to_kst(item.get("date", ""))
+                "date": convert_utc_to_kst(item.get("date", ""))
             })
         
         return headlines[:5]
