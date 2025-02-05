@@ -714,7 +714,7 @@ class BinanceFuturesTrader:
             return None
 
         # 8. 트레일링 스탑로스 설정
-        def monitor_and_adjust_sl():
+        def monitor_and_adjust_sl(self):
             try:
                 positions = self.exchange.fetch_positions([self.symbol])
                 current_position = None
@@ -745,31 +745,45 @@ class BinanceFuturesTrader:
                     else:  # short
                         new_sl_price = current_market_price * (1 + TRAILING_BUFFER)
 
-                    # 기존 SL 주문 취소
+                    # 기존 모든 SL 주문 취소
                     try:
                         open_orders = self.exchange.fetch_open_orders(self.symbol)
-                        for order in open_orders:
-                            if order['info']['origType'] == 'STOP_MARKET' and order['type'] == 'market':
+                        stop_orders = [order for order in open_orders 
+                                        if order['info']['origType'] == 'STOP_MARKET'
+                                        and order['type'] == 'market']
+                        
+                        for order in stop_orders:
+                            try:
                                 self.exchange.cancel_order(order['id'], self.symbol)
-                                self.logger.info("기존 SL 주문 취소")
+                                self.logger.info(f"기존 SL 주문 취소: {order['id']}")
+                            except Exception as order_cancel_error:
+                                self.logger.error(f"개별 SL 주문 취소 중 오류: {order_cancel_error}")
+                    
                     except Exception as cancel_error:
                         self.logger.error(f"SL 주문 취소 중 오류: {cancel_error}")
 
                     # 새로운 SL 주문 생성
                     tp_side = 'sell' if position_side == 'long' else 'buy'
-                    new_sl_order = self.exchange.create_order(
-                        symbol=self.symbol,
-                        type='STOP_MARKET',
-                        side=tp_side,
-                        amount=position_size,
-                        params={
-                            'stopPrice': new_sl_price,
-                            'closePosition': 'true'
-                        }
-                    )
+                    
+                    try:
+                        new_sl_order = self.exchange.create_order(
+                            symbol=self.symbol,
+                            type='STOP_MARKET',
+                            side=tp_side,
+                            amount=position_size,
+                            params={
+                                'stopPrice': new_sl_price,
+                                'closePosition': True,
+                                'reduceOnly': True
+                            }
+                        )
 
-                    self.logger.info(f"트레일링 SL 재설정: {new_sl_price}")
-                    return new_sl_order
+                        self.logger.info(f"트레일링 SL 재설정: {new_sl_price}")
+                        return new_sl_order
+                    
+                    except Exception as create_error:
+                        self.logger.error(f"새로운 SL 주문 생성 중 오류: {create_error}")
+                        return None
 
             except Exception as e:
                 self.logger.error(f"SL 모니터링 중 오류: {e}")
