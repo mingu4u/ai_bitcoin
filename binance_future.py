@@ -1689,11 +1689,16 @@ def ai_trading():
             
             # 트레일링 스탑로스 모니터링 추가
             if 'monitor_sl' in order_info:
+                # 함수를 변수에 저장
+                monitor_sl_func = order_info['monitor_sl']
+                
                 def periodic_sl_monitoring():
-                    new_sl_order = trader.order_info['monitor_sl'](trader)
-                    if new_sl_order:
-                        # 필요하다면 추가 로직 구현
-                        logger.info(f"Trailing SL order updated: {new_sl_order}")
+                    try:
+                        new_sl_order = monitor_sl_func(trader)
+                        if new_sl_order:
+                            logger.info(f"Trailing SL order updated: {new_sl_order}")
+                    except Exception as e:
+                        logger.error(f"Error in SL monitoring: {e}")
                         
                 # 5분마다 SL 모니터링
                 schedule.every(5).minutes.do(periodic_sl_monitoring)
