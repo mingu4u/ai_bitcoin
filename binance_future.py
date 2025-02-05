@@ -1066,8 +1066,7 @@ def generate_reflection(trades_df, current_market_data):
                 Limit your response to 350 words or less.
                 """
             }
-        ],
-        reasoning_effort="high"
+        ]
     )
     
     try:
@@ -1578,7 +1577,6 @@ def ai_trading():
                         ]
                     }
                 ],
-                reasoning_effort="high",
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
