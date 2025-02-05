@@ -1039,7 +1039,7 @@ def generate_reflection(trades_df, current_market_data):
     
     # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
     response = client.chat.completions.create(
-        model="gpt-4o-mini", #gpt-4o-2024-11-20
+        model="o1", #gpt-4o-2024-11-20 # gpt-4o-mini
         messages=[
             {
                 "role": "system",
@@ -1066,7 +1066,8 @@ def generate_reflection(trades_df, current_market_data):
                 Limit your response to 350 words or less.
                 """
             }
-        ]
+        ],
+        reasoning_effort="high"
     )
     
     try:
@@ -1488,7 +1489,7 @@ def ai_trading():
     
             # AI 모델에 반성 내용 제공
             response = client.chat.completions.create(
-                model="gpt-4o-mini", #gpt-4o-2024-11-20
+                model="o1", #gpt-4o-2024-11-20 # gpt-4o-mini
                 messages=[
                     {
                         "role": "system",
@@ -1577,6 +1578,7 @@ def ai_trading():
                         ]
                     }
                 ],
+                reasoning_effort="high",
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
@@ -1690,7 +1692,7 @@ def ai_trading():
             # 트레일링 스탑로스 모니터링 추가
             if 'monitor_sl' in order_info:
                 def periodic_sl_monitoring():
-                    new_sl_order = order_info['monitor_sl']()
+                    new_sl_order = trader.order_info['monitor_sl'](trader)
                     if new_sl_order:
                         # 필요하다면 추가 로직 구현
                         logger.info(f"Trailing SL order updated: {new_sl_order}")
