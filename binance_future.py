@@ -1084,7 +1084,7 @@ def generate_reflection(trades_df, current_market_data):
         model="o1-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
         messages=[
             {
-                "role": "system",
+                "role": "user",
                 "content": "You are an AI trading assistant tasked with analyzing recent trading performance and current market conditions to generate insights and improvements for future trading decisions."
             },
             {
