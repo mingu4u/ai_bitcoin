@@ -1081,7 +1081,7 @@ def generate_reflection(trades_df, current_market_data):
     
     # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
     response = client.chat.completions.create(
-        model="o3-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
+        model="o1-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
         messages=[
             {
                 "role": "system",
@@ -1108,8 +1108,7 @@ def generate_reflection(trades_df, current_market_data):
                 Limit your response to 350 words or less.
                 """
             }
-        ],
-        reasoning_effort="high"
+        ]
     )
     
     try:
