@@ -34,7 +34,7 @@ import ccxt.binance
 import time
 import logging
 from typing import Optional, Dict, Any
-
+import platform
 
 
 
@@ -297,6 +297,23 @@ class BinanceFuturesTrader:
             conn = sqlite3.connect('bitcoin_trades.db')
             c = conn.cursor()
             
+            def get_last_reflection(conn):
+                """DB에서 가장 최근 reflection 값을 가져오는 함수"""
+                try:
+                    c = conn.cursor()
+                    c.execute("""
+                        SELECT reflection FROM trades
+                        WHERE reflection IS NOT NULL AND reflection != ''
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    """)
+                    result = c.fetchone()
+                    return result[0] if result else None
+                except Exception as e:
+                    logger.error(f"Error fetching last reflection: {e}")
+                    return None            
+                        
+            
             try:
                 def process_tp_sl_order(order, is_tp=True):
                     """TP/SL 주문 처리 함수"""
@@ -333,21 +350,26 @@ class BinanceFuturesTrader:
                         actual_trade_amount = abs(order['cost']) / self.leverage
                         trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
 
+                        # 마지막 reflection 유지
+                        last_reflection = get_last_reflection(conn)
+
                         # DB 기록
                         c.execute("""
                             INSERT INTO trades 
                             (timestamp, trade_type, order_id, decision, percentage, reason, 
                             btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
-                            tp_order_id, sl_order_id) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            reflection, tp_order_id, sl_order_id) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             order_timestamp, trade_type, order_id, decision,
                             int(trade_percentage), reason,
                             used_usdt, free_usdt, total_usdt,
                             btc_avg_buy_price, current_btc_price,
+                            last_reflection,  # 기존 reflection을 유지
                             order_id if reason == 'AI TP Realized' else None,
                             order_id if reason == 'AI SL Realized' else None
-                        ))
+                        ))                        
+                                                
                         conn.commit()
                         processed_orders.add(order_id)
                         self.logger.info(f"Recorded {trade_type} trade: {order_id}")
@@ -457,18 +479,22 @@ class BinanceFuturesTrader:
                         tp_order_id = tp_order['id'] if tp_order else None
                         sl_order_id = sl_order['id'] if sl_order else None
 
+                        # 마지막 reflection 유지
+                        last_reflection = get_last_reflection(conn)
+
                         # DB 기록
                         c.execute("""
                             INSERT INTO trades 
                             (timestamp, trade_type, order_id, decision, percentage, reason, 
                             btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
-                            tp_order_id, sl_order_id) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            reflection, tp_order_id, sl_order_id) 
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             order_timestamp, trade_type, order_id, decision,
                             int(trade_percentage), reason,
                             used_usdt, free_usdt, total_usdt,
                             btc_avg_buy_price, current_btc_price,
+                            last_reflection,  # 기존 reflection을 유지
                             tp_order_id, sl_order_id
                         ))
                         conn.commit()
@@ -1081,10 +1107,10 @@ def generate_reflection(trades_df, current_market_data):
     
     # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
     response = client.chat.completions.create(
-        model="o1-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
+        model="gpt-4o-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
         messages=[
             {
-                "role": "user",
+                "role": "system",
                 "content": "You are an AI trading assistant tasked with analyzing recent trading performance and current market conditions to generate insights and improvements for future trading decisions."
             },
             {
@@ -1299,6 +1325,17 @@ def click_element_by_xpath(driver, xpath, element_name, wait_time=10):
         logger.error(f"{element_name} 클릭 중 오류 발생: {e}")
 
 
+def safe_create_driver():
+    retries = 3
+    for attempt in range(retries):
+        try:
+            driver = create_driver()
+            return driver
+        except WebDriverException as e:
+            logger.error(f"WebDriver 생성 실패 (시도 {attempt + 1}/{retries}): {e}")
+            time.sleep(2)  # 재시도 전 대기
+    raise WebDriverException("WebDriver 생성 실패. 크롬 드라이버를 확인하세요.")
+
 
 
 def check_login_status(driver):
@@ -1327,7 +1364,7 @@ def load_cookies(driver, filename="tradingview_cookies.pkl"):
 
 def login_with_cookies():
     try:
-        driver = create_driver()
+        driver = safe_create_driver()
         cookies_path = "my_cookies.pkl"
         
         # 먼저 도메인에 접속 (쿠키 설정을 위해 필요)
@@ -1415,7 +1452,6 @@ def modify_orderbook(orderbook):
 ### 메인 AI 트레이딩 로직
 def ai_trading():
     ### 데이터 가져오기
-    time.sleep(1)
     # 7. Selenium으로 차트 캡처
     driver = None
     try:
@@ -1576,7 +1612,7 @@ def ai_trading():
 
                         You can find the BlackFlag FTS, UT Bot Alerts indicators, Volume Oscillator from the TradingView chart screenshot provided in the image of the user message. 
                         These technical indicators are essential for following the trading strategy outlined above.
-                        "stop loss price" should be based on [trading method] above and ATR indicator.
+                        "stop loss price" should be based on [trading method] above and ATR indicator.(how to use ATR to set stop loss price : entry_price - (atr_value * 2))
                         For optimal timing of entry, when deciding to enter a position, the more recent the Buy or Sell signal from the three indicators, the better.
                         **Minimize unnecessary trades to reduce fees.** Only trade when strong signals of these three indicators align.
                         However, if other factors are sufficient reasons to enter a long(buy) or short(sell) position, you may trade.
