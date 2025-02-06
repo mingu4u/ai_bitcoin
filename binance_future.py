@@ -1081,7 +1081,7 @@ def generate_reflection(trades_df, current_market_data):
     
     # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
     response = client.chat.completions.create(
-        model="gpt-4o-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
+        model="o3-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
         messages=[
             {
                 "role": "system",
@@ -1618,7 +1618,6 @@ def ai_trading():
                         ]
                     }
                 ],
-                reasoning_effort="high",
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
