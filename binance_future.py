@@ -1081,7 +1081,7 @@ def generate_reflection(trades_df, current_market_data):
     
     # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
     response = client.chat.completions.create(
-        model="o1-preview", #gpt-4o-2024-11-20 # gpt-4o-mini
+        model="gpt-4o-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
         messages=[
             {
                 "role": "system",
@@ -1531,7 +1531,7 @@ def ai_trading():
     
             # AI 모델에 반성 내용 제공
             response = client.chat.completions.create(
-                model="o1-preview", #gpt-4o-2024-11-20 # gpt-4o-mini
+                model="gpt-4o-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
                 messages=[
                     {
                         "role": "system",
@@ -1564,13 +1564,13 @@ def ai_trading():
 
                         [Portfolio]
                         - free USDT Balance: {free_usdt:.0f}
-                        - used USDT Holdings: {used_usdt:.4f}
+                        - used USDT Holdings: {used_usdt:.4f} 
                         - BTC Average Purchase Price: {btc_avg_buy_price:.0f} USDT
 
                         Recent trading reflection:
                         {reflection}
 
-                        Particularly important is to always refer to the trading method below to help you assess your current situation and make trading decisions.
+                        Particularly important is to always refer to the [trading method] below to help you assess your current situation and make trading decisions.
 
                         [trading method]
                         {youtube_transcript2}
