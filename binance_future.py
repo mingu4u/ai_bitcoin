@@ -1617,7 +1617,6 @@ def ai_trading():
                         ]
                     }
                 ],
-                reasoning_effort="high",
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
