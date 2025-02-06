@@ -423,7 +423,7 @@ class BinanceFuturesTrader:
                                     # 2. parent_id를 통해 AI 포지션과 연관되어 있는지 확인
                                     parent_id = client_order_id.split('_')[-1]
                                     is_ai_tp_sl = any(str(pos_id) == parent_id for pos_id, _ in active_ai_positions)
-                                    reason = 'Manual Close of AI Position' if is_ai_tp_sl else 'Manual Close of Manual Position'
+                                    reason = 'Manual Close of AI Position' if is_ai_tp_sl else 'Manual Close of AI Position'
                                     self.logger.info(f"TP/SL order for parent {parent_id}: {'AI' if is_ai_tp_sl else 'Manual'} position")
                                 else:
                                     # 3. 일반 청산 주문인 경우
@@ -437,7 +437,7 @@ class BinanceFuturesTrader:
                                             self.logger.info(f"Manual close of AI position: {pos_id}")
                                             break
                                     else:
-                                        reason = 'Manual Close of Manual Position'
+                                        reason = 'Manual Close of AI Position'
                             else:
                                 trade_type = 'MANUAL'
                                 if tp_order:
@@ -1081,14 +1081,14 @@ def generate_reflection(trades_df, current_market_data):
     
     # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
     response = client.chat.completions.create(
-        model="gpt-4o-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
+        model="o1", #gpt-4o-2024-11-20 # gpt-4o-mini
         messages=[
             {
-                "role": "system",
+                "role": "developer",
                 "content": "You are an AI trading assistant tasked with analyzing recent trading performance and current market conditions to generate insights and improvements for future trading decisions."
             },
             {
-                "role": "user",
+                "role": "developer",
                 "content": f"""
                 Recent 40 trading data:
                 {trades_df.to_json(orient='records')}
@@ -1108,7 +1108,8 @@ def generate_reflection(trades_df, current_market_data):
                 Limit your response to 350 words or less.
                 """
             }
-        ]
+        ],
+        reasoning_effort="high"
     )
     
     try:
@@ -1469,7 +1470,7 @@ def ai_trading():
         trader.exchange.fetch_ohlcv(
             "BTC/USDT",
             timeframe='5m',
-            limit=30
+            limit=60
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
@@ -1522,31 +1523,28 @@ def ai_trading():
                 "fear_greed_index": fear_greed_index,
                 "news_headlines": news_headlines,
                 "orderbook": modified_orderbook,
-                "5min_ohlcv": df_5min.to_dict(),     # 2.5시간치 5분봉 데이터 추가
-                "hourly_ohlcv": df_hourly.to_dict()  # 12시간치 60분봉 데이터 추가
+                "5min_ohlcv": df_5min.to_dict(),     # 5시간치 5분봉 데이터 추가
+                "hourly_ohlcv": df_hourly.to_dict()  # 24시간치 60분봉 데이터 추가
             }
             # 반성 및 개선 내용 생성
             reflection = generate_reflection(recent_trades, current_market_data)
     
             # AI 모델에 반성 내용 제공
             response = client.chat.completions.create(
-                model="gpt-4o-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
+                model="o1", #gpt-4o-2024-11-20 # gpt-4o-mini
                 messages=[
                     {
-                        "role": "system",
+                        "role": "developer",
                         "content": f"""You are a Bitcoin futures day trader who specializes in short-term trading based on 5-minute candlestick charts. You are trading two-way positions (buy or sell) and focus on analyzing 5-minute timeframes to identify quick market moves and opportunities while also considering the broader market conditions. You analyze the data provided to determine whether to take a buy(long), sell(short), or hold position at the current time. Consider the following when analyzing
                         - Cryptocurrency exchange : Binance
                         - leverage setting : {trader.leverage}
                         - Position Mode : One-way Mode
                         - Margin Mode : isolated
-                        - Asset Mode : Single-Asset Mode
                         - Manage risk by only investing up to 65 percent of your assets in a single order
-                        - Technical indicators and market data
                         - Focus on 5-minute chart patterns and movements for primary analysis, but use 60-minute data for medium-term trends
-                        - Prioritize clear buy or sell signals based on a combination of trading method(BlackFlag FTS, UT Bot Alerts, Volume oscillator) and indicators(RSI, MACD, Bollinger Bands, Stochastic Oscillator).
+                        - Prioritize clear buy or sell signals based on a [trading method] below (using BlackFlag FTS, UT Bot Alerts, Volume oscillator) 
+                        - As a next priority, note the indicators(RSI, MACD, Bollinger Bands, Stochastic Oscillator).
                         - Use ATR to understand market volatility, be cautious during high volatility unless signals are very strong.
-                        - Short-term price action and momentum
-                        - Volume analysis on 5-minute timeframes
                         - Quick trend reversals and continuation patterns
                         - Support and resistance levels visible on 5-minute charts
                         - Recent news headlines and their immediate impact on Bitcoin price
@@ -1574,11 +1572,12 @@ def ai_trading():
 
                         Particularly important is to always refer to the trading method below to help you assess your current situation and make trading decisions.
 
+                        [trading method]
                         {youtube_transcript2}
 
                         You can find the BlackFlag FTS, UT Bot Alerts indicators, Volume Oscillator from the TradingView chart screenshot provided in the image of the user message. 
                         These technical indicators are essential for following the trading strategy outlined above.
-                        "stop loss price" should be based on trading method above and ATR indicator.
+                        "stop loss price" should be based on [trading method] above and ATR indicator.
                         For optimal timing of entry, when deciding to enter a position, the more recent the Buy or Sell signal from the three indicators, the better.
                         **Minimize unnecessary trades to reduce fees.** Only trade when strong signals of these three indicators align.
                         However, if other factors are sufficient reasons to enter a long(buy) or short(sell) position, you may trade.
@@ -1595,17 +1594,17 @@ def ai_trading():
 
                         Ensure that the percentage is an integer between 1 and 100 for buy/sell decisions, and exactly 0 for hold decisions.
                         Your percentage should reflect the strength of your conviction in the decision based on the analyzed data.
-                        Depending on the strength of the entry signal, P&L ratio should between 1.3~2 value  (default 1.5) 
+                        Depending on the strength of the entry signal, P&L ratio should between 1.5~3 value  (default 1.5) 
                         """
                     },
                     {
-                        "role": "user",
+                        "role": "developer",
                         "content": [
                             {
                                 "type": "text",
                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
                                 Orderbook: {json.dumps(modified_orderbook)}
-                                5-minute OHLCV with indicators (2.5 hours): {df_5min.to_json()}
+                                5-minute OHLCV with indicators (5 hours): {df_5min.to_json()}
                                 Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
                                 Recent news headlines: {json.dumps(news_headlines)}
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}"""
@@ -1619,6 +1618,7 @@ def ai_trading():
                         ]
                     }
                 ],
+                reasoning_effort="high",
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
