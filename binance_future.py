@@ -1084,11 +1084,11 @@ def generate_reflection(trades_df, current_market_data):
         model="o1-preview", #gpt-4o-2024-11-20 # gpt-4o-mini
         messages=[
             {
-                "role": "developer",
+                "role": "system",
                 "content": "You are an AI trading assistant tasked with analyzing recent trading performance and current market conditions to generate insights and improvements for future trading decisions."
             },
             {
-                "role": "developer",
+                "role": "user",
                 "content": f"""
                 Recent 40 trading data:
                 {trades_df.to_json(orient='records')}
@@ -1534,7 +1534,7 @@ def ai_trading():
                 model="o1-preview", #gpt-4o-2024-11-20 # gpt-4o-mini
                 messages=[
                     {
-                        "role": "developer",
+                        "role": "system",
                         "content": f"""You are a Bitcoin futures day trader who specializes in short-term trading based on 5-minute candlestick charts. You are trading two-way positions (buy or sell) and focus on analyzing 5-minute timeframes to identify quick market moves and opportunities while also considering the broader market conditions. You analyze the data provided to determine whether to take a buy(long), sell(short), or hold position at the current time. Consider the following when analyzing
                         - Cryptocurrency exchange : Binance
                         - leverage setting : {trader.leverage}
@@ -1598,7 +1598,7 @@ def ai_trading():
                         """
                     },
                     {
-                        "role": "developer",
+                        "role": "user",
                         "content": [
                             {
                                 "type": "text",
