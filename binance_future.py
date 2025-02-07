@@ -1158,22 +1158,21 @@ def generate_reflection(trades_df, current_market_data):
     Please structure your response in the following JSON format for seamless integration with the Trading AI:
 
     ```json
-    {
+    {{
     "trade_evaluation": [
-        {
+        {{
         "trade_id": "unique_trade_identifier",
         "justified": true_or_false,
         "deviations": ["list_of_deviations_from_standard_practices"],
         "comments": "brief_comment_on_trade"
-        }
+        }}
     ],
     "success_factors": ["list_of_factors_contributing_to_profitable_trades"],
     "failure_factors": ["list_of_factors_contributing_to_unprofitable_trades"],
     "recommendations": ["list_of_actionable_recommendations"],
     "market_trend_analysis": "summary_of_current_market_trends_and_suggested_strategies",
     "optimal_holding_periods": "suggested_holding_periods_with_rationale"
-    }
-    ```
+    }}
 
     **Notes:**
     - Base all analysis and recommendations solely on the data provided.
@@ -1612,176 +1611,6 @@ def ai_trading():
     youtube_transcript2 = f2.read()
     f2.close()    
 
-
-    try:
-        logger.info("Preparing message content...")
-        
-        # 각 데이터 준비를 개별적으로 시도
-        balances_json = json.dumps(filtered_balances)
-        logger.info("Balances JSON prepared")
-        
-        orderbook_json = json.dumps(modified_orderbook)
-        logger.info("Orderbook JSON prepared")
-        
-        df_5min_json = df_5min.to_json()
-        logger.info("5min DataFrame JSON prepared")
-        
-        df_hourly_json = df_hourly.to_json()
-        logger.info("Hourly DataFrame JSON prepared")
-        
-        news_json = json.dumps(news_headlines)
-        logger.info("News headlines JSON prepared")
-        
-        fear_greed_json = json.dumps(fear_greed_index)
-        logger.info("Fear and Greed Index JSON prepared")
-        
-        # 전체 텍스트 메시지 구성
-        text_content = f"""Current investment status: {balances_json}
-        Orderbook: {orderbook_json}
-        5-minute OHLCV with indicators (5 hours): {df_5min_json}
-        Hourly OHLCV with indicators (24 hours): {df_hourly_json}
-        4-hour OHLCV with indicators (3 days): {df_4h.to_json()}
-        Recent news headlines: {news_json}
-        Fear and Greed Index: {fear_greed_json}"""
-        
-        logger.info("Text content prepared successfully")
-        
-        # 최종 메시지 구성
-        messages=[
-                    {
-                        "role": "system",
-                        "content": 
-                        f"""You are a Bitcoin futures day trader who specializes in short-term trading based on the 5-minute candlestick chart. 
-                                    However, to enhance accuracy and profitability, you must align your decision-making process with higher timeframes as well, considering both the 1-hour and 4-hour charts. 
-                                    Your goal is to maximize gains while minimizing unnecessary trades and transaction fees.
-
-                                    **Trading Conditions:**
-                                    - Cryptocurrency exchange: Binance
-                                    - Leverage setting: {trader.leverage}
-                                    - Position Mode: One-way Mode
-                                    - Margin Mode: Isolated
-
-                                    - **Risk Management:**
-                                        - Invest up to **65% of assets** per order when **all signals align**.
-                                        - If signal strength is weak or contradicting trends appear, **reduce trade size or avoid entry**.
-                                        - Utilize **volatility-based stop-loss (ATR x2 rule) dynamically.**
-                                        - **Minimize unnecessary trades to reduce fees**.
-
-                                    ** Multi-Timeframe Analysis (5m, 1h, 4h):**
-                                    - **5-minute chart is the primary reference,** but trade execution must be confirmed by at least **one longer timeframe (1-hour or 4-hour).**
-                                    - Avoid **counter-trend trades against strong 1-hour or 4-hour trends.**
-                                    - If the **5-minute trend contradicts 1-hour and 4-hour charts, avoid or reduce trade size.**
-                                    - **Prioritize trends aligning across multiple timeframes** before taking action.
-
-                                    ** Trading Indicators:**
-                                    - Primary Method: BlackFlag FTS, UT Bot Alerts, Volume Oscillator (found in the provided TradingView chart).
-                                    - Supporting Indicators: RSI, MACD, Bollinger Bands, Stochastic Oscillator.
-                                    - **ATR (Average True Range) for stop-loss setting:**  
-                                    `stop_loss_price = entry_price - (atr_value * 2)`
-                                    - **Only trade when at least three indicators align with longer timeframe trends.**
-
-                                    ** Execution & Filtering Strategy:**
-                                    - **Avoid trading in sideways or choppy markets.**
-                                    - Only enter **when higher timeframe trends confirm your decision.**
-                                    - When **5-minute, 1-hour, and 4-hour trends align, increase position size.**
-                                    - Prioritize **entering a trade based on the most recent Buy/Sell signal** from BlackFlag FTS, UT Bot Alerts, Volume Oscillator.
-                                    - **If signals are unclear or weak, default to HOLD.**
-                                    - **Minimize overtrading** and preserve capital for high-confidence setups.
-
-                                    ** Market Sentiment & Macro Consideration:**
-                                    - **Fear & Greed Index** provides additional context but is not a standalone decision factor.
-                                    - **Major news events (ETF approvals, regulations, security breaches)** should influence the strategy.
-                                    - **Avoid unnecessary risk during extreme volatility unless directional strength is confirmed.**
-
-                                    ** Position Sizing Based on Signal Strength:**
-                                    - **5-minute trend only**: Use **10-20% of balance**  
-                                    - **5-minute & 1-hour align**: Use **up to 50% of balance**  
-                                    - **5-minute, 1-hour, and 4-hour all align**: Use **up to 65% of balance**  
-
-                                    ---
-                                    
-                                    ** [Market Data]**
-                                    - Current Price: {current_price:.2f} USDT
-                                    **5-Minute Chart Data:**
-                                    - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
-                                    - MACD: {df_5min['macd'].iloc[-1]:.2f}
-                                    - Bollinger Bands (20): Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}, Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}, Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
-                                    - Stochastic Oscillator (14, 3): %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
-                                    - ATR: {df_5min['atr'].iloc[-1]:.2f}
-
-                                    **1-Hour Chart Data:**
-                                    - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
-                                    - MACD: {df_hourly['macd'].iloc[-1]:.2f}
-                                    - Bollinger Bands: Middle: {df_hourly['bb_bbm'].iloc[-1]:.2f}, Upper: {df_hourly['bb_bbh'].iloc[-1]:.2f}, Lower: {df_hourly['bb_bbl'].iloc[-1]:.2f}
-                                    - Stochastic Oscillator (14, 3): %K: {df_hourly['stoch_k'].iloc[-1]:.2f}, %D: {df_hourly['stoch_d'].iloc[-1]:.2f}
-                                    - ATR: {df_hourly['atr'].iloc[-1]:.2f}
-
-                                    **4-Hour Chart Data:**
-                                    - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
-                                    - MACD: {df_4h['macd'].iloc[-1]:.2f}
-                                    - Bollinger Bands: Middle: {df_4h['bb_bbm'].iloc[-1]:.2f}, Upper: {df_4h['bb_bbh'].iloc[-1]:.2f}, Lower: {df_4h['bb_bbl'].iloc[-1]:.2f}
-                                    - Stochastic Oscillator (14, 3): %K: {df_4h['stoch_k'].iloc[-1]:.2f}, %D: {df_4h['stoch_d'].iloc[-1]:.2f}
-                                    - ATR: {df_4h['atr'].iloc[-1]:.2f}
-
-                                    ---
-                                    
-                                    **[Portfolio]**
-                                    - Free USDT Balance: {free_usdt:.0f}
-                                    - Used USDT Holdings: {used_usdt:.4f} 
-                                    - BTC Average Purchase Price: {btc_avg_buy_price:.0f} USDT
-
-                                    **Recent Trading Reflection:**
-
-                                    ---
-                                    
-                                    **[Trading Method]**
-                                    {youtube_transcript2}
-
-                                    ---
-                                    
-                                    ** Response Format (MUST be JSON):**
-                                    - Decision: `"buy"`, `"sell"`, or `"hold"`
-                                    - If `"buy"`, include:
-                                    - `percentage` (1-100% of available USDT)
-                                    - `stop_loss_price`
-                                    - `pl_ratio` (between 1.5 and 3)
-                                    - If `"sell"`, include:
-                                    - `percentage` (1-100% of BTC holdings)
-                                    - `stop_loss_price`
-                                    - `pl_ratio` (between 1.5 and 3)
-                                    - If `"hold"`, set `percentage = 0`
-                                    - Justification must consider **5-min, 1-hour, and 4-hour trends.**
-                                    """
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": f"""Current investment status: {json.dumps(filtered_balances)}
-                                Orderbook: {json.dumps(modified_orderbook)}
-                                5-minute OHLCV with indicators (5 hours): {df_5min.to_json()}
-                                Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
-                                4-hour OHLCV with indicators (3 days): {df_4h.to_json()}
-                                Recent news headlines: {json.dumps(news_headlines)}
-                                Fear and Greed Index: {json.dumps(fear_greed_index)}"""
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{chart_image}"
-                                }
-                            }
-                        ]
-                    }
-                ]
-        logger.info("Final message structure prepared")
-
-    except Exception as e:
-        logger.error("Error preparing message: %s", str(e))
-        raise
-
-
     ### AI에게 데이터 제공하고 판단 받기
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     if not client.api_key:
@@ -1875,14 +1704,12 @@ def ai_trading():
                                     - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
                                     - MACD: {df_hourly['macd'].iloc[-1]:.2f}
                                     - Bollinger Bands: Middle: {df_hourly['bb_bbm'].iloc[-1]:.2f}, Upper: {df_hourly['bb_bbh'].iloc[-1]:.2f}, Lower: {df_hourly['bb_bbl'].iloc[-1]:.2f}
-                                    - Stochastic Oscillator (14, 3): %K: {df_hourly['stoch_k'].iloc[-1]:.2f}, %D: {df_hourly['stoch_d'].iloc[-1]:.2f}
                                     - ATR: {df_hourly['atr'].iloc[-1]:.2f}
 
                                      **4-Hour Chart Data:**
                                     - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
                                     - MACD: {df_4h['macd'].iloc[-1]:.2f}
                                     - Bollinger Bands: Middle: {df_4h['bb_bbm'].iloc[-1]:.2f}, Upper: {df_4h['bb_bbh'].iloc[-1]:.2f}, Lower: {df_4h['bb_bbl'].iloc[-1]:.2f}
-                                    - Stochastic Oscillator (14, 3): %K: {df_4h['stoch_k'].iloc[-1]:.2f}, %D: {df_4h['stoch_d'].iloc[-1]:.2f}
                                     - ATR: {df_4h['atr'].iloc[-1]:.2f}
 
                                     ---
@@ -1908,7 +1735,7 @@ def ai_trading():
                                     - `percentage` (1-100% of available USDT)
                                     - `stop_loss_price`
                                     - `pl_ratio` (between 1.5 and 3)
-                                    - If `"sell"`, include:
+                                    - If '"sell"', include:
                                     - `percentage` (1-100% of BTC holdings)
                                     - `stop_loss_price`
                                     - `pl_ratio` (between 1.5 and 3)
