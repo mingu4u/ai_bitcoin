@@ -1555,7 +1555,7 @@ def ai_trading():
         trader.exchange.fetch_ohlcv(
             "BTC/USDT",
             timeframe='5m',
-            limit=60
+            limit=93 # 60 + 33
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
@@ -1564,12 +1564,15 @@ def ai_trading():
     df_5min = dropna(df_5min)
     df_5min = add_indicators(df_5min)
     
+    # 마지막 60개 데이터만 선택 (NaN 제거)
+    df_5min = df_5min.tail(60)
+
     # 바이낸스 1시간봉 데이터 조회 (최근 24시간)
     df_hourly = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT", 
             timeframe='1h',
-            limit=24
+            limit=57 # 24 + 33
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
@@ -1578,12 +1581,15 @@ def ai_trading():
     df_hourly = dropna(df_hourly)
     df_hourly = add_indicators(df_hourly)
 
+    # 마지막 24개 데이터만 선택 (NaN 제거)
+    df_hourly = df_hourly.tail(24)
+
     # 바이낸스 4시간봉 데이터 조회 (최근 3일)
     df_4h = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT",
             timeframe='4h',
-            limit=18
+            limit=51 # 18 + 33
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
@@ -1592,6 +1598,8 @@ def ai_trading():
     df_4h = dropna(df_4h)
     df_4h = add_indicators(df_4h)    
 
+    # 마지막 18개 데이터만 선택 (NaN 제거)
+    df_4h = df_4h.tail(18)
 
     # 4. 공포 탐욕 지수 가져오기
     fear_greed_index = get_fear_and_greed_index()
