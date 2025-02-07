@@ -1613,6 +1613,39 @@ def ai_trading():
     f2.close()    
 
 
+    # AI 모델에 데이터 전달 직전
+    logger.info("Preparing data for AI model...")
+    try:
+        system_content = f"""
+        ** [Market Data]**
+        - Current Price: {current_price:.2f} USDT
+        """
+        logger.info("Basic market data formatted successfully")
+        
+        timeframe_data = f"""
+        **5-Minute Chart Data:**
+        - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
+        """
+        logger.info("5min data formatted successfully")
+        
+        hourly_data = f"""
+        **1-Hour Chart Data:**
+        - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
+        """
+        logger.info("Hourly data formatted successfully")
+        
+        four_hour_data = f"""
+        **4-Hour Chart Data:**
+        - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
+        """
+        logger.info("4h data formatted successfully")
+        
+        full_content = system_content + timeframe_data + hourly_data + four_hour_data
+    except Exception as e:
+        logger.error("Error formatting data: %s", str(e))
+        raise
+
+
     ### AI에게 데이터 제공하고 판단 받기
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     if not client.api_key:
@@ -1706,12 +1739,14 @@ def ai_trading():
                                     - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
                                     - MACD: {df_hourly['macd'].iloc[-1]:.2f}
                                     - Bollinger Bands: Middle: {df_hourly['bb_bbm'].iloc[-1]:.2f}, Upper: {df_hourly['bb_bbh'].iloc[-1]:.2f}, Lower: {df_hourly['bb_bbl'].iloc[-1]:.2f}
+                                    - Stochastic Oscillator (14, 3): %K: {df_hourly['stoch_k'].iloc[-1]:.2f}, %D: {df_hourly['stoch_d'].iloc[-1]:.2f}
                                     - ATR: {df_hourly['atr'].iloc[-1]:.2f}
 
                                      **4-Hour Chart Data:**
                                     - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
                                     - MACD: {df_4h['macd'].iloc[-1]:.2f}
                                     - Bollinger Bands: Middle: {df_4h['bb_bbm'].iloc[-1]:.2f}, Upper: {df_4h['bb_bbh'].iloc[-1]:.2f}, Lower: {df_4h['bb_bbl'].iloc[-1]:.2f}
+                                    - Stochastic Oscillator (14, 3): %K: {df_4h['stoch_k'].iloc[-1]:.2f}, %D: {df_4h['stoch_d'].iloc[-1]:.2f}
                                     - ATR: {df_4h['atr'].iloc[-1]:.2f}
 
                                     ---
@@ -1754,7 +1789,6 @@ def ai_trading():
                                 Orderbook: {json.dumps(modified_orderbook)}
                                 5-minute OHLCV with indicators (5 hours): {df_5min.to_json()}
                                 Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
-                                4-hour OHLCV with indicators (3 days): {df_4h.to_json()}
                                 Recent news headlines: {json.dumps(news_headlines)}
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}"""
                             },
