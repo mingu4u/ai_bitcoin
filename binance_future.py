@@ -1587,10 +1587,10 @@ def ai_trading():
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
-    df_4h['timestamp'] = pd.to_datetime(df_hourly['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
-    df_4h = df_hourly.set_index('timestamp')
-    df_4h = dropna(df_hourly)
-    df_4h = add_indicators(df_hourly)    
+    df_4h['timestamp'] = pd.to_datetime(df_4h['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
+    df_4h = df_4h.set_index('timestamp')
+    df_4h = dropna(df_4h)
+    df_4h = add_indicators(df_4h)    
 
 
     # 4. 공포 탐욕 지수 가져오기
@@ -1622,8 +1622,9 @@ def ai_trading():
                 "fear_greed_index": fear_greed_index,
                 "news_headlines": news_headlines,
                 "orderbook": modified_orderbook,
-                "5min_ohlcv": df_5min.to_dict(),     # 5시간치 5분봉 데이터 추가
-                "hourly_ohlcv": df_hourly.to_dict()  # 24시간치 60분봉 데이터 추가
+                "5min_ohlcv": df_5min.to_dict(),      # 5시간치 5분봉 데이터 추가
+                "hourly_ohlcv": df_hourly.to_dict(),  # 24시간치 1시간봉 데이터 추가
+                "4hour_ohlcv": df_4h.to_dict()        # 2일치 4시간봉 데이터 추가
             }
             # 반성 및 개선 내용 생성
             reflection = generate_reflection(recent_trades, current_market_data)
@@ -1644,26 +1645,27 @@ def ai_trading():
                                     - Leverage setting: {trader.leverage}
                                     - Position Mode: One-way Mode
                                     - Margin Mode: Isolated
+
                                     - **Risk Management:**
                                         - Invest up to **65% of assets** per order when **all signals align**.
                                         - If signal strength is weak or contradicting trends appear, **reduce trade size or avoid entry**.
                                         - Utilize **volatility-based stop-loss (ATR x2 rule) dynamically.**
                                         - **Minimize unnecessary trades to reduce fees**.
 
-                                    **🔹 Multi-Timeframe Analysis (5m, 1h, 4h):**
+                                    ** Multi-Timeframe Analysis (5m, 1h, 4h):**
                                     - **5-minute chart is the primary reference,** but trade execution must be confirmed by at least **one longer timeframe (1-hour or 4-hour).**
                                     - Avoid **counter-trend trades against strong 1-hour or 4-hour trends.**
                                     - If the **5-minute trend contradicts 1-hour and 4-hour charts, avoid or reduce trade size.**
                                     - **Prioritize trends aligning across multiple timeframes** before taking action.
 
-                                    **🔹 Trading Indicators:**
+                                    ** Trading Indicators:**
                                     - Primary Method: BlackFlag FTS, UT Bot Alerts, Volume Oscillator (found in the provided TradingView chart).
                                     - Supporting Indicators: RSI, MACD, Bollinger Bands, Stochastic Oscillator.
                                     - **ATR (Average True Range) for stop-loss setting:**  
                                     `stop_loss_price = entry_price - (atr_value * 2)`
                                     - **Only trade when at least three indicators align with longer timeframe trends.**
 
-                                    **🔹 Execution & Filtering Strategy:**
+                                    ** Execution & Filtering Strategy:**
                                     - **Avoid trading in sideways or choppy markets.**
                                     - Only enter **when higher timeframe trends confirm your decision.**
                                     - When **5-minute, 1-hour, and 4-hour trends align, increase position size.**
@@ -1671,34 +1673,34 @@ def ai_trading():
                                     - **If signals are unclear or weak, default to HOLD.**
                                     - **Minimize overtrading** and preserve capital for high-confidence setups.
 
-                                    **🔹 Market Sentiment & Macro Consideration:**
+                                    ** Market Sentiment & Macro Consideration:**
                                     - **Fear & Greed Index** provides additional context but is not a standalone decision factor.
                                     - **Major news events (ETF approvals, regulations, security breaches)** should influence the strategy.
                                     - **Avoid unnecessary risk during extreme volatility unless directional strength is confirmed.**
 
-                                    **🔹 Position Sizing Based on Signal Strength:**
+                                    ** Position Sizing Based on Signal Strength:**
                                     - **5-minute trend only**: Use **10-20% of balance**  
                                     - **5-minute & 1-hour align**: Use **up to 50% of balance**  
                                     - **5-minute, 1-hour, and 4-hour all align**: Use **up to 65% of balance**  
 
                                     ---
                                     
-                                    **📈 [Market Data]**
+                                    ** [Market Data]**
                                     - Current Price: {current_price:.2f} USDT
-                                    ✅ **5-Minute Chart Data:**
+                                     **5-Minute Chart Data:**
                                     - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
                                     - MACD: {df_5min['macd'].iloc[-1]:.2f}
                                     - Bollinger Bands (20): Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}, Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}, Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
                                     - Stochastic Oscillator (14, 3): %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
                                     - ATR: {df_5min['atr'].iloc[-1]:.2f}
 
-                                    ✅ **1-Hour Chart Data:**
+                                     **1-Hour Chart Data:**
                                     - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
                                     - MACD: {df_hourly['macd'].iloc[-1]:.2f}
                                     - Bollinger Bands: Middle: {df_hourly['bb_bbm'].iloc[-1]:.2f}, Upper: {df_hourly['bb_bbh'].iloc[-1]:.2f}, Lower: {df_hourly['bb_bbl'].iloc[-1]:.2f}
                                     - ATR: {df_hourly['atr'].iloc[-1]:.2f}
 
-                                    ✅ **4-Hour Chart Data:**
+                                     **4-Hour Chart Data:**
                                     - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
                                     - MACD: {df_4h['macd'].iloc[-1]:.2f}
                                     - Bollinger Bands: Middle: {df_4h['bb_bbm'].iloc[-1]:.2f}, Upper: {df_4h['bb_bbh'].iloc[-1]:.2f}, Lower: {df_4h['bb_bbl'].iloc[-1]:.2f}
@@ -1721,7 +1723,7 @@ def ai_trading():
 
                                     ---
                                     
-                                    **📢 Response Format (MUST be JSON):**
+                                    ** Response Format (MUST be JSON):**
                                     - Decision: `"buy"`, `"sell"`, or `"hold"`
                                     - If `"buy"`, include:
                                     - `percentage` (1-100% of available USDT)
@@ -1833,7 +1835,7 @@ def ai_trading():
             raise
             
         # 거래 실행 여부와 관계없이 현재 잔고 조회
-        time.sleep(2)  # API 호출 제한을 고려하여 잠시 대기
+        time.sleep(1)  # API 호출 제한을 고려하여 잠시 대기
         balance = trader.exchange.fetch_balance()
         usdt_balance = balance['USDT']
         free_usdt = usdt_balance['free']    # 사용 가능한 잔고
