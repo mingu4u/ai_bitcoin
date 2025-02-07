@@ -40,33 +40,28 @@ def calculate_performance_metrics(trades_df):
            'risk_adjusted_return': 0
        }
    
-   # 시간순 정렬
    trades_df = trades_df.sort_values('timestamp')
    
-   # 초기 자산과 최종 자산
-   initial_assets = trades_df.iloc[0]['total_assets']
-   final_assets = trades_df.iloc[-1]['total_assets']
-   total_return = ((final_assets - initial_assets) / initial_assets) * 100
+   # 총 수익률
+   total_return = ((trades_df['total_assets'].iloc[-1] - trades_df['total_assets'].iloc[0]) 
+                  / trades_df['total_assets'].iloc[0]) * 100
    
-   # 승률 계산 (total_assets가 증가한 거래의 비율)
-   assets_changes = trades_df['total_assets'].pct_change()
-   wins = len(assets_changes[assets_changes > 0])
-   win_rate = (wins / len(assets_changes)) * 100 if len(assets_changes) > 0 else 0
+   # 승률 계산
+   trades_df['pnl'] = trades_df['total_assets'].diff()
+   wins = (trades_df['pnl'] > 0).sum()
+   win_rate = (wins / len(trades_df[trades_df['pnl'].notna()])) * 100
    
    # 평균 수익/거래
-   avg_profit_per_trade = assets_changes.mean() * 100 if len(assets_changes) > 0 else 0
+   avg_profit_per_trade = trades_df['pnl'].mean() / trades_df['total_assets'].shift(1) * 100
    
-   # 최대 낙폭 (Maximum Drawdown) 계산
-   peak = trades_df['total_assets'].expanding(min_periods=1).max()
-   drawdown = ((trades_df['total_assets'] - peak) / peak) * 100
-   max_drawdown = abs(drawdown.min())
+   # 최대 낙폭
+   cummax = trades_df['total_assets'].cummax()
+   drawdowns = (trades_df['total_assets'] - cummax) / cummax * 100
+   max_drawdown = abs(drawdowns.min())
    
-   # 리스크 조정 수익률 (Sharpe Ratio와 유사)
+   # 리스크 조정 수익률 (Daily Sharpe Ratio)
    daily_returns = trades_df['total_assets'].pct_change()
-   risk_free_rate = 0.02  # 연간 2%로 가정
-   daily_rf_rate = (1 + risk_free_rate) ** (1/365) - 1
-   excess_returns = daily_returns - daily_rf_rate
-   risk_adjusted_return = (excess_returns.mean() / excess_returns.std()) * math.sqrt(365) if len(excess_returns) > 0 else 0
+   risk_adjusted_return = (daily_returns.mean() / daily_returns.std()) if daily_returns.std() != 0 else 0
    
    return {
        'total_trades': len(trades_df),
@@ -102,10 +97,10 @@ def main():
        st.write(f"First trade date: {filtered_df['timestamp'].min()}")
        st.write(f"Last trade date: {filtered_df['timestamp'].max()}")
        
-       # reflection 표시 (데이터가 있을 경우에만)
+       # reflection을 확장 가능한 섹션으로 표시
        if not df.empty and 'reflection' in df.columns and pd.notna(df.iloc[0]['reflection']):
-           st.write("Recent trade reflection:")
-           st.write(df.iloc[0]['reflection'])
+           with st.expander("Recent trade reflection"):
+               st.write(df.iloc[0]['reflection'])
    else:
        st.write("No trades found for the selected type.")
 
@@ -216,15 +211,23 @@ def main():
        st.write("Trading Performance Comparison:")
        st.dataframe(comparison_data)
        
-       # 성과 비교 시각화
-       performance_fig = px.bar(
-           comparison_data,
-           x='Metric',
-           y=['AI Trading', 'Manual Trading'],
-           title='AI vs Manual Trading Performance Comparison',
-           barmode='group'
-       )
-       st.plotly_chart(performance_fig)
+       # 성과 비교 시각화 - 각 지표별로 분리
+       metrics_to_plot = {
+           'Win Rate (%)': 'Win Rate',
+           'Total Return (%)': 'Returns',
+           'Risk-Adjusted Return': 'Risk-Adjusted'
+       }
+
+       for metric_name, metric_title in metrics_to_plot.items():
+           metric_data = comparison_data[comparison_data['Metric'] == metric_name]
+           fig = px.bar(
+               metric_data,
+               x='Metric',
+               y=['AI Trading', 'Manual Trading'],
+               title=f'{metric_title} Comparison',
+               barmode='group'
+           )
+           st.plotly_chart(fig)
        
        # ROI 추이 비교
        if not ai_trades.empty and not manual_trades.empty:
