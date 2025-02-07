@@ -1107,36 +1107,86 @@ def generate_reflection(trades_df, current_market_data):
     
     # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
     response = client.chat.completions.create(
-        model="gpt-4o-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
+        model="gpt-4o-mini",
         messages=[
             {
                 "role": "system",
-                "content": "You are an AI trading assistant tasked with analyzing recent trading performance and current market conditions to generate insights and improvements for future trading decisions."
+                "content": """
+    You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance and current market conditions to generate specific, actionable insights and recommendations that can improve future trading decisions made by the Trading AI. Your analysis should focus on enhancing trading performance by providing clear feedback on past trades, identifying areas of improvement, and suggesting precise adjustments to the trading strategy, based solely on the data provided.
+    """
             },
             {
                 "role": "user",
                 "content": f"""
-                Recent 40 trading data:
-                {trades_df.to_json(orient='records')}
-                
-                Current market data:
-                {current_market_data}
-                
-                Overall performance over the last 40 trades : {performance:.2f}%
-                
-                Please analyze this data and provide:
-                1. Evaluate recent trade decisions: were they justified?
-                2. Analyze success/failure factors, impact of trade frequency & fees.
-                3. Suggest improvements for fewer trades, higher profit, considering current performance.
-                4. Identify market trends, better exploitation strategies.
-                5. Suggest optimal trade holding periods.
-                                
-                Limit your response to 350 words or less.
-                """
+    Please analyze the following data and provide a structured report with actionable recommendations for improving future trading decisions.
+
+    **Data:**
+    - **Recent 40 Trades:**
+    {trades_df.to_json(orient='records')}
+
+    - **Current Market Data:**
+    {current_market_data}
+
+    - **Overall Performance Over the Last 40 Trades:** {performance:.2f}%
+
+    **Instructions:**
+
+    1. **Trade Evaluation:**
+    - For each trade, determine if the decision was justified based on standard trading practices and the market conditions at the time.
+    - Identify any deviations from logical trading strategies, including entry/exit points, position sizing, and stop-loss settings.
+    - Note patterns in the timing of entries and exits concerning multi-timeframe trends.
+
+    2. **Analysis of Success and Failure Factors:**
+    - Highlight common factors in profitable trades (e.g., alignment of indicators, favorable market conditions).
+    - Identify recurring issues in unprofitable trades (e.g., trading against the trend, misinterpretation of signals).
+    - Assess the impact of trade frequency and transaction fees on net profitability.
+
+    3. **Recommendations for Improvement:**
+    - Provide specific, actionable suggestions to reduce unnecessary trades and enhance decision-making.
+    - Recommend adjustments to strategy parameters (e.g., indicator settings, stop-loss levels).
+    - Suggest ways to improve risk management practices.
+
+    4. **Market Trend Analysis:**
+    - Analyze current trends across 5-minute, 1-hour, and 4-hour timeframes.
+    - Recommend strategies to better exploit prevailing market conditions.
+
+    5. **Optimal Holding Periods:**
+    - Based on historical trade data, suggest optimal holding periods for trades to maximize profitability.
+
+    **Response Format:**
+
+    Please structure your response in the following JSON format for seamless integration with the Trading AI:
+
+    ```json
+    {
+    "trade_evaluation": [
+        {
+        "trade_id": "unique_trade_identifier",
+        "justified": true_or_false,
+        "deviations": ["list_of_deviations_from_standard_practices"],
+        "comments": "brief_comment_on_trade"
+        }
+    ],
+    "success_factors": ["list_of_factors_contributing_to_profitable_trades"],
+    "failure_factors": ["list_of_factors_contributing_to_unprofitable_trades"],
+    "recommendations": ["list_of_actionable_recommendations"],
+    "market_trend_analysis": "summary_of_current_market_trends_and_suggested_strategies",
+    "optimal_holding_periods": "suggested_holding_periods_with_rationale"
+    }
+    ```
+
+    **Notes:**
+    - Base all analysis and recommendations solely on the data provided.
+    - Ensure that the recommendations are practical and actionable.
+    - Keep the response clear and concise.
+    - Limit your response to 500 words or less.
+
+    """
             }
         ]
-    )
-    
+    )  
+
+
     try:
         response_content = response.choices[0].message.content
         return response_content
@@ -1514,7 +1564,7 @@ def ai_trading():
     df_5min = dropna(df_5min)
     df_5min = add_indicators(df_5min)
     
-    # 바이낸스 60분봉 데이터 조회 (최근 24시간)
+    # 바이낸스 1시간봉 데이터 조회 (최근 24시간)
     df_hourly = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT", 
@@ -1527,6 +1577,20 @@ def ai_trading():
     df_hourly = df_hourly.set_index('timestamp')
     df_hourly = dropna(df_hourly)
     df_hourly = add_indicators(df_hourly)
+
+    # 바이낸스 4시간봉 데이터 조회 (최근 2일)
+    df_4h = pd.DataFrame(
+        trader.exchange.fetch_ohlcv(
+            "BTC/USDT",
+            timeframe='4h',
+            limit=12
+        ),
+        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    )
+    df_4h['timestamp'] = pd.to_datetime(df_hourly['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
+    df_4h = df_hourly.set_index('timestamp')
+    df_4h = dropna(df_hourly)
+    df_4h = add_indicators(df_hourly)    
 
 
     # 4. 공포 탐욕 지수 가져오기
@@ -1566,71 +1630,110 @@ def ai_trading():
     
             # AI 모델에 반성 내용 제공
             response = client.chat.completions.create(
-                model="gpt-4o-mini", #gpt-4o-2024-11-20 # gpt-4o-mini
+                model="gpt-4o-mini",
                 messages=[
                     {
                         "role": "system",
-                        "content": f"""You are a Bitcoin futures day trader who specializes in short-term trading based on 5-minute candlestick charts. You are trading two-way positions (buy or sell) and focus on analyzing 5-minute timeframes to identify quick market moves and opportunities while also considering the broader market conditions. You analyze the data provided to determine whether to take a buy(long), sell(short), or hold position at the current time. Consider the following when analyzing
-                        - Cryptocurrency exchange : Binance
-                        - leverage setting : {trader.leverage}
-                        - Position Mode : One-way Mode
-                        - Margin Mode : isolated
-                        - Manage risk by only investing up to 65 percent of your assets in a single order
-                        - Focus on 5-minute chart patterns and movements for primary analysis, but use 60-minute data for medium-term trends
-                        - Prioritize clear buy or sell signals based on a [trading method] below (using BlackFlag FTS, UT Bot Alerts, Volume oscillator) 
-                        - As a next priority, note the indicators(RSI, MACD, Bollinger Bands, Stochastic Oscillator).
-                        - Use ATR to understand market volatility, be cautious during high volatility unless signals are very strong.
-                        - Quick trend reversals and continuation patterns
-                        - Support and resistance levels visible on 5-minute charts
-                        - Recent news headlines and their immediate impact on Bitcoin price
-                        - Fear/Greed Index can provide market sentiment context but should not be the primary decision driver.
-                        - Overall market sentiment
-                        - Patterns and trends visible in the chart image
-                        - Recent trading performance and reflection
+                        "content": 
+                        f"""You are a Bitcoin futures day trader who specializes in short-term trading based on the 5-minute candlestick chart. 
+                                    However, to enhance accuracy and profitability, you must align your decision-making process with higher timeframes as well, considering both the 1-hour and 4-hour charts. 
+                                    Your goal is to maximize gains while minimizing unnecessary trades and transaction fees.
 
-                        [Market Data]
-                        - Current Price: {current_price:.2f} USDT
-                        - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
-                        - MACD: {df_5min['macd'].iloc[-1]:.2f}
-                        - Fear/Greed Index: {fear_greed_index['value']} ({fear_greed_index['value_classification']})
-                        - Bollinger Bands (20): Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}, Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}, Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
-                        - Stochastic Oscillator (14, 3): %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
-                        - Average True Range (ATR): {df_5min['atr'].iloc[-1]:.2f}
+                                    **Trading Conditions:**
+                                    - Cryptocurrency exchange: Binance
+                                    - Leverage setting: {trader.leverage}
+                                    - Position Mode: One-way Mode
+                                    - Margin Mode: Isolated
+                                    - **Risk Management:**
+                                        - Invest up to **65% of assets** per order when **all signals align**.
+                                        - If signal strength is weak or contradicting trends appear, **reduce trade size or avoid entry**.
+                                        - Utilize **volatility-based stop-loss (ATR x2 rule) dynamically.**
+                                        - **Minimize unnecessary trades to reduce fees**.
 
-                        [Portfolio]
-                        - free USDT Balance: {free_usdt:.0f}
-                        - used USDT Holdings: {used_usdt:.4f} 
-                        - BTC Average Purchase Price: {btc_avg_buy_price:.0f} USDT
+                                    **🔹 Multi-Timeframe Analysis (5m, 1h, 4h):**
+                                    - **5-minute chart is the primary reference,** but trade execution must be confirmed by at least **one longer timeframe (1-hour or 4-hour).**
+                                    - Avoid **counter-trend trades against strong 1-hour or 4-hour trends.**
+                                    - If the **5-minute trend contradicts 1-hour and 4-hour charts, avoid or reduce trade size.**
+                                    - **Prioritize trends aligning across multiple timeframes** before taking action.
 
-                        Recent trading reflection:
-                        {reflection}
+                                    **🔹 Trading Indicators:**
+                                    - Primary Method: BlackFlag FTS, UT Bot Alerts, Volume Oscillator (found in the provided TradingView chart).
+                                    - Supporting Indicators: RSI, MACD, Bollinger Bands, Stochastic Oscillator.
+                                    - **ATR (Average True Range) for stop-loss setting:**  
+                                    `stop_loss_price = entry_price - (atr_value * 2)`
+                                    - **Only trade when at least three indicators align with longer timeframe trends.**
 
-                        Particularly important is to always refer to the [trading method] below to help you assess your current situation and make trading decisions.
+                                    **🔹 Execution & Filtering Strategy:**
+                                    - **Avoid trading in sideways or choppy markets.**
+                                    - Only enter **when higher timeframe trends confirm your decision.**
+                                    - When **5-minute, 1-hour, and 4-hour trends align, increase position size.**
+                                    - Prioritize **entering a trade based on the most recent Buy/Sell signal** from BlackFlag FTS, UT Bot Alerts, Volume Oscillator.
+                                    - **If signals are unclear or weak, default to HOLD.**
+                                    - **Minimize overtrading** and preserve capital for high-confidence setups.
 
-                        [trading method]
-                        {youtube_transcript2}
+                                    **🔹 Market Sentiment & Macro Consideration:**
+                                    - **Fear & Greed Index** provides additional context but is not a standalone decision factor.
+                                    - **Major news events (ETF approvals, regulations, security breaches)** should influence the strategy.
+                                    - **Avoid unnecessary risk during extreme volatility unless directional strength is confirmed.**
 
-                        You can find the BlackFlag FTS, UT Bot Alerts indicators, Volume Oscillator from the TradingView chart screenshot provided in the image of the user message. 
-                        These technical indicators are essential for following the trading strategy outlined above.
-                        "stop loss price" should be based on [trading method] above and ATR indicator.(how to use ATR to set stop loss price : entry_price - (atr_value * 2))
-                        For optimal timing of entry, when deciding to enter a position, the more recent the Buy or Sell signal from the three indicators, the better.
-                        **Minimize unnecessary trades to reduce fees.** Only trade when strong signals of these three indicators align.
-                        However, if other factors are sufficient reasons to enter a long(buy) or short(sell) position, you may trade.
-                        Aim for long-term profit maximization, being mindful of trading fees, and improving portfolio performance.
+                                    **🔹 Position Sizing Based on Signal Strength:**
+                                    - **5-minute trend only**: Use **10-20% of balance**  
+                                    - **5-minute & 1-hour align**: Use **up to 50% of balance**  
+                                    - **5-minute, 1-hour, and 4-hour all align**: Use **up to 65% of balance**  
 
-                        Based on this trading method, analyze the current market situation and make a judgment by synthesizing it with the provided data and recent performance reflection.
+                                    ---
+                                    
+                                    **📈 [Market Data]**
+                                    - Current Price: {current_price:.2f} USDT
+                                    ✅ **5-Minute Chart Data:**
+                                    - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
+                                    - MACD: {df_5min['macd'].iloc[-1]:.2f}
+                                    - Bollinger Bands (20): Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}, Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}, Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
+                                    - Stochastic Oscillator (14, 3): %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
+                                    - ATR: {df_5min['atr'].iloc[-1]:.2f}
 
-                        Response format:
-                        1. Decision (buy, sell, or hold)
-                        2. If the decision is 'buy', provide a percentage (1-100) of available USDT to use for buying. and show stop_loss_price, P&L ratio.
-                        If the decision is 'sell', provide a percentage (1-100) of held BTC/USDT to sell. and show stop_loss_price, P&L ratio.
-                        If the decision is 'hold', set the percentage to 0.
-                        3. Reason for your decision (it should include not only market situation and chart status, but also recent status or change of BlackFlag FTS, UT Bot Alerts, Volume Oscillator)
+                                    ✅ **1-Hour Chart Data:**
+                                    - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
+                                    - MACD: {df_hourly['macd'].iloc[-1]:.2f}
+                                    - Bollinger Bands: Middle: {df_hourly['bb_bbm'].iloc[-1]:.2f}, Upper: {df_hourly['bb_bbh'].iloc[-1]:.2f}, Lower: {df_hourly['bb_bbl'].iloc[-1]:.2f}
+                                    - ATR: {df_hourly['atr'].iloc[-1]:.2f}
 
-                        Ensure that the percentage is an integer between 1 and 100 for buy/sell decisions, and exactly 0 for hold decisions.
-                        Your percentage should reflect the strength of your conviction in the decision based on the analyzed data.
-                        Depending on the strength of the entry signal, P&L ratio should between 1.5~3 value  (default 1.5) 
-                        """
+                                    ✅ **4-Hour Chart Data:**
+                                    - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
+                                    - MACD: {df_4h['macd'].iloc[-1]:.2f}
+                                    - Bollinger Bands: Middle: {df_4h['bb_bbm'].iloc[-1]:.2f}, Upper: {df_4h['bb_bbh'].iloc[-1]:.2f}, Lower: {df_4h['bb_bbl'].iloc[-1]:.2f}
+                                    - ATR: {df_4h['atr'].iloc[-1]:.2f}
+
+                                    ---
+                                    
+                                    **[Portfolio]**
+                                    - Free USDT Balance: {free_usdt:.0f}
+                                    - Used USDT Holdings: {used_usdt:.4f} 
+                                    - BTC Average Purchase Price: {btc_avg_buy_price:.0f} USDT
+
+                                    **Recent Trading Reflection:**
+                                    {reflection}
+
+                                    ---
+                                    
+                                    **[Trading Method]**
+                                    {youtube_transcript2}
+
+                                    ---
+                                    
+                                    **📢 Response Format (MUST be JSON):**
+                                    - Decision: `"buy"`, `"sell"`, or `"hold"`
+                                    - If `"buy"`, include:
+                                    - `percentage` (1-100% of available USDT)
+                                    - `stop_loss_price`
+                                    - `pl_ratio` (between 1.5 and 3)
+                                    - If `"sell"`, include:
+                                    - `percentage` (1-100% of BTC holdings)
+                                    - `stop_loss_price`
+                                    - `pl_ratio` (between 1.5 and 3)
+                                    - If `"hold"`, set `percentage = 0`
+                                    - Justification must consider **5-min, 1-hour, and 4-hour trends.**
+                                    """
                     },
                     {
                         "role": "user",
@@ -1641,6 +1744,7 @@ def ai_trading():
                                 Orderbook: {json.dumps(modified_orderbook)}
                                 5-minute OHLCV with indicators (5 hours): {df_5min.to_json()}
                                 Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
+                                4-hour OHLCV with indicators (2 days): {df_4h.to_json()}
                                 Recent news headlines: {json.dumps(news_headlines)}
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}"""
                             },
