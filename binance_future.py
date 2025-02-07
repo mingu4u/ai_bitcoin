@@ -1855,7 +1855,19 @@ def ai_trading():
             total_balance = float(balance['USDT']['free'])
             
             # 주문 금액 계산 (수수료 고려)
-            order_amount = total_balance * (result.percentage / 100) * 0.9996
+            # 포지션 보유 중일 때
+            if position_side:
+                # 보유 포지션과 반대 방향 주문이면 포지션 크기 기준으로 계산
+                if ((position_side == 'long' and result.decision == 'sell') or 
+                    (position_side == 'short' and result.decision == 'buy')):
+                        order_amount = position_size * (result.percentage / 100)
+                # 같은 방향 추가 주문이면 잔고 기준으로 계산
+                else:
+                    order_amount = total_balance * (result.percentage / 100) * 0.9996
+            else:  # 신규 진입일 때
+                order_amount = total_balance * (result.percentage / 100) * 0.9996
+
+            
             if result.decision == "buy":
                 # 롱 포지션 진입
                 order_info = trader.market_order_with_tp_sl(
