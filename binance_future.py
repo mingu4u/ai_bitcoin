@@ -1578,12 +1578,12 @@ def ai_trading():
     df_hourly = dropna(df_hourly)
     df_hourly = add_indicators(df_hourly)
 
-    # 바이낸스 4시간봉 데이터 조회 (최근 2일)
+    # 바이낸스 4시간봉 데이터 조회 (최근 3일)
     df_4h = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT",
             timeframe='4h',
-            limit=12
+            limit=18
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
@@ -1624,7 +1624,7 @@ def ai_trading():
                 "orderbook": modified_orderbook,
                 "5min_ohlcv": df_5min.to_dict(),      # 5시간치 5분봉 데이터 추가
                 "hourly_ohlcv": df_hourly.to_dict(),  # 24시간치 1시간봉 데이터 추가
-                "4hour_ohlcv": df_4h.to_dict()        # 2일치 4시간봉 데이터 추가
+                "4hour_ohlcv": df_4h.to_dict()        # 3일치 4시간봉 데이터 추가
             }
             # 반성 및 개선 내용 생성
             reflection = generate_reflection(recent_trades, current_market_data)
@@ -1746,7 +1746,7 @@ def ai_trading():
                                 Orderbook: {json.dumps(modified_orderbook)}
                                 5-minute OHLCV with indicators (5 hours): {df_5min.to_json()}
                                 Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
-                                4-hour OHLCV with indicators (2 days): {df_4h.to_json()}
+                                4-hour OHLCV with indicators (3 days): {df_4h.to_json()}
                                 Recent news headlines: {json.dumps(news_headlines)}
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}"""
                             },
