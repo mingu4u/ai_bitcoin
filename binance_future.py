@@ -1731,7 +1731,6 @@ def ai_trading():
                                     - BTC Average Purchase Price: {btc_avg_buy_price:.0f} USDT
 
                                     **Recent Trading Reflection:**
-                                    {reflection}
 
                                     ---
                                     
