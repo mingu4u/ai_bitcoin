@@ -1534,11 +1534,18 @@ def ai_trading():
     # 포지션 정보 조회
     positions = trader.exchange.fetch_positions([trader.symbol])
     btc_avg_buy_price = 0  # 기본값 설정
+    position_side = None
+    position_size = 0
+    unrealized_pnl = 0
 
     for position in positions:
         if float(position.get('contracts', 0) or 0) != 0:
             btc_avg_buy_price = float(position['entryPrice'])
+            position_side = position['side']  # 'long' 또는 'short'
+            position_size = float(position['notional']) # contracts * entryPrice = USDT 단위
+            unrealized_pnl = float(position.get('percentage', 0))  # 수익률(%)
             break
+
 
     # 2. 오더북(호가 데이터) 조회
     orderbook = trader.exchange.fetch_order_book('BTC/USDT')
@@ -1650,13 +1657,44 @@ def ai_trading():
                                     - Cryptocurrency exchange: Binance
                                     - Leverage setting: {trader.leverage}
                                     - Position Mode: One-way Mode
-                                    - Margin Mode: Isolated
+                                    - Margin Mode: Isolated                       
 
-                                    - **Risk Management:**
-                                        - Invest up to **65% of assets** per order when **all signals align**.
-                                        - If signal strength is weak or contradicting trends appear, **reduce trade size or avoid entry**.
-                                        - Utilize **volatility-based stop-loss (ATR x2 rule) dynamically.**
-                                        - **Minimize unnecessary trades to reduce fees**.
+                                    **Position Management:**
+                                    - **Current Position Status:**
+                                    - Long Position: {bool(position_side == 'long')}
+                                    - Short Position: {bool(position_side == 'short')}
+                                    - Position Size: {position_size if position_size else 0} USDT
+                                    - Entry Price: {btc_avg_buy_price:.2f} USDT
+                                    - Unrealized PNL: {unrealized_pnl:.2f}%
+
+                                    **Position Exit Rules:**
+                                    - For LONG positions:
+                                        - Consider partial/full take profit if bullish momentum weakens (RSI divergence, MACD crossover)
+                                        - Exit signal priority: Higher timeframe trend reversal > Technical indicator divergence > Support/Resistance levels
+                                        - Must issue "sell" decision at first sign of trend reversal to protect profits
+                                    
+                                    - For SHORT positions:
+                                        - Consider partial/full take profit if bearish momentum weakens (RSI divergence, MACD crossover)
+                                        - Exit signal priority: Higher timeframe trend reversal > Technical indicator divergence > Support/Resistance levels
+                                        - Must issue "buy" decision at first sign of trend reversal to protect profits
+
+                                    - Take Profit Strategy:
+                                        - Weak reversal signal: Reduce 30-50% of position
+                                        - Strong reversal signal: Full position exit
+                                        - Multiple timeframe confirmation: Immediate position exit
+
+
+
+                                    **Risk Management:**
+                                    - Invest up to **65% of assets** per order when **all signals align**
+                                    - If signal strength is weak or contradicting trends appear, **reduce trade size or avoid entry**
+                                    - Utilize **volatility-based stop-loss (ATR x2 rule) dynamically**
+                                    - **Monitor and protect open positions actively**:
+                                        - Issue exit signals based on both price action and position status
+                                        - Prioritize capital preservation over new entry opportunities
+                                        - Consider partial take profits in choppy market conditions
+                                    - **Minimize unnecessary trades to reduce fees**
+                                                                    
 
                                     ** Multi-Timeframe Analysis (5m, 1h, 4h):**
                                     - **5-minute chart is the primary reference,** but trade execution must be confirmed by at least **one longer timeframe (1-hour or 4-hour).**
@@ -1732,15 +1770,23 @@ def ai_trading():
                                     ** Response Format (MUST be JSON):**
                                     - Decision: `"buy"`, `"sell"`, or `"hold"`
                                     - If `"buy"`, include:
-                                    - `percentage` (1-100% of available USDT)
-                                    - `stop_loss_price`
-                                    - `pl_ratio` (between 1.5 and 3)
-                                    - If '"sell"', include:
-                                    - `percentage` (1-100% of BTC holdings)
-                                    - `stop_loss_price`
-                                    - `pl_ratio` (between 1.5 and 3)
+                                        - `percentage` (1-100% of available USDT)
+                                        - `stop_loss_price`
+                                        - `pl_ratio` (between 1.5 and 3)
+                                        - Consider "buy" for short position exits when showing weakness
+                                    - If `"sell"`, include:
+                                        - `percentage` (1-100% of BTC holdings)
+                                        - `stop_loss_price`
+                                        - `pl_ratio` (between 1.5 and 3)
+                                        - Consider "sell" for long position exits when showing weakness
                                     - If `"hold"`, set `percentage = 0`
-                                    - Justification must consider **5-min, 1-hour, and 4-hour trends.**
+                                    - When in active position:
+                                        - Weak reversal signal: Set percentage to 30-50% for partial exit
+                                        - Strong reversal signal: Set percentage to 100% for full exit
+                                    - Justification must consider: 
+                                        - **5-min, 1-hour, and 4-hour trends**
+                                        - Current position status and unrealized PNL
+                                        - Market momentum and reversal signals
                                     """
                     },
                     {
