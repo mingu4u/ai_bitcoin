@@ -855,37 +855,77 @@ class BinanceFuturesTrader:
 
         # 9. TP/SL 주문 생성
         try:
-            tp_side = 'sell' if side == 'buy' else 'buy'
-            
-            # TP 주문 생성
-            tp_order = self.exchange.create_order(
-                symbol=self.symbol,
-                type='TAKE_PROFIT_MARKET',
-                side=tp_side,
-                amount=quantity,
-                params={
-                    'stopPrice': tp_price,
-                    'closePosition': 'true',
-                    'clientOrderId': f"tp_{order['id']}"
-                }
-            )
+            # 현재 포지션이 있고, 반대 방향 주문일 경우 (포지션 축소/청산)
+            if current_position and (
+                (position_side == 'long' and side == 'sell') or 
+                (position_side == 'short' and side == 'buy')
+            ):
+                # 포지션 축소의 경우, 남은 포지션에 대해서만 TP/SL 설정
+                remaining_size = abs(float(current_position['contracts'])) - quantity
+                if remaining_size > 0:
+                    tp_side = 'buy' if position_side == 'short' else 'sell'  # 현재 포지션의 반대 방향
+                    
+                    # TP 주문 생성
+                    tp_order = self.exchange.create_order(
+                        symbol=self.symbol,
+                        type='TAKE_PROFIT_MARKET',
+                        side=tp_side,
+                        amount=remaining_size,  # 남은 포지션 크기만큼
+                        params={
+                            'stopPrice': tp_price,
+                            'closePosition': 'true',
+                            'clientOrderId': f"tp_{order['id']}"
+                        }
+                    )
 
-            # SL 주문 생성
-            sl_order = self.exchange.create_order(
-                symbol=self.symbol,
-                type='STOP_MARKET',
-                side=tp_side,
-                amount=quantity,
-                params={
-                    'stopPrice': sl_price,
-                    'closePosition': 'true',
-                    'clientOrderId': f"sl_{order['id']}"
-                }
-            )
+                    # SL 주문 생성
+                    sl_order = self.exchange.create_order(
+                        symbol=self.symbol,
+                        type='STOP_MARKET',
+                        side=tp_side,
+                        amount=remaining_size,  # 남은 포지션 크기만큼
+                        params={
+                            'stopPrice': sl_price,
+                            'closePosition': 'true',
+                            'clientOrderId': f"sl_{order['id']}"
+                        }
+                    )
+            
+            # 새로운 포지션 진입의 경우
+            else:
+                tp_side = 'sell' if side == 'buy' else 'buy'
+                
+                # TP 주문 생성
+                tp_order = self.exchange.create_order(
+                    symbol=self.symbol,
+                    type='TAKE_PROFIT_MARKET',
+                    side=tp_side,
+                    amount=quantity,
+                    params={
+                        'stopPrice': tp_price,
+                        'closePosition': 'true',
+                        'clientOrderId': f"tp_{order['id']}"
+                    }
+                )
+
+                # SL 주문 생성
+                sl_order = self.exchange.create_order(
+                    symbol=self.symbol,
+                    type='STOP_MARKET',
+                    side=tp_side,
+                    amount=quantity,
+                    params={
+                        'stopPrice': sl_price,
+                        'closePosition': 'true',
+                        'clientOrderId': f"sl_{order['id']}"
+                    }
+                )
 
         except Exception as e:
             self.logger.error(f"Error creating TP/SL orders: {e}")
-            
+            tp_order = None
+            sl_order = None
+
             # 10. 실패 시 복구 처리 제거 (이전 TP/SL 복구하지 않음)
             if 'order' in locals():
                 try:
