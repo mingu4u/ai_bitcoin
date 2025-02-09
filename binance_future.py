@@ -91,16 +91,16 @@ class BinanceFuturesTrader:
         """포지션 축소/청산 처리"""
         position_size = float(current_position['contracts'])
         position_notional = float(current_position['notional'])
-        self.logger.info(f"Reducing/Closing position of {position_size} contracts")
+        self.logger.info(f"Reducing/Closing position - Current Size: {position_size} contracts, Notional: {position_notional} USDT")
         
-        leveraged_amount = buy_amount * self.leverage
-        calculated_quantity = leveraged_amount / current_price
+        # 주문 비율 계산 (현재 포지션 대비)
+        reduction_ratio = buy_amount / position_notional
+        # 포지션 수량에 reduction_ratio를 적용
+        quantity = position_size * reduction_ratio
         
-        # 청산량 결정
-        if leveraged_amount >= abs(position_notional):
-            quantity = abs(position_size)
-            self.logger.info(f"Closing entire position of {quantity} contracts")
-            
+        self.logger.info(f"Reducing position by {quantity} contracts ({reduction_ratio * 100:.2f}%)")
+        
+        try:
             # 기존 주문 전체 취소
             try:
                 open_orders = self.exchange.fetch_open_orders(self.symbol)
@@ -108,12 +108,8 @@ class BinanceFuturesTrader:
                     self.exchange.cancel_order(order['id'], self.symbol)
             except Exception as e:
                 self.logger.error(f"Error cancelling orders: {e}")
-        else:
-            quantity = calculated_quantity
-            self.logger.info(f"Partially reducing position by {quantity} contracts")
-        
-        # 포지션 축소/청산 주문
-        try:
+            
+            # 포지션 축소/청산 주문
             order = self.exchange.create_market_order(
                 symbol=self.symbol,
                 side=side,
@@ -121,7 +117,7 @@ class BinanceFuturesTrader:
                 params={'reduceOnly': True}
             )
             
-            self.logger.info(f"Position reduced/closed at price: {current_price}")
+            self.logger.info(f"Position reduced at price: {current_price}")
             return {
                 'entry': order,
                 'tp': None,
@@ -129,7 +125,7 @@ class BinanceFuturesTrader:
             }
         except Exception as e:
             self.logger.error(f"Error creating reduction order: {e}")
-            return None   
+            return None  
 
     def _handle_position_increase(self, current_position, side, buy_amount, current_price,
                             sl_price, tp_price, pl_ratio, min_order_value):
