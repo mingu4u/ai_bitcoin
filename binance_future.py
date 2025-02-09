@@ -638,7 +638,7 @@ class BinanceFuturesTrader:
         SAFETY_MARGIN = 0.002          # 안전 마진 (0.2%)
         TRAILING_THRESHOLD = 0.01      # 트레일링 시작 기준 수익률 (1%)
         TRAILING_BUFFER = 0.003        # 트레일링 버퍼 (0.3%)
-        MINIMUM_ORDER_VALUE = 30      # 최소 주문 금액 (USDT)
+        MINIMUM_ORDER_VALUE = 10      # 최소 주문 금액 (USDT)
         MIN_PRICE_DIFF = 0.001        # 최소 가격 차이 (0.1%)
         MAX_BALANCE_USE = 0.65        # 최대 사용 가능 잔고 비율 (65%)
 
@@ -866,11 +866,12 @@ class BinanceFuturesTrader:
                     tp_side = 'buy' if position_side == 'short' else 'sell'  # 현재 포지션의 반대 방향
                     
                     # TP 주문 생성
+                    
                     tp_order = self.exchange.create_order(
                         symbol=self.symbol,
                         type='TAKE_PROFIT_MARKET',
                         side=tp_side,
-                        amount=remaining_size,  # 남은 포지션 크기만큼
+                        amount=abs(float(current_position['contracts'])),  # 남은 포지션 크기만큼 (x) || 0.001 BTC보다 작은 경우 TP/SL 주문 불가, 어짜피 closePosition이 전량청산이니까 그냥 초기 계약량 사용
                         params={
                             'stopPrice': tp_price,
                             'closePosition': 'true',
@@ -883,14 +884,14 @@ class BinanceFuturesTrader:
                         symbol=self.symbol,
                         type='STOP_MARKET',
                         side=tp_side,
-                        amount=remaining_size,  # 남은 포지션 크기만큼
+                        amount=abs(float(current_position['contracts'])),  # 남은 포지션 크기만큼 (x) || 0.001 BTC보다 작은 경우 TP/SL 주문 불가, 어짜피 closePosition이 전량청산이니까 그냥 초기 계약량 사용
                         params={
                             'stopPrice': sl_price,
                             'closePosition': 'true',
                             'clientOrderId': f"sl_{order['id']}"
                         }
                     )
-            
+                    
             # 새로운 포지션 진입의 경우
             else:
                 tp_side = 'sell' if side == 'buy' else 'buy'
