@@ -862,9 +862,15 @@ class BinanceFuturesTrader:
             ):
                 # 포지션 축소의 경우, 남은 포지션에 대해서만 TP/SL 설정
                 remaining_size = abs(float(current_position['contracts'])) - quantity
+
                 if remaining_size > 0:
                     tp_side = 'buy' if position_side == 'short' else 'sell'  # 현재 포지션의 반대 방향
-                    
+                    if position_side == 'long':
+                        sl_price = current_price - abs(sl_price-current_price)
+                        tp_price = current_price + pl_ratio*abs(sl_price-current_price)
+                    else:
+                        sl_price = current_price + abs(sl_price-current_price)
+                        tp_price = current_price - pl_ratio*abs(sl_price-current_price)
                     # TP 주문 생성
                     
                     tp_order = self.exchange.create_order(
