@@ -1,6 +1,4 @@
-
-How to trade
-Now let's take a look at how to use the three indicators to hit actual trade targets.
+Now let's take a look at how to use the three indicators(BlackFlag FTS, UT Bot Alerts, Volume Oscillator) to hit actual trade targets.
 
 Long Position (Buy)
 When the cloud band on the BlackFlag FTS switches from red to green.
