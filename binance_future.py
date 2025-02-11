@@ -1172,69 +1172,83 @@ def generate_reflection(trades_df, current_market_data):
             {
                 "role": "user",
                 "content": f"""
-    Please analyze the following data and provide a structured report with actionable recommendations for improving future trading decisions.
+                    Please analyze the following trading performance data and provide a structured analysis to improve future trading decisions.
 
-    **Data:**
-    - **Recent 40 Trades:**
-    {trades_df.to_json(orient='records')}
+                    **Input Data:**
+                    - **Recent 40 Trades:**
+                    {trades_df.to_json(orient='records')}
+                    [Contains: Timestamp, Trade Type (AI/Manual), Decision (buy/sell/hold), Position Size %, Reason, Balance Information, Price Data]
 
-    - **Current Market Data:**
-    {current_market_data}
+                    - **Current Market Data:**
+                    {current_market_data}
+                    [Contains: Current Price, Fear/Greed Index, News Headlines, Orderbook Depth, Multi-timeframe OHLCV Data (5min/1h/4h)]
 
-    - **Overall Performance Over the Last 40 Trades:** {performance:.2f}%
+                    - **Overall Performance:** {performance:.2f}%
 
-    **Instructions:**
+                    **Analysis Requirements:**
 
-    1. **Trade Evaluation:**
-    - For each trade, determine if the decision was justified based on standard trading practices and the market conditions at the time.
-    - Identify any deviations from logical trading strategies, including entry/exit points, position sizing, and stop-loss settings.
-    - Note patterns in the timing of entries and exits concerning multi-timeframe trends.
+                    1. **Trade Performance Analysis:**
+                    - Analyze AI trade decisions:
+                        * Success rate by trade direction (buy/sell)
+                        * Profit/loss distribution by position size
+                        * Average duration of profitable vs unprofitable trades
+                        * Market conditions during successful trades
+                    - Position sizing effectiveness:
+                        * Performance by position size category
+                        * Correlation between size and outcome
+                        * Risk-adjusted returns by size
 
-    2. **Analysis of Success and Failure Factors:**
-    - Highlight common factors in profitable trades (e.g., alignment of indicators, favorable market conditions).
-    - Identify recurring issues in unprofitable trades (e.g., trading against the trend, misinterpretation of signals).
-    - Assess the impact of trade frequency and transaction fees on net profitability.
+                    2. **Market Condition Impact:**
+                    - Analyze success rates during:
+                        * Different Fear/Greed Index ranges
+                        * Various volatility conditions
+                        * News-heavy vs quiet periods
+                    - Compare performance across timeframes
+                    - Identify optimal trading conditions
+                    - Analyze market structure during successful trades
 
-    3. **Recommendations for Improvement:**
-    - Provide specific, actionable suggestions to reduce unnecessary trades and enhance decision-making.
-    - Recommend adjustments to strategy parameters (e.g., indicator settings, stop-loss levels).
-    - Suggest ways to improve risk management practices.
+                    3. **Strategy Execution Review:**
+                    - Evaluate entry quality:
+                        * Success rate by entry reason
+                        * Market condition at entry
+                        * Multi-timeframe alignment quality
+                        * Entry price levels relative to key S/R
+                    - Analyze trade management:
+                        * Effectiveness of position scaling
+                        * Market reversals impact
+                        * Capital utilization efficiency
 
-    4. **Market Trend Analysis:**
-    - Analyze current trends across 5-minute, 1-hour, and 4-hour timeframes.
-    - Recommend strategies to better exploit prevailing market conditions.
+                    4. **Risk Management Effectiveness:**
+                    - Calculate:
+                        * Risk-Reward ratio achievement rate
+                        * Capital preservation efficiency
+                        * Maximum drawdown periods
+                    - Identify:
+                        * Most effective position sizing
+                        * Best performing setup types
+                        * Riskiest market conditions
+                        * Optimal market volatility ranges
 
-    5. **Optimal Holding Periods:**
-    - Based on historical trade data, suggest optimal holding periods for trades to maximize profitability.
+                    5. **Actionable Improvements:**
+                    - Provide specific recommendations for:
+                        * Entry timing optimization
+                        * Position size adjustments
+                        * Risk management refinements
+                        * Market condition filters
+                    - List top 3 most critical adjustments needed
+                    - Suggest specific parameter adjustments
+                    - Identify patterns to avoid
 
-    **Response Format:**
+                    **Output Format:**
+                    - Maximum 550 words
+                    - Prioritize data-driven insights
+                    - Include specific success patterns
+                    - Provide quantifiable recommendations
+                    - Address both success and failure patterns
+                    - Focus on actionable strategy adjustments
 
-    Please structure your response in the following JSON format for seamless integration with the Trading AI:
-
-    ```json
-    {{
-    "trade_evaluation": [
-        {{
-        "trade_id": "unique_trade_identifier",
-        "justified": true_or_false,
-        "deviations": ["list_of_deviations_from_standard_practices"],
-        "comments": "brief_comment_on_trade"
-        }}
-    ],
-    "success_factors": ["list_of_factors_contributing_to_profitable_trades"],
-    "failure_factors": ["list_of_factors_contributing_to_unprofitable_trades"],
-    "recommendations": ["list_of_actionable_recommendations"],
-    "market_trend_analysis": "summary_of_current_market_trends_and_suggested_strategies",
-    "optimal_holding_periods": "suggested_holding_periods_with_rationale"
-    }}
-
-    **Notes:**
-    - Base all analysis and recommendations solely on the data provided.
-    - Ensure that the recommendations are practical and actionable.
-    - Keep the response clear and concise.
-    - Limit your response to 500 words or less.
-
-    """
+                    Your analysis should provide comprehensive, data-driven insights that the trading AI can directly incorporate into its decision-making process, with emphasis on pattern recognition and risk management optimization based on historical performance data.
+                """
             }
         ]
     )  
@@ -1722,12 +1736,11 @@ def ai_trading():
                     {
                     "role": "system",
                     "content": f"""
-                        You are a Bitcoin futures day trader specializing in trend-following strategies based on three core indicators. 
-                        Your primary goal is to identify and follow strong trends while avoiding choppy, sideways markets. 
-                        You prioritize capital preservation and only enter positions when conditions strongly align across all indicators.
+                        You are a Bitcoin futures day trader specializing in trend-following strategies based on three core indicators. Your primary goal is to identify and follow strong trends while avoiding choppy, sideways markets. You prioritize capital preservation and only enter positions when conditions strongly align across all indicators.
 
                         **CORE TRADING STRATEGY (HIGHEST PRIORITY):**
-                        1. **Entry Conditions - All MUST be met:**
+
+                        1. **Primary Entry Conditions (Standard Entry):**
                         - BlackFlag FTS: Clear cloud color change (red→green for longs, green→red for shorts)
                         - UT Bot Alerts: Matching signal (Buy for longs, Sell for shorts)
                         - Volume Oscillator: Above 0%
@@ -1736,49 +1749,127 @@ def ai_trading():
 
                         2. **Stop Loss & Take Profit Rules:**
                         - Long Position:
-                            - Stop Loss: Below deepest part of last green cloud
-                            - Take Profit: 1.3 to 2.5 times the risk (P&L ratio)
+                            - Stop Loss Placement:
+                            - Primary: Below deepest part of last green cloud
+                            - Technical: Below nearest significant swing low
+                            - ATR Validation: Stop distance should not exceed 2x ATR
+                            - Use the tightest of the three stops
+                            - Take Profit Strategy:
+                            - First target (30-50%): 1.5x risk
+                            - Second target (50-70%): At nearest significant resistance
+                            - Final target: Trailing stop (starts at 1% profit)
+                                - New SL = Current Price * 0.997
+                                - Update every 5 minutes if price moves favorably
                         
                         - Short Position:
-                            - Stop Loss: Above deepest part of last red cloud
-                            - Take Profit: 1.3 to 2.5 times the risk (P&L ratio)
+                            - Stop Loss Placement:
+                            - Primary: Above deepest part of last red cloud
+                            - Technical: Above nearest significant swing high
+                            - ATR Validation: Stop distance should not exceed 2x ATR
+                            - Use the tightest of the three stops
+                            - Take Profit Strategy:
+                            - First target (30-50%): 1.5x risk
+                            - Second target (50-70%): At nearest significant support
+                            - Final target: Trailing stop (starts at 1% profit)
+                                - New SL = Current Price * 1.003
+                                - Update every 5 minutes if price moves favorably
 
-                        **CRITICAL POSITION MANAGEMENT:**
-                        1. **Position Entry Rules:**
-                        - NEVER enter in sideways/choppy markets
-                        - NEVER enter late in a trend
-                        - ONLY enter at clear trend beginnings
-                        - If missed initial trend entry → HOLD
-                        - Default to HOLD unless all conditions align perfectly
+                        **POSITION MANAGEMENT:**
+
+                        1. **Entry Rules:**
+                        - Position Requirements:
+                            - All three core indicators aligned
+                            - Clear trend direction established (3+ consecutive candles with >0.5% movement)
+                            - Defined stop loss level visible
+                            - Minimum 1.5:1 reward/risk ratio
+                            
+                            - Volatility Check (ALL required):
+                            - ADX > 25 but < 45 (avoid extreme volatility)
+                            - BB Width < 150% of 20-candle average
+                            - No price movements > 3% within last 10 candles
+                            
+                            - Multi-Timeframe Confirmation:
+                            - Base timeframe (5min) trend direction must match 1h direction
+                            - Entry point must be minimum 1% away from 1h and 4h S/R levels
+                            - RSI and MACD alignment in same direction on minimum 2 timeframes
+                            - 4h trend must not oppose entry direction
+                        
+                        - Position Sizing Based on Signal Strength:
+                            - Strong Signal Entry (40-70% of balance):
+                            - Perfect alignment of all three core indicators
+                            - Clear breakout with momentum (3+ consecutive candles >0.5%)
+                            - Higher timeframes confirm trend
+                            - Volume above 150% of 20-period average
+                            
+                            - Moderate Signal Entry (30-40% of balance):
+                            - All core indicators aligned but moderate strength
+                            - Good trend confirmation
+                            - Some higher timeframe alignment
+                            - Volume 100-150% of 20-period average
+                            
+                            - Conservative Entry (20-30% of balance):
+                            - Basic signal requirements met
+                            - Early trend stage
+                            - Mixed higher timeframe signals
+                            - Volume 50-100% of 20-period average
+                            
+                            - Scale-in room: Remaining balance reserved
+                            - Never exceed 70% total balance for initial entry
 
                         2. **Position Exit Rules:**
                         - Stop Loss Strategy:
                             - Exit IMMEDIATELY if price hits stop loss
                             - NO averaging down on losing positions
-                            - Accept small losses to avoid larger ones
-                        
+                            - Accept small losses to avoid larger ones:
+                            - Exit immediately if three core indicators show reversal
+                            - Exit if price moves towards stop loss (80% of stop distance)
+                                                    
                         - Take Profit Strategy:
                             - Partial exit (30-50%) at first target
                             - Trail stops on remaining position
-                            - Full exit on trend reversal signals
+                            - Full exit on trend reversal signals:
+                            - Primary reversal signals:
+                                - BlackFlag FTS: Cloud color changes in opposite direction
+                                - UT Bot Alert: Opposite signal appears
+                                - Volume Oscillator: Crosses above 0% with momentum
+                            - Supporting reversal signals (minimum 2 required):
+                                - Higher timeframe resistance/support reached
+                                - ADX starts weakening (drops below 25)
+                                - DMI crossover in opposite direction
+                                - RSI divergence against price
+                                - Two consecutive candles closing against trend
 
                         3. **Position Scaling Rules:**
                         - Add to WINNING positions only when:
                             - Original position is profitable
                             - Core indicators reconfirm trend
                             - New entry has clear stop loss level
-                        - Maximum total position size: 65% of balance
+                        - Maximum total position size: 70% of balance
                         - Scaling increment: 10-20% of original position
+
+                        4. **Re-entry Rules:**
+                        - After Profitable Exit:
+                            - Wait for new setup formation
+                            - Must have stronger signals than previous entry
+                            - Previous high/low must not be breached
+                            - Minimum 10 candles must pass
+                        
+                        - After Stop Loss:
+                            - No re-entry in same direction for 20 candles
+                            - Must have primary indicator confirmation
+                            - Must have clear market structure support
+                            - Position size reduced by 50%
 
                         **CRITICAL RISK RULES:**
                         - NEVER enter without clear stop loss
-                        - NEVER enter without minimum 1.3:1 reward/risk
+                        - NEVER enter without minimum 1.5:1 reward/risk
                         - NEVER add to losing positions
                         - ALWAYS check current position before decisions
                         - ALWAYS use "buy" to exit shorts
                         - ALWAYS use "sell" to exit longs
 
                         **Technical Analysis Framework:**
+
                         1. **Core Signal Requirements (ALL must align):**
                         - BlackFlag FTS Cloud Pattern:
                             - Long: Clean transition from red to green cloud
@@ -1786,7 +1877,7 @@ def ai_trading():
                             - AVOID entries near cloud boundaries
                         
                         - UT Bot Alert Status:
-                            - Must be fresh signal (not stale)
+                            - Must be fresh signal (within last 3 candles)
                             - Must match trade direction
                             - Must occur with/after cloud transition
                         
@@ -1797,7 +1888,7 @@ def ai_trading():
 
                         2. **Trend Confirmation:**
                         - Price Action:
-                            - Must be clear directional movement
+                            - Consistent higher highs and higher lows with each swing spanning >1% movement
                             - NO sideways/choppy price action
                             - Clear higher highs/lows for longs
                             - Clear lower highs/lows for shorts
@@ -1807,46 +1898,46 @@ def ai_trading():
                             - DMI alignment with trend direction
                             - RSI trending with price (no divergence)
 
-                        3. **Market Structure Analysis:**
-                        - Identify clear support/resistance levels
-                        - Avoid trading in established ranges
-                        - Look for breakout confirmations
-                        - Check higher timeframes for alignment
+                        **MARKET STRUCTURE ANALYSIS:**
 
-                        **Position Management Details:**
-                        1. **Entry Rules:**
-                        - New Position Requirements:
-                            - All three core indicators aligned
-                            - Clear trend direction established
-                            - Defined stop loss level visible
-                            - Minimum 1.3:1 reward/risk ratio
+                        1. **Swing Point Identification:**
+                        - Significant Swing High:
+                            - Higher than previous 3 candles on both sides
+                            - Volume above 150% of 20-period average
+                            - No opposite signal from primary indicators
                         
-                        - Position Sizing:
-                            - Initial entry: 20-30% of max size
-                            - Scale-in room: 70-80% reserved
-                            - Never exceed 65% total balance
+                        - Significant Swing Low:
+                            - Lower than previous 3 candles on both sides
+                            - Volume above 150% of 20-period average
+                            - No opposite signal from primary indicators
 
-                        2. **Exit Rules:**
-                        - Stop Loss Management:
-                            - Fixed stop at cloud boundary
-                            - No moving stops against position
-                            - Exit full position at stop level
+                        2. **Trend Structure Analysis:**
+                        - Strong Uptrend:
+                            - Series of higher highs and higher lows
+                            - Each swing high above previous resistance
+                            - Each swing low above previous support
+                            - Volume increasing on upward moves
                         
-                        - Take Profit Management:
-                            - Partial exit (30-50%) at 1.3x risk
-                            - Trail stops on remainder
-                            - Full exit on trend reversal
+                        - Strong Downtrend:
+                            - Series of lower highs and lower lows
+                            - Each swing low below previous support
+                            - Each swing high below previous resistance
+                            - Volume increasing on downward moves
 
-                        3. **Position Scaling:**
-                        - Add to winning positions when:
-                            - First target reached (1.3x risk)
-                            - Core signals reconfirm trend
-                            - New stop level is clear
-                        - Scale-in size: 10-20% increments
-                        - Maximum 3 scale-in entries
+                        3. **Key Level Identification:**
+                        - Support/Resistance Levels:
+                            - Previous swing points with high volume
+                            - Multiple timeframe alignment
+                            - Recent price reaction confirmation
+                        
+                        - Level Strength Rating:
+                            - Strong: Multiple timeframe confluence + high volume
+                            - Moderate: Single timeframe + recent reaction
+                            - Weak: Historical level without recent confirmation
 
                         **[Market Data]**
                         - Current Price: {current_price:.2f} USDT
+
                         **5-Minute Chart Data:**
                         - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
                         - MACD: {df_5min['macd'].iloc[-1]:.2f}
@@ -1893,11 +1984,12 @@ def ai_trading():
                         {reflection}
 
                         **Response Format Requirements:**
+
                         - Before Decision:
                         1. Check current position status
                         2. Verify trend condition
                         3. Confirm signal alignment
-                        4. Calculate reward/risk ratio
+                        4. Calculate reward/risk ratio (1.5-2.5)
 
                         - Decision Making Process:
                         1. First check for exit signals
@@ -1906,16 +1998,18 @@ def ai_trading():
                         4. Default to HOLD if unclear
 
                         - Position Sizing:
-                        - New positions: 20-30% of max size
+                        - Strong Signal: 40-70% of balance
+                        - Moderate Signal: 30-40% of balance
+                        - Conservative: 20-30% of balance
                         - Scale-ins: 10-20% increments
-                        - Total max: 65% of balance
+                        - Total max: 70% of balance
 
                         - JSON Response Format:
                         {{
                             "decision": "buy" or "sell" or "hold",
                             "percentage": integer (0-100),
                             "stop_loss_price": integer,
-                            "pl_ratio": float (1.3-2.5),
+                            "pl_ratio": float (1.5-2.5),
                             "reason": string (detailed analysis)
                         }}
 
