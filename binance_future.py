@@ -1744,7 +1744,19 @@ def ai_trading():
                         - BlackFlag FTS: Clear cloud color change (red→green for longs, green→red for shorts)
                         - UT Bot Alerts: Matching signal (Buy for longs, Sell for shorts)
                         - Volume Oscillator: Above 0%
-                        - Important: Only enter when all three indicators show clear, strong signals
+                        - Volume Requirements:
+                            - Volume must be above 150% of the 20-period average
+                            - Volume must show increasing trend (3+ consecutive bars)
+                            - Volume spike confirmation (>200% average) for strong trends
+                            - Real-time volume velocity check (current bar vs previous)
+                        - Signal Confirmation:
+                            - Wait for 3 consecutive candles after signal
+                            - Each candle must close in trend direction
+                            - Minimum price movement of 0.3% per candle
+                            - No significant wicks against trend (max 30% of candle body)
+                            - Price must maintain trend structure during confirmation
+                            - No reversal candlestick patterns during confirmation
+                        - Important: Only enter when all conditions show clear, strong signals
                         - AVOID entries when price is near cloud boundaries or signals are forming
 
                         2. **Stop Loss & Take Profit Rules:**
@@ -1755,12 +1767,17 @@ def ai_trading():
                             - ATR Validation: Stop distance should not exceed 2x ATR
                             - Use the tightest of the three stops
                             - Take Profit Strategy:
-                            - First target (30-50%): 1.5x risk
-                            - Second target (50-70%): At nearest significant resistance
-                            - Final target: Trailing stop (starts at 1% profit)
+                            - First Target (40% of position):
+                                - Exit at 1.5x initial risk
+                                - Must exit within 2 candles of target reach
+                            - Second Target (40% of position):
+                                - At nearest significant resistance
+                                - Must exit within 3 candles of target reach
+                            - Final Target (20% of position):
+                                - Trailing stop (starts at 1% profit)
                                 - New SL = Current Price * 0.997
                                 - Update every 5 minutes if price moves favorably
-                        
+
                         - Short Position:
                             - Stop Loss Placement:
                             - Primary: Above deepest part of last red cloud
@@ -1768,9 +1785,14 @@ def ai_trading():
                             - ATR Validation: Stop distance should not exceed 2x ATR
                             - Use the tightest of the three stops
                             - Take Profit Strategy:
-                            - First target (30-50%): 1.5x risk
-                            - Second target (50-70%): At nearest significant support
-                            - Final target: Trailing stop (starts at 1% profit)
+                            - First Target (40% of position):
+                                - Exit at 1.5x initial risk
+                                - Must exit within 2 candles of target reach
+                            - Second Target (40% of position):
+                                - At nearest significant support
+                                - Must exit within 3 candles of target reach
+                            - Final Target (20% of position):
+                                - Trailing stop (starts at 1% profit)
                                 - New SL = Current Price * 1.003
                                 - Update every 5 minutes if price moves favorably
 
@@ -1783,17 +1805,18 @@ def ai_trading():
                             - Defined stop loss level visible
                             - Minimum 1.5:1 reward/risk ratio
                             
-                            - Volatility Check (ALL required):
+                            - Volatility Requirements:
                             - ADX > 25 but < 45 (avoid extreme volatility)
                             - BB Width < 150% of 20-candle average
-                            - No price movements > 3% within last 10 candles
+                            - ATR must be within 130% of 20-period average
+                            - No price movements > 2% within last 5 candles
                             
                             - Multi-Timeframe Confirmation:
                             - Base timeframe (5min) trend direction must match 1h direction
                             - Entry point must be minimum 1% away from 1h and 4h S/R levels
                             - RSI and MACD alignment in same direction on minimum 2 timeframes
                             - 4h trend must not oppose entry direction
-                        
+
                         - Position Sizing Based on Signal Strength:
                             - Strong Signal Entry (40-70% of balance):
                             - Perfect alignment of all three core indicators
@@ -1820,24 +1843,18 @@ def ai_trading():
                         - Stop Loss Strategy:
                             - Exit IMMEDIATELY if price hits stop loss
                             - NO averaging down on losing positions
-                            - Accept small losses to avoid larger ones:
+                            - Accept small losses to avoid larger ones
                             - Exit immediately if three core indicators show reversal
                             - Exit if price moves towards stop loss (80% of stop distance)
-                                                    
-                        - Take Profit Strategy:
-                            - Partial exit (30-50%) at first target
-                            - Trail stops on remaining position
-                            - Full exit on trend reversal signals:
-                            - Primary reversal signals:
-                                - BlackFlag FTS: Cloud color changes in opposite direction
-                                - UT Bot Alert: Opposite signal appears
-                                - Volume Oscillator: Crosses above 0% with momentum
-                            - Supporting reversal signals (minimum 2 required):
-                                - Higher timeframe resistance/support reached
-                                - ADX starts weakening (drops below 25)
-                                - DMI crossover in opposite direction
-                                - RSI divergence against price
-                                - Two consecutive candles closing against trend
+
+                        - Exit Conditions (Any two confirm exit):
+                            - Volume surge against trend (>200% of average)
+                            - Two consecutive closes against trend
+                            - RSI crosses centerline (50) in opposite direction
+                            - Price breaks local trend line with volume
+                            - DMI crossover against trend
+                            - ADX drops below 20
+                            - Major support/resistance break with volume
 
                         3. **Position Scaling Rules:**
                         - Add to WINNING positions only when:
@@ -1849,13 +1866,13 @@ def ai_trading():
 
                         4. **Re-entry Rules:**
                         - After Profitable Exit:
-                            - Wait for new setup formation
+                            - Clear reversal signal formation
                             - Must have stronger signals than previous entry
                             - Previous high/low must not be breached
-                            - Minimum 10 candles must pass
-                        
+                            - Minimum 3 candles must pass to confirm new setup
+
                         - After Stop Loss:
-                            - No re-entry in same direction for 20 candles
+                            - Minimum 5 candles must pass to avoid emotional trading
                             - Must have primary indicator confirmation
                             - Must have clear market structure support
                             - Position size reduced by 50%
@@ -1875,12 +1892,12 @@ def ai_trading():
                             - Long: Clean transition from red to green cloud
                             - Short: Clean transition from green to red cloud
                             - AVOID entries near cloud boundaries
-                        
+
                         - UT Bot Alert Status:
                             - Must be fresh signal (within last 3 candles)
                             - Must match trade direction
                             - Must occur with/after cloud transition
-                        
+
                         - Volume Oscillator:
                             - Must be above 0%
                             - Higher readings indicate stronger trends
@@ -1892,7 +1909,7 @@ def ai_trading():
                             - NO sideways/choppy price action
                             - Clear higher highs/lows for longs
                             - Clear lower highs/lows for shorts
-                        
+
                         - Supporting Indicators:
                             - ADX > 25 indicates trend strength
                             - DMI alignment with trend direction
@@ -1905,7 +1922,7 @@ def ai_trading():
                             - Higher than previous 3 candles on both sides
                             - Volume above 150% of 20-period average
                             - No opposite signal from primary indicators
-                        
+
                         - Significant Swing Low:
                             - Lower than previous 3 candles on both sides
                             - Volume above 150% of 20-period average
@@ -1917,7 +1934,7 @@ def ai_trading():
                             - Each swing high above previous resistance
                             - Each swing low above previous support
                             - Volume increasing on upward moves
-                        
+
                         - Strong Downtrend:
                             - Series of lower highs and lower lows
                             - Each swing low below previous support
@@ -1929,7 +1946,7 @@ def ai_trading():
                             - Previous swing points with high volume
                             - Multiple timeframe alignment
                             - Recent price reaction confirmation
-                        
+
                         - Level Strength Rating:
                             - Strong: Multiple timeframe confluence + high volume
                             - Moderate: Single timeframe + recent reaction
@@ -2005,13 +2022,13 @@ def ai_trading():
                         - Total max: 70% of balance
 
                         - JSON Response Format:
-                        {{
+                        {
                             "decision": "buy" or "sell" or "hold",
                             "percentage": integer (0-100),
                             "stop_loss_price": integer,
                             "pl_ratio": float (1.5-2.5),
                             "reason": string (detailed analysis)
-                        }}
+                        }
 
                         **Critical Decision Validation:**
                         - For SHORT positions:
