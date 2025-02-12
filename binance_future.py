@@ -2022,13 +2022,13 @@ def ai_trading():
                         - Total max: 70% of balance
 
                         - JSON Response Format:
-                        {
+                        {{
                             "decision": "buy" or "sell" or "hold",
                             "percentage": integer (0-100),
                             "stop_loss_price": integer,
                             "pl_ratio": float (1.5-2.5),
                             "reason": string (detailed analysis)
-                        }
+                        }}
 
                         **Critical Decision Validation:**
                         - For SHORT positions:
