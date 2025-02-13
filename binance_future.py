@@ -2046,9 +2046,10 @@ def ai_trading():
                         - PPO: {df_4h['ppo'].iloc[-1]:.2f}
 
                         **[Portfolio]**
-                        - Free USDT Balance: {free_usdt:.0f}
-                        - Used USDT Holdings: {used_usdt:.4f} 
-                        - BTC Average Purchase Price: {btc_avg_buy_price:.0f} USDT
+                        - Total USDT Assets: {total_usdt:.1f}
+                        - Free USDT Balance: {free_usdt:.1f}
+                        - Used USDT Holdings: {used_usdt:.1f} 
+                        - BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT
 
                         **Recent Trading Reflection:**
                         {reflection}
