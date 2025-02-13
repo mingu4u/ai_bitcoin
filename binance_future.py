@@ -88,14 +88,12 @@ class BinanceFuturesTrader:
         return False
 
     def _handle_position_reduction(self, current_position, side, buy_amount, current_price):
-        """포지션 축소/청산 처리"""
+        """포지션 축소/청산을 위한 수량 계산"""
         position_size = float(current_position['contracts'])
         position_notional = float(current_position['notional'])
-        self.logger.info(f"Reducing/Closing position - Current Size: {position_size} contracts, Notional: {position_notional} USDT")
         
-        # 주문 비율 계산 (현재 포지션 대비)
+        # 주문 비율 계산
         reduction_ratio = buy_amount / position_notional
-        # 포지션 수량에 reduction_ratio를 적용
         quantity = position_size * reduction_ratio
         
         # 남은 포지션 크기 계산
@@ -106,37 +104,10 @@ class BinanceFuturesTrader:
         
         # 남은 수량이 최소 주문 수량보다 작으면 전체 청산
         if remaining_size < MIN_ORDER_SIZE:
-            self.logger.info(f"Remaining position ({remaining_size} BTC) would be below minimum size. Closing entire position.")
-            quantity = position_size  # 전체 포지션 크기로 설정
-        else:
-            self.logger.info(f"Reducing position by {quantity} contracts ({reduction_ratio * 100:.2f}%)")
-        
-        try:
-            # 기존 주문 전체 취소
-            try:
-                open_orders = self.exchange.fetch_open_orders(self.symbol)
-                for order in open_orders:
-                    self.exchange.cancel_order(order['id'], self.symbol)
-            except Exception as e:
-                self.logger.error(f"Error cancelling orders: {e}")
-            
-            # 포지션 축소/청산 주문
-            order = self.exchange.create_market_order(
-                symbol=self.symbol,
-                side=side,
-                amount=quantity,
-                params={'reduceOnly': True}
-            )
-            
-            self.logger.info(f"Position reduced at price: {current_price}")
-            return {
-                'entry': order,
-                'tp': None,
-                'sl': None
-            }
-        except Exception as e:
-            self.logger.error(f"Error creating reduction order: {e}")
-            return None
+            self.logger.info(f"Remaining position ({remaining_size} BTC) would be below minimum size. Will close entire position.")
+            quantity = position_size
+
+        return quantity
 
     def _handle_position_increase(self, current_position, side, buy_amount, current_price,
                             sl_price, tp_price, pl_ratio, min_order_value):
@@ -707,10 +678,27 @@ class BinanceFuturesTrader:
 
         # 4. 반대 방향 주문 처리 (포지션 축소/청산)
         if current_position and position_side:
-            ticker = self.exchange.fetch_ticker(self.symbol)
-            current_price = ticker['last']
             if (position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy'):
-                return self._handle_position_reduction(current_position, side, buy_amount, current_price)
+                quantity = self._handle_position_reduction(
+                    current_position, side, buy_amount, current_price
+                )
+                
+                # 전체 청산인 경우에만 TP/SL 취소
+                if quantity == float(current_position['contracts']):
+                    try:
+                        open_orders = self.exchange.fetch_open_orders(self.symbol)
+                        for order in open_orders:
+                            order_type = order['info'].get('origType', '').upper()
+                            is_tp_sl = (order_type in ['TAKE_PROFIT_MARKET', 'STOP_MARKET'] or
+                                    order['clientOrderId'].startswith(('tp_', 'sl_')))
+                            
+                            if is_tp_sl:
+                                self.exchange.cancel_order(order['id'], self.symbol)
+                                self.logger.info(f"Cancelled existing TP/SL order: {order['id']}")
+                    except Exception as e:
+                        self.logger.error(f"Error cancelling TP/SL orders: {e}")
+                else:
+                    self.logger.info("Keeping existing TP/SL orders for partial position reduction")        
 
         # 5. 같은 방향 추가 진입 처리
         if current_position and side == position_side:
@@ -752,21 +740,25 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error calculating order quantity: {e}")
             return None
 
-        # 모든 열린 TP/SL 주문 취소
+        # 모든 열린 TP/SL 주문 취소 (반대방향 주문의 경우엔 TP/SL 취소하지 않음)
         try:
-            open_orders = self.exchange.fetch_open_orders(self.symbol)
-            for order in open_orders:
-                order_type = order['info'].get('origType', '').upper()
-                is_tp_sl = (order_type in ['TAKE_PROFIT_MARKET', 'STOP_MARKET'] or
-                        order['clientOrderId'].startswith(('tp_', 'sl_')))
-                
-                if is_tp_sl:
-                    try:
-                        self.exchange.cancel_order(order['id'], self.symbol)
-                        self.logger.info(f"Cancelled existing TP/SL order: {order['id']} (Type: {order_type})")
-                        time.sleep(0.1)
-                    except Exception as cancel_error:
-                        self.logger.error(f"Error cancelling TP/SL order {order['id']}: {cancel_error}")
+            if not (current_position and (
+                (position_side == 'long' and side == 'sell') or 
+                (position_side == 'short' and side == 'buy')
+            )):
+                open_orders = self.exchange.fetch_open_orders(self.symbol)
+                for order in open_orders:
+                    order_type = order['info'].get('origType', '').upper()
+                    is_tp_sl = (order_type in ['TAKE_PROFIT_MARKET', 'STOP_MARKET'] or
+                            order['clientOrderId'].startswith(('tp_', 'sl_')))
+                    
+                    if is_tp_sl:
+                        try:
+                            self.exchange.cancel_order(order['id'], self.symbol)
+                            self.logger.info(f"Cancelled existing TP/SL order: {order['id']} (Type: {order_type})")
+                            time.sleep(0.1)
+                        except Exception as cancel_error:
+                            self.logger.error(f"Error cancelling TP/SL order {order['id']}: {cancel_error}")
             
             # 주문 취소 후 잠시 대기
             time.sleep(0.5)
@@ -787,7 +779,8 @@ class BinanceFuturesTrader:
         except Exception as e:
             self.logger.error(f"Error creating position order: {e}")
             return None
-
+        
+        
         # 8. 트레일링 스탑로스 설정
         def monitor_and_adjust_sl(self):
             try:
@@ -875,40 +868,16 @@ class BinanceFuturesTrader:
                 remaining_size = abs(float(current_position['contracts'])) - quantity
 
                 if remaining_size > 0:
-                    tp_side = 'buy' if position_side == 'short' else 'sell'  # 현재 포지션의 반대 방향
-                    if position_side == 'long':
-                        sl_price = current_price - abs(sl_price-current_price)
-                        tp_price = current_price + pl_ratio*abs(sl_price-current_price)
-                    else:
-                        sl_price = current_price + abs(sl_price-current_price)
-                        tp_price = current_price - pl_ratio*abs(sl_price-current_price)
-                    # TP 주문 생성
-                    
-                    tp_order = self.exchange.create_order(
-                        symbol=self.symbol,
-                        type='TAKE_PROFIT_MARKET',
-                        side=tp_side,
-                        amount=abs(float(current_position['contracts'])),  # 남은 포지션 크기만큼 (x) || 0.001 BTC보다 작은 경우 TP/SL 주문 불가, 어짜피 closePosition이 전량청산이니까 그냥 초기 계약량 사용
-                        params={
-                            'stopPrice': tp_price,
-                            'closePosition': 'true',
-                            'clientOrderId': f"tp_{order['id']}"
-                        }
-                    )
-
-                    # SL 주문 생성
-                    sl_order = self.exchange.create_order(
-                        symbol=self.symbol,
-                        type='STOP_MARKET',
-                        side=tp_side,
-                        amount=abs(float(current_position['contracts'])),  # 남은 포지션 크기만큼 (x) || 0.001 BTC보다 작은 경우 TP/SL 주문 불가, 어짜피 closePosition이 전량청산이니까 그냥 초기 계약량 사용
-                        params={
-                            'stopPrice': sl_price,
-                            'closePosition': 'true',
-                            'clientOrderId': f"sl_{order['id']}"
-                        }
-                    )
-                    
+                    # 부분 청산의 경우 기존 TP/SL 유지
+                    self.logger.info("Partial position reduction - keeping existing TP/SL orders")
+                    tp_order = None
+                    sl_order = None
+                else:
+                    # 전체 청산의 경우 기존 TP/SL은 이미 취소됨
+                    self.logger.info("Full position closure - TP/SL orders already cancelled")
+                    tp_order = None
+                    sl_order = None
+                
             # 새로운 포지션 진입의 경우
             else:
                 tp_side = 'sell' if side == 'buy' else 'buy'
