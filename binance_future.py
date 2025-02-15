@@ -110,7 +110,7 @@ class BinanceFuturesTrader:
         return quantity
 
     def _handle_position_increase(self, current_position, side, buy_amount, current_price,
-                                sl_price, tp_price, pl_ratio, min_order_value):
+                                    sl_price, tp_price, pl_ratio, min_order_value):
         """같은 방향 추가 진입 처리 - SL 가격만 업데이트"""
         # 레버리지 적용된 수량 계산
         leveraged_amount = buy_amount * self.leverage
@@ -609,7 +609,6 @@ class BinanceFuturesTrader:
             raise
 
 
-
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         """
         시장가 주문과 TP/SL 설정을 처리하는 함수
@@ -738,10 +737,20 @@ class BinanceFuturesTrader:
                 
                 # B. 같은 방향 추가 진입
                 elif side == position_side:
-                    # SL 주문만 취소
-                    sl_orders = [order for order in tp_sl_orders if
-                            order['info'].get('origType', '').upper() == 'STOP_MARKET']
-                    cancel_orders(sl_orders)
+                    # 추가 진입을 위한 TP/SL 가격 계산
+                    tp_price, sl_price = self._handle_position_increase(
+                        current_position=current_position,
+                        side=side,
+                        buy_amount=buy_amount,
+                        current_price=current_price,
+                        sl_price=sl_price,
+                        tp_price=tp_price,
+                        pl_ratio=pl_ratio,
+                        min_order_value=MINIMUM_ORDER_VALUE
+                    )
+                    
+                    if tp_price is None or sl_price is None:
+                        return None
             
             # C. 신규 진입 또는 방향 전환
             else:
@@ -767,7 +776,7 @@ class BinanceFuturesTrader:
                                 quantity != float(current_position['contracts']))
 
             if not is_partial_reduction:
-                # 같은 방향 추가 진입인 경우 SL만 생성
+                # 같은 방향 추가 진입인 경우 SL만 업데이트
                 if current_position and side == position_side:
                     total_quantity = quantity + float(current_position['contracts'])
                     sl_order = self.exchange.create_order(
@@ -781,6 +790,8 @@ class BinanceFuturesTrader:
                             'clientOrderId': f"sl_{order['id']}"
                         }
                     )
+                    # TP는 새로 생성하지 않음 (기존 TP 유지)
+                    tp_order = None
                 # 신규 진입의 경우 TP/SL 모두 생성
                 else:
                     tp_order = self.exchange.create_order(
@@ -879,6 +890,7 @@ class BinanceFuturesTrader:
             'monitor_sl': monitor_and_adjust_sl,
             'entry_price': entry_price
         }
+
 
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
