@@ -1696,17 +1696,50 @@ def ai_trading():
                             * Stop Loss: -0.3% from entry
                             * P/L Ratio: 1.5
 
-                        2. **Secondary Entry Conditions (When Core Indicators Not Aligned):**
-                        - Must have EXTREMELY compelling evidence:
-                            * Strong price action confirmation
-                            * Clear support/resistance level
-                            * Multiple timeframe alignment
-                            * Significant volume confirmation
-                        - Restricted Parameters:
+                        2. **Secondary Entry Conditions (EXTREMELY RESTRICTIVE):**
+                        - Must have ALL of the following conditions:
+                            * Strong Price Action Confirmation:
+                                - Clear rejection at support/resistance with multiple touches
+                                - Minimum 3 consecutive confirming candles
+                                - No conflicting wicks in opposite direction
+                            * Support/Resistance Level Validation:
+                                - Level tested at least 3 times in last 24 hours
+                                - Clear price reaction at level (minimum 0.3% bounce)
+                                - No significant breaks of level in last 12 hours
+                            * Multiple Timeframe Alignment:
+                                - Primary trend aligned on 5min, 1h, AND 4h charts
+                                - RSI trending in same direction on all timeframes
+                                - No divergence on any timeframe
+                            * Volume Confirmation:
+                                - Volume increasing for 3+ consecutive candles
+                                - Volume > 150% of 20-period average
+                                - No volume divergence
+                            * Market Structure:
+                                - Clear higher highs and higher lows for longs
+                                - Clear lower lows and lower highs for shorts
+                                - No significant market structure breaks
+                            * Risk Assessment:
+                                - Immediate nearby exit level identified
+                                - Clear invalidation point within 0.15% of entry
+                                - Minimum 1.5:1 reward:risk ratio MUST be available
+
+                        - Additional Restrictions:
                             * Position Size: Maximum 30% of standard size
-                            * Stop Loss: 0.15-0.3% from entry
-                            * Take Profit: 1.3-1.5x risk
-                            * Maximum hold time: 20 candles
+                            * Stop Loss: Must be within 0.1-0.2% from entry
+                            * Take Profit: Minimum 1.5x risk
+                            * Maximum Hold Time: 12 candles
+                            * Only valid during medium/low volatility periods
+                            * No entries if any core indicator shows conflict
+                            * No entries during major news events
+                            * No entries if funding rate > ±0.01%
+                            
+                        - Immediate Exit Rules:
+                            * Exit if initial move doesn't happen within 3 candles
+                            * Exit if price moves against position by 0.1%
+                            * Exit if volume decreases below entry volume
+                            * Exit if any timeframe shows reversal signal
+
+                        CRITICAL: Default to HOLD unless ALL conditions are met with clear evidence. Secondary entries should be RARE and only taken in extremely clear setups.
 
                         3. **Position Management:**
                         - Profit Zone Management (>0.1% profit):
@@ -1727,10 +1760,14 @@ def ai_trading():
 
                         4. **Risk Management Framework:**
                         - Position Sizing:
-                            * Base size calculation: 20-30% of available balance
-                            * Maximum total exposure: 65% of balance
-                            * Scale-in only after 0.2% profit
-                            * Maximum 3 scale-ins per trend
+                            * Base size calculation: 20-30% of available balance for Primary Entries
+                            * Maximum 20% of standard size for Secondary Entries
+                            * Maximum total exposure: 65% of balance (combined Primary and Secondary)
+                            * Scale-in rules:
+                                - Only for Primary Entry positions
+                                - Scale-in only after 0.2% profit
+                                - Maximum 3 scale-ins per trend
+                                - No scale-ins allowed for Secondary Entries
 
                         - Stop Loss Management:
                             * Never wider than specified ranges
@@ -1831,7 +1868,7 @@ def ai_trading():
                             "decision": "buy" or "sell" or "hold",
                             "percentage": integer (0-100),
                             "stop_loss_price": integer,
-                            "pl_ratio": float (1.3-2.0),
+                            "pl_ratio": float (1.5-2.0),
                             "reason": string (detailed analysis)
                         }}
 
