@@ -110,8 +110,8 @@ class BinanceFuturesTrader:
         return quantity
 
     def _handle_position_increase(self, current_position, side, buy_amount, current_price,
-                            sl_price, tp_price, pl_ratio, min_order_value):
-        """같은 방향 추가 진입 처리 - 가격 계산만 수행"""
+                                sl_price, tp_price, pl_ratio, min_order_value):
+        """같은 방향 추가 진입 처리 - SL 가격만 업데이트"""
         # 레버리지 적용된 수량 계산
         leveraged_amount = buy_amount * self.leverage
         quantity = leveraged_amount / current_price
@@ -121,41 +121,48 @@ class BinanceFuturesTrader:
             self.logger.error(f"Order value too small: {quantity * current_price} USDT")
             return None
 
-        # 기존 SL 가격 조회 (취소하지 않고 조회만)
+        # 기존 SL 주문 조회
         try:
             open_orders = self.exchange.fetch_open_orders(self.symbol)
-            existing_sl_price = None
+            existing_sl_order = None
+            existing_tp_order = None
+            
             for order in open_orders:
                 if order['info']['origType'] == 'STOP_MARKET' and order['type'] == 'market':
-                    existing_sl_price = float(order['info'].get('stopPrice', order.get('price', 0)))
-                    break
+                    existing_sl_order = order
+                elif order['info']['origType'] == 'TAKE_PROFIT_MARKET' and order['type'] == 'market':
+                    existing_tp_order = order
+                    
+            if existing_sl_order:
+                # 기존 SL 주문만 취소
+                try:
+                    self.exchange.cancel_order(existing_sl_order['id'], self.symbol)
+                    self.logger.info(f"Cancelled existing SL order: {existing_sl_order['id']}")
+                    time.sleep(0.5)  # API 제한 고려
+                except Exception as e:
+                    self.logger.error(f"Error cancelling existing SL order: {e}")
+                    return None
+
         except Exception as e:
-            self.logger.error(f"Error fetching existing SL price: {e}")
-            existing_sl_price = None
+            self.logger.error(f"Error fetching existing orders: {e}")
+            return None
 
-        # 총 포지션 정보 계산
+        # 새로운 total position size 계산
         total_position_size = quantity + float(current_position['contracts'])
-        total_position_value = (quantity * current_price) + \
-                            (float(current_position['contracts']) * float(current_position['entryPrice']))
-        new_avg_entry_price = total_position_value / total_position_size
 
-        # 새로운 SL 가격 계산
-        if existing_sl_price:
-            total_sl_value = (quantity * sl_price) + \
-                        (float(current_position['contracts']) * existing_sl_price)
-            new_sl_price = total_sl_value / total_position_size
-        else:
-            new_sl_price = sl_price
-
-        # 새로운 TP 가격 계산
+        # 기존 TP 가격 유지 (존재하는 경우)
+        if existing_tp_order:
+            tp_price = float(existing_tp_order['info'].get('stopPrice', existing_tp_order.get('price', 0)))
+        
+        # SL 가격만 업데이트
         if side == 'buy':
-            new_tp_price = new_avg_entry_price + \
-                        (new_avg_entry_price - new_sl_price) * pl_ratio
-        else:
-            new_tp_price = new_avg_entry_price - \
-                        (new_sl_price - new_avg_entry_price) * pl_ratio
+            if sl_price >= current_price:
+                sl_price = current_price * 0.998  # 0.2% 아래로 설정
+        else:  # sell
+            if sl_price <= current_price:
+                sl_price = current_price * 1.002  # 0.2% 위로 설정
 
-        return new_tp_price, new_sl_price
+        return tp_price, sl_price  
 
 
     def get_active_ai_positions(self):
@@ -603,9 +610,6 @@ class BinanceFuturesTrader:
 
 
 
-
-
- 
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         """
         시장가 주문과 TP/SL 설정을 처리하는 함수
@@ -616,19 +620,26 @@ class BinanceFuturesTrader:
             pl_ratio (float): 수익률 비율
             sl_price (float): 스탑로스 가격
         """
-        # 공통 상수 및 초기 설정
+        # 상수 정의
         SAFETY_MARGIN = 0.002          # 안전 마진 (0.2%)
-        TRAILING_THRESHOLD = 0.01      # 트레일링 시작 기준 수익률 (1%)
-        TRAILING_BUFFER = 0.003        # 트레일링 버퍼 (0.3%)
-        MINIMUM_ORDER_VALUE = 10      # 최소 주문 금액 (USDT)
+        TRAILING_THRESHOLD = 0.004     # 트레일링 시작 기준 수익률 (0.4%)
+        TRAILING_BUFFER = 0.0012       # 트레일링 버퍼 (0.12%)
+        MINIMUM_ORDER_VALUE = 10       # 최소 주문 금액 (USDT)
         MIN_PRICE_DIFF = 0.001        # 최소 가격 차이 (0.1%)
-        MAX_BALANCE_USE = 0.65        # 최대 사용 가능 잔고 비율 (65%)
+        MAX_BALANCE_USE = 0.80        # 최대 사용 가능 잔고 비율 (80%)
+        API_DELAY = 0.5               # API 호출 후 대기 시간
 
+        def cancel_orders(self, orders_to_cancel):
+            """TP/SL 주문 취소 헬퍼 함수"""
+            for order in orders_to_cancel:
+                try:
+                    self.exchange.cancel_order(order['id'], self.symbol)
+                    self.logger.info(f"Cancelled order: {order['id']} (Type: {order['info'].get('origType', 'Unknown')})")
+                except Exception as e:
+                    self.logger.error(f"Error cancelling order {order['id']}: {e}")
+            time.sleep(API_DELAY)
 
-        # 1. 기존 마지막 TP/SL 주문 정보 백업
-        ## 백업 기능 제거, 불필요
-
-        # 2. 현재가 조회 및 TP/SL 가격 계산
+        # 1. 현재가 조회 및 TP/SL 가격 계산
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             current_price = ticker['last']
@@ -660,7 +671,7 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error calculating prices: {e}")
             return None
 
-        # 3. 현재 포지션 확인
+        # 2. 현재 포지션 확인
         try:
             positions = self.exchange.fetch_positions([self.symbol])
             current_position = None
@@ -676,40 +687,7 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error fetching positions: {e}")
             return None
 
-        # 4. 반대 방향 주문 처리 (포지션 축소/청산)
-        if current_position and position_side:
-            if (position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy'):
-                quantity = self._handle_position_reduction(
-                    current_position, side, buy_amount, current_price
-                )
-                
-                # 전체 청산인 경우에만 TP/SL 취소
-                if quantity == float(current_position['contracts']):
-                    try:
-                        open_orders = self.exchange.fetch_open_orders(self.symbol)
-                        for order in open_orders:
-                            order_type = order['info'].get('origType', '').upper()
-                            is_tp_sl = (order_type in ['TAKE_PROFIT_MARKET', 'STOP_MARKET'] or
-                                    order['clientOrderId'].startswith(('tp_', 'sl_')))
-                            
-                            if is_tp_sl:
-                                self.exchange.cancel_order(order['id'], self.symbol)
-                                self.logger.info(f"Cancelled existing TP/SL order: {order['id']}")
-                    except Exception as e:
-                        self.logger.error(f"Error cancelling TP/SL orders: {e}")
-                else:
-                    self.logger.info("Keeping existing TP/SL orders for partial position reduction")        
-
-        # 5. 같은 방향 추가 진입 처리
-        if current_position and side == position_side:
-            new_tp_price, new_sl_price = self._handle_position_increase(
-                current_position, side, buy_amount, current_price,
-                sl_price, tp_price, pl_ratio, MINIMUM_ORDER_VALUE
-            )
-            tp_price = new_tp_price
-            sl_price = new_sl_price
-
-        # 6. 신규 포지션 진입을 위한 잔고 확인 및 주문 수량 계산
+        # 3. 신규 포지션 진입을 위한 잔고 확인 및 주문 수량 계산
         try:
             balance = self.exchange.fetch_balance()
             available_balance = float(balance['USDT']['free'])
@@ -725,12 +703,10 @@ class BinanceFuturesTrader:
             
             quantity = (buy_amount * self.leverage) / current_price
             
-            # 최소 주문 금액 확인
             if quantity * current_price < MINIMUM_ORDER_VALUE:
                 self.logger.error(f"Order value too small: {quantity * current_price} USDT")
                 return None
             
-            # 최소 주문 수량 확인
             min_amount = self.exchange.markets[self.symbol]['limits']['amount']['min']
             if quantity < min_amount:
                 self.logger.error(f"Order quantity too small: {quantity}")
@@ -740,35 +716,38 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error calculating order quantity: {e}")
             return None
 
-        # 모든 열린 TP/SL 주문 취소 (반대방향 주문의 경우엔 TP/SL 취소하지 않음)
+        # 4. TP/SL 주문 관리 및 포지션 주문 실행
         try:
-            if not (current_position and (
-                (position_side == 'long' and side == 'sell') or 
-                (position_side == 'short' and side == 'buy')
-            )):
-                open_orders = self.exchange.fetch_open_orders(self.symbol)
-                for order in open_orders:
-                    order_type = order['info'].get('origType', '').upper()
-                    is_tp_sl = (order_type in ['TAKE_PROFIT_MARKET', 'STOP_MARKET'] or
-                            order['clientOrderId'].startswith(('tp_', 'sl_')))
+            # 현재 열린 주문 조회
+            open_orders = self.exchange.fetch_open_orders(self.symbol)
+            tp_sl_orders = [order for order in open_orders if
+                        order['info'].get('origType', '').upper() in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']]
+
+            if current_position and position_side:
+                # A. 반대 방향 주문 (포지션 축소/청산)
+                if (position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy'):
+                    quantity = self._handle_position_reduction(
+                        current_position, side, buy_amount, current_price
+                    )
                     
-                    if is_tp_sl:
-                        try:
-                            self.exchange.cancel_order(order['id'], self.symbol)
-                            self.logger.info(f"Cancelled existing TP/SL order: {order['id']} (Type: {order_type})")
-                            time.sleep(0.1)
-                        except Exception as cancel_error:
-                            self.logger.error(f"Error cancelling TP/SL order {order['id']}: {cancel_error}")
+                    # 전체 청산인 경우에만 TP/SL 취소
+                    if quantity == float(current_position['contracts']):
+                        cancel_orders(tp_sl_orders)
+                    else:
+                        self.logger.info("Partial position reduction - keeping existing TP/SL orders")
+                
+                # B. 같은 방향 추가 진입
+                elif side == position_side:
+                    # SL 주문만 취소
+                    sl_orders = [order for order in tp_sl_orders if
+                            order['info'].get('origType', '').upper() == 'STOP_MARKET']
+                    cancel_orders(sl_orders)
             
-            # 주문 취소 후 잠시 대기
-            time.sleep(0.5)
-        except Exception as e:
-            self.logger.error(f"Error fetching open orders for cancellation: {e}")
-            return None
+            # C. 신규 진입 또는 방향 전환
+            else:
+                cancel_orders(tp_sl_orders)
 
-
-        # 7. 포지션 주문 실행
-        try:
+            # 포지션 주문 실행
             order = self.exchange.create_market_order(
                 symbol=self.symbol,
                 side=side,
@@ -776,64 +755,100 @@ class BinanceFuturesTrader:
             )
             entry_price = current_price
 
+            # 5. TP/SL 주문 생성
+            tp_side = 'sell' if side == 'buy' else 'buy'
+            tp_order = None
+            sl_order = None
+
+            # 반대 방향 주문이면서 부분 청산인 경우 TP/SL 생성하지 않음
+            is_partial_reduction = (current_position and position_side and
+                                ((position_side == 'long' and side == 'sell') or 
+                                (position_side == 'short' and side == 'buy')) and
+                                quantity != float(current_position['contracts']))
+
+            if not is_partial_reduction:
+                # 같은 방향 추가 진입인 경우 SL만 생성
+                if current_position and side == position_side:
+                    total_quantity = quantity + float(current_position['contracts'])
+                    sl_order = self.exchange.create_order(
+                        symbol=self.symbol,
+                        type='STOP_MARKET',
+                        side=tp_side,
+                        amount=total_quantity,
+                        params={
+                            'stopPrice': sl_price,
+                            'closePosition': 'true',
+                            'clientOrderId': f"sl_{order['id']}"
+                        }
+                    )
+                # 신규 진입의 경우 TP/SL 모두 생성
+                else:
+                    tp_order = self.exchange.create_order(
+                        symbol=self.symbol,
+                        type='TAKE_PROFIT_MARKET',
+                        side=tp_side,
+                        amount=quantity,
+                        params={
+                            'stopPrice': tp_price,
+                            'closePosition': 'true',
+                            'clientOrderId': f"tp_{order['id']}"
+                        }
+                    )
+                    
+                    sl_order = self.exchange.create_order(
+                        symbol=self.symbol,
+                        type='STOP_MARKET',
+                        side=tp_side,
+                        amount=quantity,
+                        params={
+                            'stopPrice': sl_price,
+                            'closePosition': 'true',
+                            'clientOrderId': f"sl_{order['id']}"
+                        }
+                    )
+
         except Exception as e:
-            self.logger.error(f"Error creating position order: {e}")
+            self.logger.error(f"Error in order execution: {e}")
+            # 복구 처리
+            if 'order' in locals():
+                try:
+                    self.exchange.cancel_order(order['id'], self.symbol)
+                    self.logger.info("Cancelled main order after TP/SL creation failure")
+                except Exception as cancel_error:
+                    self.logger.error(f"Error cancelling main order during recovery: {cancel_error}")
             return None
-        
-        
-        # 8. 트레일링 스탑로스 설정
+
+        # 6. 트레일링 스탑로스 모니터링 함수 정의
         def monitor_and_adjust_sl(self):
             try:
                 positions = self.exchange.fetch_positions([self.symbol])
-                current_position = None
-                for pos in positions:
-                    if float(pos.get('contracts', 0) or 0) != 0:
-                        current_position = pos
-                        break
-
+                current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
+                
                 if not current_position:
                     return None
 
-                current_ticker = self.exchange.fetch_ticker(self.symbol)
-                current_market_price = current_ticker['last']
+                current_market_price = self.exchange.fetch_ticker(self.symbol)['last']
                 position_size = float(current_position['contracts'])
                 position_side = current_position['side']
 
                 # 수익률 계산
-                if position_side == 'long':
-                    profit_percentage = (current_market_price - entry_price) / entry_price
-                else:  # short
-                    profit_percentage = (entry_price - current_market_price) / entry_price
+                profit_percentage = (current_market_price - entry_price) / entry_price if position_side == 'long' \
+                                else (entry_price - current_market_price) / entry_price
 
-                # 트레일링 스탑로스 로직
                 if profit_percentage >= TRAILING_THRESHOLD:
                     # 새로운 SL 가격 계산
-                    if position_side == 'long':
-                        new_sl_price = current_market_price * (1 - TRAILING_BUFFER)
-                    else:  # short
-                        new_sl_price = current_market_price * (1 + TRAILING_BUFFER)
+                    new_sl_price = current_market_price * (1 - TRAILING_BUFFER) if position_side == 'long' \
+                                else current_market_price * (1 + TRAILING_BUFFER)
 
-                    # 기존 모든 SL 주문 취소
+                    # 기존 SL 주문 취소
                     try:
                         open_orders = self.exchange.fetch_open_orders(self.symbol)
-                        stop_orders = [order for order in open_orders 
-                                        if order['info']['origType'] == 'STOP_MARKET'
-                                        and order['type'] == 'market']
-                        
-                        for order in stop_orders:
-                            try:
-                                self.exchange.cancel_order(order['id'], self.symbol)
-                                self.logger.info(f"기존 SL 주문 취소: {order['id']}")
-                            except Exception as order_cancel_error:
-                                self.logger.error(f"개별 SL 주문 취소 중 오류: {order_cancel_error}")
-                    
-                    except Exception as cancel_error:
-                        self.logger.error(f"SL 주문 취소 중 오류: {cancel_error}")
+                        sl_orders = [order for order in open_orders 
+                                if order['info'].get('origType', '') == 'STOP_MARKET']
+                        cancel_orders(sl_orders)
 
-                    # 새로운 SL 주문 생성
-                    tp_side = 'sell' if position_side == 'long' else 'buy'
-                    
-                    try:
+                        # 새로운 SL 주문 생성
+                        tp_side = 'sell' if position_side == 'long' else 'buy'
                         new_sl_order = self.exchange.create_order(
                             symbol=self.symbol,
                             type='STOP_MARKET',
@@ -845,83 +860,16 @@ class BinanceFuturesTrader:
                                 'reduceOnly': True
                             }
                         )
-
-                        self.logger.info(f"트레일링 SL 재설정: {new_sl_price}")
+                        self.logger.info(f"Trailing SL updated: {new_sl_price}")
                         return new_sl_order
-                    
-                    except Exception as create_error:
-                        self.logger.error(f"새로운 SL 주문 생성 중 오류: {create_error}")
+
+                    except Exception as e:
+                        self.logger.error(f"Error updating trailing SL: {e}")
                         return None
 
             except Exception as e:
-                self.logger.error(f"SL 모니터링 중 오류: {e}")
+                self.logger.error(f"Error in SL monitoring: {e}")
                 return None
-
-        # 9. TP/SL 주문 생성
-        try:
-            # 현재 포지션이 있고, 반대 방향 주문일 경우 (포지션 축소/청산)
-            if current_position and (
-                (position_side == 'long' and side == 'sell') or 
-                (position_side == 'short' and side == 'buy')
-            ):
-                # 포지션 축소의 경우, 남은 포지션에 대해서만 TP/SL 설정
-                remaining_size = abs(float(current_position['contracts'])) - quantity
-
-                if remaining_size > 0:
-                    # 부분 청산의 경우 기존 TP/SL 유지
-                    self.logger.info("Partial position reduction - keeping existing TP/SL orders")
-                    tp_order = None
-                    sl_order = None
-                else:
-                    # 전체 청산의 경우 기존 TP/SL은 이미 취소됨
-                    self.logger.info("Full position closure - TP/SL orders already cancelled")
-                    tp_order = None
-                    sl_order = None
-                
-            # 새로운 포지션 진입의 경우
-            else:
-                tp_side = 'sell' if side == 'buy' else 'buy'
-                
-                # TP 주문 생성
-                tp_order = self.exchange.create_order(
-                    symbol=self.symbol,
-                    type='TAKE_PROFIT_MARKET',
-                    side=tp_side,
-                    amount=quantity,
-                    params={
-                        'stopPrice': tp_price,
-                        'closePosition': 'true',
-                        'clientOrderId': f"tp_{order['id']}"
-                    }
-                )
-
-                # SL 주문 생성
-                sl_order = self.exchange.create_order(
-                    symbol=self.symbol,
-                    type='STOP_MARKET',
-                    side=tp_side,
-                    amount=quantity,
-                    params={
-                        'stopPrice': sl_price,
-                        'closePosition': 'true',
-                        'clientOrderId': f"sl_{order['id']}"
-                    }
-                )
-
-        except Exception as e:
-            self.logger.error(f"Error creating TP/SL orders: {e}")
-            tp_order = None
-            sl_order = None
-
-            # 10. 실패 시 복구 처리 제거 (이전 TP/SL 복구하지 않음)
-            if 'order' in locals():
-                try:
-                    self.exchange.cancel_order(order['id'], self.symbol)
-                    self.logger.info("Cancelled main order after TP/SL creation failure")
-                except Exception as cancel_error:
-                    self.logger.error(f"Error cancelling main order during recovery: {cancel_error}")
-            
-            return None
 
         self.logger.info(f"Position opened - Side: {side}, Amount: {buy_amount} USDT")
         return {
@@ -931,10 +879,6 @@ class BinanceFuturesTrader:
             'monitor_sl': monitor_and_adjust_sl,
             'entry_price': entry_price
         }
-
-
-
-
 
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
@@ -1705,724 +1649,181 @@ def ai_trading():
                     {
                     "role": "system",
                     "content": f"""
-                        You are a Bitcoin futures day trader specializing in trend-following strategies based on three core indicators, trading with {trader.leverage}x leverage. Your primary objective is to identify and follow strong trends while implementing extreme capital preservation due to high-risk leverage trading.
+                        You are a Bitcoin futures day trader specializing in trend-following strategies based on three core indicators, trading with {trader.leverage}x leverage. Your primary objective is to identify and follow strong trends while maintaining strict capital preservation.
 
-                        **CORE TRADING STRATEGY (HIGHEST PRIORITY):**
+                        **CORE TRADING STRATEGY:**
 
-                        1. **Stop Loss Management Framework:**
-                        - Stop Loss Priority Order:
-                            1. Volatility-Based Adjustments (Always takes precedence):
-                                * High Volatility (ATR change 20-50%): Tighten by 30%
-                                * Extreme Volatility (ATR change >50%): Tighten by 50%
-                            2. Standard Position Stop Loss:
-                                * Long: Bottom of green cloud + 0.1% buffer
-                                * Short: Top of red cloud + 0.1% buffer
-                            3. Special Trade Type Stop Loss:
-                                * Counter-trend trades: 0.15% from entry
-                                * Support/Resistance trades: 0.2% from entry
-                                * Mean Reversion trades: 0.25% from entry
+                        1. **Primary Entry Conditions (HIGHEST PRIORITY):**
+                        - Core Indicator Alignment (ALL must align):
+                            * BlackFlag FTS: Clear cloud color change (red→green for longs, green→red for shorts)
+                            * UT Bot Alerts: Matching signal (Buy for longs, Sell for shorts)
+                            * Volume Oscillator: Above 0%
 
-                        2. **Signal Timing and Entry Rules:**
-                        - Early Stage Entry (Prime Opportunity):
-                            * Enter within 20 candles of initial signal formation (100 minutes)
-                            * All three core indicators showing clear signals defined as:
-                                - BlackFlag cloud color change confirmed
-                                - UT Bot signal within last 2 candles
-                                - Volume Oscillator > 0% and increasing
-                            * Use stop loss according to priority order
-                            * Standard reward/risk ratio (1.5-2.5)
-                            * Full position sizing based on signal strength
-                            
-                        - Mid Stage Entry (Additional Confirmation Required):
-                            * If entering 20-40 candles after initial signals:
-                                - Use 70% of standard position size
-                                - Reward/risk ratio (1.3-2.0)
-                                - Stop loss according to priority order
-                                - Require strong trend continuation defined as:
-                                    * Each swing movement > 0.1%
-                                    * Volume increasing on trend moves
-                                    * RSI maintaining trend direction
-                            
-                        - Late Stage Entry (Strong Confirmation Required):
-                            * If entering 40-60 candles after signals:
-                                - Use 50% of standard position size
-                                - Minimum reward/risk ratio: 1.2
-                                - Fresh momentum signals defined as:
-                                    * New RSI extreme in trend direction
-                                    * New MACD histogram peak/trough
-                                    * Volume > 120% of 20-period EMA
-                                - Clear trend structure defined as:
-                                    * Consecutive higher highs/lows (uptrend)
-                                    * Consecutive lower highs/lows (downtrend)
-                                    * No overlap of last 3 swing points
+                        Signal Strength Classification:
+                        - Strong Signal (ALL required):
+                            * BlackFlag: Sharp color transition with clear boundary
+                            * UT Bot: Fresh signal within last 2 candles
+                            * Volume Oscillator: >40% and increasing
+                            * Position Size: 100% of calculated size
+                            * Stop Loss: -0.5% from entry
+                            * P/L Ratio: 2.0
 
-                        3. **Swing Trading Strategy:**
-                        - Major Support/Resistance Reactions:
-                            * Level must have minimum 2 reactions on 1H timeframe
-                            * Position Size: 40-50% of final calculated size
-                            * Reward/Risk: 1.2-1.5
-                            * Entry Conditions:
-                                - RSI: Below 30 for longs, Above 70 for shorts
-                                - Price reaction within 0.2% of level
-                                - Volume spike above 120% of 20-period EMA
-                                - No opposing higher timeframe signals
+                        - Moderate Signal:
+                            * BlackFlag: Color transition with some noise
+                            * UT Bot: Signal within last 3-4 candles
+                            * Volume Oscillator: 20-40%
+                            * Position Size: 70% of calculated size
+                            * Stop Loss: -0.4% from entry
+                            * P/L Ratio: 1.75
 
-                        - Counter-Trend Entries:
-                            * Must have clear price exhaustion defined as:
-                                - RSI divergence on 5min AND 1H timeframes
-                                - Volume declining for 3+ consecutive candles
-                                - Price fails to make new extreme
-                            * Multiple timeframe RSI divergence
-                            * Position Size: 30-40% of final calculated size
-                            * Stop loss according to priority order
-                            * Target: Previous significant swing points
+                        - Weak Signal:
+                            * BlackFlag: Early transition signs
+                            * UT Bot: Signal within last 5 candles
+                            * Volume Oscillator: 0-20%
+                            * Position Size: 40% of calculated size
+                            * Stop Loss: -0.3% from entry
+                            * P/L Ratio: 1.5
 
-                        4. **Mean Reversion Strategy:**
-                        - Oversold Long Entry Conditions:
-                            * Price >0.5% below established trend line
-                            * RSI below 30 on 5min chart
-                            * Positive divergence on MACD (histogram increasing)
-                            * No major resistance within 0.3%
-                            * Position Size: 25-35% of final calculated size
-                            * Stop loss according to priority order
-                            * Target: Return to trend line
+                        2. **Secondary Entry Conditions (When Core Indicators Not Aligned):**
+                        - Must have EXTREMELY compelling evidence:
+                            * Strong price action confirmation
+                            * Clear support/resistance level
+                            * Multiple timeframe alignment
+                            * Significant volume confirmation
+                        - Restricted Parameters:
+                            * Position Size: Maximum 30% of standard size
+                            * Stop Loss: 0.15-0.3% from entry
+                            * Take Profit: 1.3-1.5x risk
+                            * Maximum hold time: 20 candles
 
-                        - Overbought Short Entry Conditions:
-                            * Price >0.5% above established trend line
-                            * RSI above 70 on 5min chart
-                            * Negative divergence on MACD (histogram decreasing)
-                            * No major support within 0.3%
-                            * Position Size: 25-35% of final calculated size
-                            * Stop loss according to priority order
-                            * Target: Return to trend line
+                        3. **Position Management:**
+                        - Profit Zone Management (>0.1% profit):
+                            * Partial Exit Triggers (50% of position):
+                            - First sign of trend weakness
+                            - RSI divergence
+                            - Volume decline >20%
+                            * Full Exit Triggers:
+                            - Clear trend reversal signal
+                            - Break of local trend line
+                            - Core indicators showing reversal
 
-                        5. **Primary Entry Conditions (Standard Entry):**
-                        - BlackFlag FTS: Clear cloud color change (red→green for longs, green→red for shorts)
-                        - UT Bot Alerts: Matching signal (Buy for longs, Sell for shorts)
-                        - Volume Oscillator: Above 0%
-                        - Volume Requirements:
-                            - Strong Signal Entry:
-                                * Volume above 150% of 20-period EMA
-                                * 2+ consecutive bars of increasing volume
-                                * Clean price action defined as:
-                                    - No wicks > 15% of candle body
-                                    - Body > 50% of candle range
-                                    - Closing in top/bottom 25% for trend direction
-                            
-                            - Moderate Signal Entry:
-                                * Volume above 120% of 20-period EMA
-                                * 2+ bars showing volume increase
-                                * OR single volume spike > 150% with price structure:
-                                    - No wicks > 25% of candle body
-                                    - Body > 40% of candle range
-                            
-                            - Conservative Entry:
-                                * Volume above 100% of 20-period EMA
-                                * Steady volume flow (no > 20% drops)
-                                * Clear price structure:
-                                    - Consistent candle size
-                                    - No erratic wicks
-                                    - Aligned with trend direction
+                        - Loss Prevention:
+                            * Immediate 100% exit if:
+                            - Any core indicator shows strong reversal
+                            - Price breaks significant level with volume
+                            - Sudden volatility spike >30%
 
-                        - Signal Confirmation:
-                            - Minimum Requirements:
-                                * Single candle movement: 0.1% minimum
-                                * OR Two consecutive candles totaling 0.2%
-                                * Each candle minimum 0.08% movement
-                            - No significant wicks against trend (max 15% of candle body)
-                            - Price must maintain trend structure defined as:
-                                * Higher lows for uptrend
-                                * Lower highs for downtrend
-                                * No overlap with previous swing point
-                            - No reversal candlestick patterns defined as:
-                                * No engulfing patterns
-                                * No pin bars against trend
-                                * No three inside down/up
+                        4. **Risk Management Framework:**
+                        - Position Sizing:
+                            * Base size calculation: 20-30% of available balance
+                            * Maximum total exposure: 65% of balance
+                            * Scale-in only after 0.2% profit
+                            * Maximum 3 scale-ins per trend
 
-                        - Important:
-                            - Only enter when all conditions show clear, strong signals
-                            - AVOID entries when price is near cloud boundaries (within 0.1%)
-                            - Additional caution during low liquidity periods (volume < 70% average)
+                        - Stop Loss Management:
+                            * Never wider than specified ranges
+                            * No moving stops against position
+                            * Tighten stops in profit zone
+                            * Exit full position at stop level
 
-                        네, Volatility Management Framework에 이벤트성 변동성을 구분하는 부분을 추가하겠습니다:
+                        - Take Profit Strategy:
+                            * Short-term targets based on signal strength
+                            * Partial exits at each target
+                            * Trail stops in strong trends
+                            * Full exit on reversal signals
 
-                        6. **Volatility Management Framework:**
-                        - Market State Classification (Based on 5-min ATR):
-                            * Normal Volatility Trend:
-                                - ATR change < 20% from 20-period EMA
-                                - Regular position sizing
-                                - Standard stop loss rules
-                            
-                            * High Volatility Trend:
-                                - ATR change 20-50% from 20-period EMA
-                                - Reduce position size to 60% of calculated size
-                                - Tighten stop loss by 30%
-                            
-                            * Extreme Volatility:
-                                - ATR change > 50% from 20-period EMA
-                                - Reduce position size to 40% of calculated size
-                                - Enhanced monitoring frequency
-                                - No new entries until stabilization requirements met
-                            
-                            * Event-Driven Volatility:
-                                - Identified by:
-                                    * Sudden volume spike > 300% of 20-period EMA
-                                    * Multiple large candles (>0.5%) in same direction
-                                    * Unusual price gaps or flash movements
-                                    * Extreme volume concentration in short time
-                                - Response:
-                                    * Immediate closure of 100% position if in opposite direction
-                                    * No new entries for minimum 5 candles
-                                    * Wait for clear volume and price stabilization
-                                    * Require fresh signal formation after stabilization
-                                - Re-entry Requirements:
-                                    * Volume pattern returns to normal distribution
-                                    * ATR returns to pre-event levels
-                                    * Price shows clear directional bias
-                                    * All regular entry conditions met
+                        **CRITICAL RULES:**
+                        1. NEVER enter without clear stop loss
+                        2. NEVER add to losing positions
+                        3. ALWAYS use correct exit commands:
+                        - "buy" to exit shorts
+                        - "sell" to exit longs
+                        4. Default to HOLD unless conditions are crystal clear
 
-                        - Stabilization Requirements (ALL must be met):
-                            * ATR change returns below 30% for minimum 3 consecutive candles
-                            * Volume returns to < 150% of 20-period EMA
-                            * BB width contracts to < 110% of 20-period average
-                            * RSI returns to 40-60 range
-                            * Price action shows regular candle formations:
-                                - No gaps
-                                - No excessive wicks
-                                - Consistent candle sizes
+                        **Market Analysis Framework:**
+                        1. Signal Strength Verification:
+                        - Check core indicator alignment
+                        - Classify signal strength
+                        - Verify volume confirmation
 
-                        - Volatility Breakout Rules:
-                            * Immediate Exit Triggers (ALL must be met):
-                                - Price movement > 0.4% in single candle 
-                                - Volume spike > 200% of 20-period EMA
-                                - RSI crosses 80/20 levels with momentum defined as:
-                                    * RSI movement > 10 points in 3 candles
-                                    * RSI slope increasing/decreasing for 3 candles
-                                - Execute exit within current candle
-                            
-                            * Volatility Protection:
-                                - Monitor 5-min ATR rate of change from 20-period EMA
-                                - If ATR increases > 50% in 3 candles:
-                                    * Reduce position size according to volatility state
-                                    * Tighten stop loss according to priority order
-                                    * Increase monitoring frequency
+                        2. Entry Timing:
+                        - Confirm trend direction
+                        - Verify price action
+                        - Check higher timeframes
 
-                        - Rapid Market Change Protocol:
-                            * Primary Triggers (any 2 confirm):
-                                - Single candle range > 150% of 10-period average
-                                - Volume > 200% of 20-period EMA
-                                - RSI crosses 50 with momentum (>10 points in 3 candles)
-                                - BB width expansion > 150% in 3 candles
-                            
-                            * Immediate Actions:
-                                - Close 70% of position immediately
-                                - Move stop loss to break-even
-                                - Reduce new position sizes by 60%
-                                - Wait minimum 3 candles for re-entry verification
-
-                        **Multi-Timeframe Analysis Framework:**
-                        (Priority Order for Signal Confirmation)
-
-                        1. 5-Minute Timeframe (Primary):
-                            - Direct Entry Signals:
-                                * Core indicator alignment defined as:
-                                    - FTS cloud, UT Bot, Volume all aligned
-                                    - All signals within last 2 candles
-                                * Immediate price action:
-                                    - Clear trend formation
-                                    - No contradicting patterns
-                                * Volume confirmation:
-                                    - Above specified thresholds
-                                    - Trend-aligned increases
-                                * Short-term momentum:
-                                    - RSI trending in direction
-                                    - MACD histogram expanding
-                                    - ADX > 25
-
-                        2. 1-Hour Timeframe (Strategic):
-                            - Major Support/Resistance Levels:
-                                * Minimum 2 clear reactions
-                                * Volume > 150% at reactions
-                            - Trend Direction Confirmation:
-                                * Must align with 5min trend
-                                * No major reversal patterns
-                            - Key Swing Points:
-                                * Clear pivots with volume
-                                * No conflicting formations
-                            - Volume Profile Analysis:
-                                * Support high-volume areas
-                                * Avoid low-volume zones
-
-                        3. 4-Hour Timeframe (Bias):
-                            - Overall Market Direction:
-                                * Primary trend identification
-                                * No major trend conflicts
-                            - Major Technical Levels:
-                                * Key S/R zones
-                                * Historical pivots
-                            - Momentum Phase Identification:
-                                * Trend strength confirmation
-                                * No exhaustion signals
-                            - Higher Timeframe S/R Zones:
-                                * Clear reaction areas
-                                * Volume confirmation
-
-                        **Technical Analysis Framework:**
-
-                        1. Core Signal Requirements (ALL must align):
-                        - BlackFlag FTS Cloud Pattern:
-                            - Long: Clean transition from red to green cloud
-                            - Short: Clean transition from green to red cloud
-                            - AVOID entries when price is within 0.1% of cloud boundaries
-
-                        - UT Bot Alert Status:
-                            - Must be fresh signal (within last 2 candles)
-                            - Must match trade direction
-                            - Must occur with/after cloud transition
-                            - No contradicting signals in higher timeframe
-
-                        - Volume Oscillator:
-                            - Must be above 0%
-                            - Higher readings indicate stronger trends defined as:
-                                * > 25% = Strong trend
-                                * > 50% = Very strong trend
-                            - Should align with cloud direction
-                            - Confirmed by raw volume increase
-
-                        2. Trend Confirmation:
-                        - Price Action:
-                            - Consistent higher highs and higher lows with each swing spanning >0.1% movement
-                            - NO sideways/choppy price action defined as:
-                                * No more than 2 consecutive inside bars
-                                * No overlapping swing points
-                            - Clear higher highs/lows for longs:
-                                * Each high exceeds previous by >0.1%
-                                * Each low higher than previous
-                            - Clear lower highs/lows for shorts:
-                                * Each low below previous by >0.1%
-                                * Each high lower than previous
-
-                        - Supporting Indicators:
-                            - ADX > 25 indicates trend strength:
-                                * 25-35: Moderate trend
-                                * 35-45: Strong trend
-                                * >45: Very strong trend
-                            - DMI alignment with trend direction:
-                                * Minimum 5 point separation
-                                * No crossovers pending
-                            - RSI trending with price:
-                                * No divergence within last 3 swings
-                                * Maintaining trend direction
-                                * Aligned across timeframes
-
-                        **MARKET STRUCTURE ANALYSIS:**
-
-                        1. Swing Point Identification:
-                        - Significant Swing High:
-                            * Higher than previous 3 candles on both sides
-                            * Volume above 150% of 20-period EMA
-                            * No opposite signal from primary indicators
-                            * Clear rejection with long upper wick
-                            * Confirmed by next candle's lower high
-
-                        - Significant Swing Low:
-                            * Lower than previous 3 candles on both sides
-                            * Volume above 150% of 20-period EMA
-                            * No opposite signal from primary indicators
-                            * Clear rejection with long lower wick
-                            * Confirmed by next candle's higher low
-
-                        2. Trend Structure Analysis:
-                        - Strong Uptrend Requirements (ALL must be met):
-                            * Series of higher highs and higher lows
-                            * Each swing spanning >0.1% movement
-                            * Each swing high above previous resistance
-                            * Each swing low above previous support
-                            * Volume increasing on upward moves:
-                                - Volume > 120% EMA on advances
-                                - Volume < 80% EMA on retracements
-
-                        - Strong Downtrend Requirements (ALL must be met):
-                            * Series of lower highs and lower lows
-                            * Each swing spanning >0.1% movement
-                            * Each swing low below previous support
-                            * Each swing high below previous resistance
-                            * Volume increasing on downward moves:
-                                - Volume > 120% EMA on declines
-                                - Volume < 80% EMA on retracements
-
-                        3. Key Level Identification:
-                        - Support/Resistance Levels:
-                            * Previous swing points with minimum 150% EMA volume
-                            * Multiple timeframe alignment within 0.1% range
-                            * Recent price reaction confirmation:
-                                - Clear rejection with volume
-                                - Minimum 0.2% price movement
-                            * Minimum 0.3% price rejection from level
-
-                        - Level Strength Rating:
-                            * Strong: 
-                                - Multiple timeframe confluence
-                                - Volume > 150% EMA
-                                - Clear price rejection
-                                - Multiple historical reactions
-                            * Moderate: 
-                                - Single timeframe
-                                - Volume > 120% EMA
-                                - Some price reaction
-                                - Recent formation
-                            * Weak: 
-                                - No timeframe confluence
-                                - Below average volume
-                                - No clear rejection
-                                - Old/untested level
-
-                        **POSITION MANAGEMENT:**
-
-                        1. Entry Rules Priority:
-                        - Position Requirements (ALL must be met):
-                            * Core indicators aligned within 2 candles
-                            * Trend direction established:
-                                - Minimum 3 consecutive swings
-                                - Each swing > 0.1%
-                            * Stop loss level visually clear and within parameters
-                            * Minimum reward/risk ratio met for trade type
-                            * Multi-timeframe confirmation:
-                                - No higher timeframe resistance within 0.3%
-                                - No opposing signals on higher timeframes
-                                - Volume profile supporting direction
-
-                        2. Position Size Framework:
-                        - Calculation Priority (Applied in Exact Order):
-                            1. Base Size Calculation:
-                                * Start with 100% standard position size
-                                * Always calculated first
-                                * Based on account risk parameters
-                            
-                            2. Stage Adjustment:
-                                * Early Stage (0-20 candles): 100% of base
-                                * Mid Stage (21-40 candles): 70% of base
-                                * Late Stage (41-60 candles): 50% of base
-                            
-                            3. Volatility Adjustment:
-                                * Low Volatility (ATR change < 20%): 100% of stage-adjusted size
-                                * High Volatility (ATR 20-50%): 60% of stage-adjusted size
-                                * Extreme Volatility (ATR > 50%): 40% of stage-adjusted size
-                            
-                            4. Trade Type Specific Adjustment:
-                                * Trend Following: Apply full calculated size
-                                * Support/Resistance: 40-50% of calculated size
-                                * Counter-Trend: 30-40% of calculated size
-                                * Mean Reversion: 25-35% of calculated size
-                            
-                            5. Final Size = Base × Stage × Volatility × Trade Type
-                            
-                            6. Maximum Position Checks:
-                                * Never exceed 80% of available balance
-                                * Never exceed 50% in high volatility
-                                * Never exceed 30% in extreme volatility
-
-                        3. Exit Framework (Priority Order):
-                        - Exit Execution Priority:
-                            1. Volatility-Based Immediate Exits:
-                                * ALL conditions must be met:
-                                    - Price movement > 0.4% in single candle
-                                    - Volume > 200% of 20-period EMA
-                                    - RSI crosses 80/20 with momentum (>10 points/3 candles)
-                                * Must execute within same candle
-                                * Overrides all other exit types
-                            
-                            2. Enhanced Quick Response Rules:
-                                * Partial Exit (60% of position) when ANY occur:
-                                    - Counter-trend candle with volume > 150% EMA
-                                    - Core indicators showing weakness:
-                                        * RSI divergence
-                                        * MACD crossover
-                                        * Cloud color change
-                                    - Higher timeframe reversal signals:
-                                        * Key level reached
-                                        * Momentum exhaustion
-                                        * Volume climax
-                                * Must execute within 1 candle
-                            
-                            3. Standard Exit Rules:
-                                * Full Exit Conditions (ANY 2 confirm):
-                                    - Volume surge > 150% EMA against trend
-                                    - Strong counter-trend close (>0.2% move)
-                                    - RSI crosses 50 in opposite direction
-                                    - Price breaks local trend line with volume
-                                    - DMI crossover with ADX > 25
-                                    - ADX drops below 22 from above 25
-                                    - Major S/R break with volume > 150% EMA
-                                * Execute within 1-2 candles of confirmation
-
-                        4. Position Scaling Rules:
-                        - Add to WINNING positions only when ALL met:
-                            * Original position minimum 0.2% profitable
-                            * Core indicators reconfirm trend:
-                                - FTS cloud maintaining color
-                                - UT Bot signal reinforcement
-                                - Volume Oscillator > 25%
-                            * New entry has clear stop level defined by:
-                                - Cloud boundary visible
-                                - Recent swing point established
-                                - Clean price action confirmed
-                            * No warning signs present:
-                                - No divergences forming
-                                - No major levels within 0.3%
-                                - No volatility expansion
-
-                        - Maximum Position Parameters:
-                            * Total position never exceeds 80% of balance
-                            * Scaling increment: 12-18% of original position
-                            * Maximum scale-ins: 3 times per trend
-                            * Minimum 3 candles between scales
-
-                        5. Re-entry Rules:
-                        - After Profitable Exit:
-                            * Clear reversal signal formation:
-                                - Complete reversal pattern
-                                - Volume confirmation > 150% EMA
-                                - Multi-timeframe alignment
-                            * Stronger signals than previous entry:
-                                - Higher volume
-                                - Clearer pattern
-                                - Better R/R ratio
-                            * Previous high/low not breached
-                            * Minimum 2 candles for confirmation
-                            * Fresh momentum indicators:
-                                - RSI reset and turning
-                                - MACD crossing
-                                - ADX > 25
-
-                        - After Stop Loss:
-                            * Mandatory 3 candles minimum wait
-                            * Primary indicator reconfirmation:
-                                - Fresh FTS cloud signal
-                                - New UT Bot alert
-                                - Volume recovery > 120% EMA
-                            * Clear market structure support:
-                                - Level holding
-                                - Pattern completing
-                                - Volume confirming
-                            * Position size reduced by 60%
-                            * Higher R/R ratio than original trade
-
-                        **CRITICAL RISK RULES:**
-                        (ALL rules are absolute, no exceptions)
-
-                        1. Entry Risk Rules:
-                        - NEVER enter without:
-                            * Clearly defined stop loss
-                            * Minimum reward/risk ratio for trade type
-                            * Complete indicator alignment
-                            * Volume confirmation
-                            * Clear market structure
-
-                        2. Position Management Rules:
-                        - NEVER:
-                            * Add to losing positions
-                            * Average down
-                            * Move stop loss further from entry
-                            * Exceed maximum position size
-                            * Hold through major event risk
-
-                        3. Exit Management Rules:
-                        - ALWAYS:
-                            * Use "buy" to exit shorts
-                            * Use "sell" to exit longs
-                            * Execute stops at exactly defined level
-                            * Close positions showing multiple warnings
-                            * Follow exit priority system
-
-                        4. Volatility Rules:
-                        - NEVER ignore:
-                            * Volatility breakout signals
-                            * ATR expansion warnings
-                            * Volume spike alerts
-                            * Immediate exit triggers
-                            * Stabilization requirements
-
-                        5. Recovery Rules:
-                        - ALWAYS:
-                            * Wait required candles after stop loss
-                            * Reduce size after losses
-                            * Verify all indicators after breaks
-                            * Document reason for stop out
-                            * Maintain strict risk parameters
+                        3. Risk Assessment:
+                        - Calculate position size
+                        - Set stop loss level
+                        - Determine take profit targets
 
                         **[Market Data]**
-                        - Current Price: {current_price:.2f} USDT
+                        Current Price: {current_price:.2f} USDT
 
-                        **5-Minute Chart Data:**
-                        - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
-                        - MACD: {df_5min['macd'].iloc[-1]:.2f}
-                        - Bollinger Bands (20): 
-                            * Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}
-                            * Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}
-                            * Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
-                        - Stochastic Oscillator (14, 3):
-                            * %K: {df_5min['stoch_k'].iloc[-1]:.2f}
-                            * %D: {df_5min['stoch_d'].iloc[-1]:.2f}
-                        - ATR: {df_5min['atr'].iloc[-1]:.2f}
-                        - Williams %R: {df_5min['williams_r'].iloc[-1]:.2f}
-                        - CMF: {df_5min['cmf'].iloc[-1]:.2f}
-                        - ADX: {df_5min['adx'].iloc[-1]:.2f}
-                        - DI+: {df_5min['di_plus'].iloc[-1]:.2f}
-                        - DI-: {df_5min['di_minus'].iloc[-1]:.2f}
-                        - PPO: {df_5min['ppo'].iloc[-1]:.2f}
+                        Technical Indicators (5-min, 1-hour, 4-hour timeframes)
+                            **5-Minute Chart Data:**
+                            - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
+                            - MACD: {df_5min['macd'].iloc[-1]:.2f}
+                            - Bollinger Bands (20): 
+                                * Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}
+                                * Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}
+                                * Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
+                            - Stochastic Oscillator (14, 3):
+                                * %K: {df_5min['stoch_k'].iloc[-1]:.2f}
+                                * %D: {df_5min['stoch_d'].iloc[-1]:.2f}
+                            - ATR: {df_5min['atr'].iloc[-1]:.2f}
+                            - Williams %R: {df_5min['williams_r'].iloc[-1]:.2f}
+                            - CMF: {df_5min['cmf'].iloc[-1]:.2f}
+                            - ADX: {df_5min['adx'].iloc[-1]:.2f}
+                            - DI+: {df_5min['di_plus'].iloc[-1]:.2f}
+                            - DI-: {df_5min['di_minus'].iloc[-1]:.2f}
+                            - PPO: {df_5min['ppo'].iloc[-1]:.2f}
 
-                        **1-Hour Chart Data:**
-                        - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
-                        - MACD: {df_hourly['macd'].iloc[-1]:.2f}
-                        - Bollinger Bands:
-                            * Middle: {df_hourly['bb_bbm'].iloc[-1]:.2f}
-                            * Upper: {df_hourly['bb_bbh'].iloc[-1]:.2f}
-                            * Lower: {df_hourly['bb_bbl'].iloc[-1]:.2f}
-                        - ATR: {df_hourly['atr'].iloc[-1]:.2f}
-                        - Williams %R: {df_hourly['williams_r'].iloc[-1]:.2f}
-                        - CMF: {df_hourly['cmf'].iloc[-1]:.2f}
-                        - ADX: {df_hourly['adx'].iloc[-1]:.2f}
-                        - DI+: {df_hourly['di_plus'].iloc[-1]:.2f}
-                        - DI-: {df_hourly['di_minus'].iloc[-1]:.2f}
-                        - PPO: {df_hourly['ppo'].iloc[-1]:.2f}
+                            **1-Hour Chart Data:**
+                            - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
+                            - MACD: {df_hourly['macd'].iloc[-1]:.2f}
+                            - Bollinger Bands:
+                                * Middle: {df_hourly['bb_bbm'].iloc[-1]:.2f}
+                                * Upper: {df_hourly['bb_bbh'].iloc[-1]:.2f}
+                                * Lower: {df_hourly['bb_bbl'].iloc[-1]:.2f}
+                            - ATR: {df_hourly['atr'].iloc[-1]:.2f}
+                            - Williams %R: {df_hourly['williams_r'].iloc[-1]:.2f}
+                            - CMF: {df_hourly['cmf'].iloc[-1]:.2f}
+                            - ADX: {df_hourly['adx'].iloc[-1]:.2f}
+                            - DI+: {df_hourly['di_plus'].iloc[-1]:.2f}
+                            - DI-: {df_hourly['di_minus'].iloc[-1]:.2f}
+                            - PPO: {df_hourly['ppo'].iloc[-1]:.2f}
 
-                        **4-Hour Chart Data:**
-                        - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
-                        - MACD: {df_4h['macd'].iloc[-1]:.2f}
-                        - Bollinger Bands:
-                            * Middle: {df_4h['bb_bbm'].iloc[-1]:.2f}
-                            * Upper: {df_4h['bb_bbh'].iloc[-1]:.2f}
-                            * Lower: {df_4h['bb_bbl'].iloc[-1]:.2f}
-                        - ATR: {df_4h['atr'].iloc[-1]:.2f}
-                        - Williams %R: {df_4h['williams_r'].iloc[-1]:.2f}
-                        - CMF: {df_4h['cmf'].iloc[-1]:.2f}
-                        - ADX: {df_4h['adx'].iloc[-1]:.2f}
-                        - DI+: {df_4h['di_plus'].iloc[-1]:.2f}
-                        - DI-: {df_4h['di_minus'].iloc[-1]:.2f}
-                        - PPO: {df_4h['ppo'].iloc[-1]:.2f}
+                            **4-Hour Chart Data:**
+                            - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
+                            - MACD: {df_4h['macd'].iloc[-1]:.2f}
+                            - Bollinger Bands:
+                                * Middle: {df_4h['bb_bbm'].iloc[-1]:.2f}
+                                * Upper: {df_4h['bb_bbh'].iloc[-1]:.2f}
+                                * Lower: {df_4h['bb_bbl'].iloc[-1]:.2f}
+                            - ATR: {df_4h['atr'].iloc[-1]:.2f}
+                            - Williams %R: {df_4h['williams_r'].iloc[-1]:.2f}
+                            - CMF: {df_4h['cmf'].iloc[-1]:.2f}
+                            - ADX: {df_4h['adx'].iloc[-1]:.2f}
+                            - DI+: {df_4h['di_plus'].iloc[-1]:.2f}
+                            - DI-: {df_4h['di_minus'].iloc[-1]:.2f}
+                            - PPO: {df_4h['ppo'].iloc[-1]:.2f}
 
-                        **[Portfolio]**
-                        - Total USDT Assets: {total_usdt:.1f}
-                        - Free USDT Balance: {free_usdt:.1f}
-                        - Used USDT Holdings: {used_usdt:.1f} 
-                        - BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT
+                            **[Portfolio]**
+                            - Total USDT Assets: {total_usdt:.1f}
+                            - Free USDT Balance: {free_usdt:.1f}
+                            - Used USDT Holdings: {used_usdt:.1f} 
+                            - BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT
 
-                        **Decision Making Process:**
-                        1. Analysis Sequence:
-                            a. Check current position status
-                            b. Evaluate market volatility state
-                            c. Verify trend conditions
-                            d. Confirm signal alignments
-                            e. Calculate reward/risk ratio
-                            f. Determine position size
-
-                        2. Priority Order:
-                            a. First check for exit signals
-                            b. Then evaluate scaling opportunities
-                            c. Finally assess new entry conditions
-                            d. Default to HOLD if unclear
-
-                        3. Position Sizing Method:
-                            a. Calculate base size
-                            b. Apply stage adjustment
-                            c. Apply volatility adjustment
-                            d. Apply trade type modifier
-                            e. Verify against limits
-
-                        4. Risk Assessment:
-                            a. Confirm stop loss placement
-                            b. Verify reward/risk ratio
-                            c. Check volatility state
-                            d. Assess market structure
-                            e. Evaluate indicator alignment
-
-                        **JSON Response Format:**
-                        {{
+                        **Response Format:**
+                        {
                             "decision": "buy" or "sell" or "hold",
                             "percentage": integer (0-100),
-                            "stop_loss_price": float,
-                            "pl_ratio": float (1.5-2.5),
-                            "market_state": "low_volatility|high_volatility|extreme_volatility",
-                            "atr_change": float,
-                            "volatility_adjustment": float (0.4-1.0),
-                            "rapid_exit_required": boolean,
+                            "stop_loss_price": integer,
+                            "pl_ratio": float (1.3-2.0),
                             "reason": string (detailed analysis)
-                        }}
+                        }
 
-                        **VALIDATION CHECKLIST:**
-
-                        1. Stop Loss Validation:
-                            a. Determine Trade Stage:
-                                * Early signal entry → Use cloud boundary
-                                * Late signal entry → Use cloud boundary + buffer
-                                * Mean reversion trade → Use fixed SL
-                            b. Check Volatility Adjustment:
-                                * Low volatility → Standard stop
-                                * High volatility → Tighten by 30%
-                                * Extreme volatility → Tighten by 50%
-                            c. Verify Stop Loss Level:
-                                * Clear price level
-                                * Within maximum risk parameters
-                                * No major levels between entry and stop
-
-                        2. Entry Timing Verification:
-                            a. Signal Age:
-                                * Count candles since initial signals
-                                * Verify signal strength maintenance
-                                * Check volume consistency
-                            b. Position Size Adjustment:
-                                * Apply stage-based reduction
-                                * Apply volatility adjustment
-                                * Verify trade type modifier
-                            c. Confirmation Requirements:
-                                * All indicators aligned
-                                * Volume supporting movement
-                                * Price action confirming
-
-                        3. Trade Type Classification:
-                            a. Determine Primary Strategy:
-                                * Trend Following
-                                * Swing Trading
-                                * Mean Reversion
-                            b. Apply Specific Parameters:
-                                * Appropriate risk settings
-                                * Correct position sizing
-                                * Proper target selection
-                            c. Verify Strategy Alignment:
-                                * Market conditions suitable
-                                * No strategy conflicts
-                                * Clear execution path
-
-                        4. Volatility Assessment:
-                            a. Current State Analysis:
-                                * Calculate ATR change from 20 EMA
-                                * Monitor volume patterns
-                                * Check BB width changes
-                            b. State Classification:
-                                * Determine volatility level
-                                * Apply appropriate adjustments
-                                * Monitor for state changes
-                            c. Rule Application:
-                                * Implement size adjustments
-                                * Modify stop losses
-                                * Adjust monitoring frequency
-
-                        5. Final Position Size Verification:
-                            a. Calculation Confirmation:
-                                * Base size properly calculated
-                                * All adjustments applied
-                                * Final size within limits
-                            b. Maximum Size Checks:
-                                * Not exceeding 80% total balance
-                                * Within volatility limits
-                                * Trade type limits respected
-                            c. Risk Distribution:
-                                * Properly sized for account
-                                * Appropriate for market state
-                                * Aligned with strategy rules
-
-                        This is an aggressive trend-following strategy designed for rapid growth while maintaining disciplined risk management. The goal is to capture significant market moves with calculated, strategic entries and exits. Default to HOLD unless all conditions align perfectly, with a focus on protecting capital while seeking high-probability trades.           
+                        This is an aggressive trend-following strategy with emphasis on capital preservation. Focus on clear signals and quick profit taking in volatile markets. Default to HOLD unless conditions are absolutely clear.
                         """   
                     },
                     {
