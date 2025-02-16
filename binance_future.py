@@ -1855,13 +1855,13 @@ def ai_trading():
 
                         ──────────────────────────────
                         Response Format:
-                        {
+                        {{
                         "decision": "buy" or "sell" or "hold",
                         "percentage": integer (0-100),
                         "stop_loss_price": integer,
                         "pl_ratio": float (1.5-2.0),
                         "reason": string (detailed analysis)
-                        }
+                        }}
 
                         This is an aggressive trend-following strategy with emphasis on capital preservation. Focus on clear signals and quick profit taking in volatile markets. Default to HOLD unless conditions are absolutely clear.
                         ──────────────────────────────    
