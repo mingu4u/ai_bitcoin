@@ -638,7 +638,23 @@ class BinanceFuturesTrader:
                     self.logger.error(f"Error cancelling order {order['id']}: {e}")
             time.sleep(API_DELAY)
 
-        # 1. 현재가 조회 및 TP/SL 가격 계산
+        # 1. 현재 포지션 확인
+        try:
+            positions = self.exchange.fetch_positions([self.symbol])
+            current_position = None
+            position_side = None
+
+            for pos in positions:
+                if float(pos.get('contracts', 0) or 0) != 0:
+                    current_position = pos
+                    position_side = pos['side']
+                    break
+
+        except Exception as e:
+            self.logger.error(f"Error fetching positions: {e}")
+            return None
+
+        # 2. 현재가 조회 및 TP/SL 가격 계산
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             current_price = ticker['last']
@@ -670,57 +686,91 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error calculating prices: {e}")
             return None
 
-        # 2. 현재 포지션 확인
-        try:
-            positions = self.exchange.fetch_positions([self.symbol])
-            current_position = None
-            position_side = None
-
-            for pos in positions:
-                if float(pos.get('contracts', 0) or 0) != 0:
-                    current_position = pos
-                    position_side = pos['side']
-                    break
-
-        except Exception as e:
-            self.logger.error(f"Error fetching positions: {e}")
-            return None
-
-        # 3. 신규 포지션 진입을 위한 잔고 확인 및 주문 수량 계산
+        # 3. 주문 수량 계산
         try:
             balance = self.exchange.fetch_balance()
             available_balance = float(balance['USDT']['free'])
-            
-            if available_balance < MINIMUM_ORDER_VALUE:
-                self.logger.error(f"Insufficient balance: {available_balance} USDT")
-                return None
-            
-            max_safe_amount = available_balance * MAX_BALANCE_USE
-            if buy_amount > max_safe_amount:
-                buy_amount = max_safe_amount
-                self.logger.warning(f"Order amount adjusted to {buy_amount} USDT")
-            
-            quantity = (buy_amount * self.leverage) / current_price
-            
-            if quantity * current_price < MINIMUM_ORDER_VALUE:
-                self.logger.error(f"Order value too small: {quantity * current_price} USDT")
-                return None
-            
-            min_amount = self.exchange.markets[self.symbol]['limits']['amount']['min']
-            if quantity < min_amount:
-                self.logger.error(f"Order quantity too small: {quantity}")
-                return None
+            quantity = 0
+
+            # 반대 방향 주문(청산/축소)인 경우
+            if current_position and position_side:
+                if ((position_side == 'long' and side == 'sell') or 
+                    (position_side == 'short' and side == 'buy')):
+                    # 포지션 축소 수량 계산
+                    position_size = float(current_position['contracts'])
+                    position_notional = float(current_position['notional'])
+                    
+                    # 주문 비율 계산
+                    reduction_ratio = buy_amount / position_notional
+                    quantity = position_size * reduction_ratio
+                    
+                    # 최소 주문 수량 체크만 수행
+                    min_amount = self.exchange.markets[self.symbol]['limits']['amount']['min']
+                    if quantity < min_amount:
+                        self.logger.error(f"Order quantity too small: {quantity}")
+                        return None
+                # 같은 방향 추가 진입이거나 신규 진입인 경우
+                else:
+                    if available_balance < MINIMUM_ORDER_VALUE:
+                        self.logger.error(f"Insufficient balance: {available_balance} USDT")
+                        return None
+                    
+                    max_safe_amount = available_balance * MAX_BALANCE_USE
+                    if buy_amount > max_safe_amount:
+                        buy_amount = max_safe_amount
+                        self.logger.warning(f"Order amount adjusted to {buy_amount} USDT")
+                    
+                    quantity = (buy_amount * self.leverage) / current_price
+                    
+                    if quantity * current_price < MINIMUM_ORDER_VALUE:
+                        self.logger.error(f"Order value too small: {quantity * current_price} USDT")
+                        return None
+                    
+                    min_amount = self.exchange.markets[self.symbol]['limits']['amount']['min']
+                    if quantity < min_amount:
+                        self.logger.error(f"Order quantity too small: {quantity}")
+                        return None
+
+            # 신규 진입인 경우
+            else:
+                if available_balance < MINIMUM_ORDER_VALUE:
+                    self.logger.error(f"Insufficient balance: {available_balance} USDT")
+                    return None
+                
+                max_safe_amount = available_balance * MAX_BALANCE_USE
+                if buy_amount > max_safe_amount:
+                    buy_amount = max_safe_amount
+                    self.logger.warning(f"Order amount adjusted to {buy_amount} USDT")
+                
+                quantity = (buy_amount * self.leverage) / current_price
+                
+                if quantity * current_price < MINIMUM_ORDER_VALUE:
+                    self.logger.error(f"Order value too small: {quantity * current_price} USDT")
+                    return None
+                
+                min_amount = self.exchange.markets[self.symbol]['limits']['amount']['min']
+                if quantity < min_amount:
+                    self.logger.error(f"Order quantity too small: {quantity}")
+                    return None
 
         except Exception as e:
             self.logger.error(f"Error calculating order quantity: {e}")
             return None
 
         # 4. TP/SL 주문 관리 및 포지션 주문 실행
+        order = None
+        tp_order = None
+        sl_order = None
+        
         try:
             # 현재 열린 주문 조회
             open_orders = self.exchange.fetch_open_orders(self.symbol)
             tp_sl_orders = [order for order in open_orders if
                         order['info'].get('origType', '').upper() in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']]
+
+            # 기존 TP/SL 주문 취소
+            if tp_sl_orders:
+                cancel_orders(tp_sl_orders)
 
             if current_position and position_side:
                 # A. 반대 방향 주문 (포지션 축소/청산)
@@ -728,33 +778,11 @@ class BinanceFuturesTrader:
                     quantity = self._handle_position_reduction(
                         current_position, side, buy_amount, current_price
                     )
-                    
-                    # 전체 청산인 경우에만 TP/SL 취소
-                    if quantity == float(current_position['contracts']):
-                        cancel_orders(tp_sl_orders)
-                    else:
-                        self.logger.info("Partial position reduction - keeping existing TP/SL orders")
                 
                 # B. 같은 방향 추가 진입
                 elif side == position_side:
-                    # 추가 진입을 위한 TP/SL 가격 계산
-                    tp_price, sl_price = self._handle_position_increase(
-                        current_position=current_position,
-                        side=side,
-                        buy_amount=buy_amount,
-                        current_price=current_price,
-                        sl_price=sl_price,
-                        tp_price=tp_price,
-                        pl_ratio=pl_ratio,
-                        min_order_value=MINIMUM_ORDER_VALUE
-                    )
-                    
-                    if tp_price is None or sl_price is None:
-                        return None
-            
-            # C. 신규 진입 또는 방향 전환
-            else:
-                cancel_orders(tp_sl_orders)
+                    total_quantity = quantity + float(current_position['contracts'])
+                    quantity = total_quantity
 
             # 포지션 주문 실행
             order = self.exchange.create_market_order(
@@ -764,72 +792,73 @@ class BinanceFuturesTrader:
             )
             entry_price = current_price
 
-            # 5. TP/SL 주문 생성
-            tp_side = 'sell' if side == 'buy' else 'buy'
-            tp_order = None
-            sl_order = None
-
             # 반대 방향 주문이면서 부분 청산인 경우 TP/SL 생성하지 않음
             is_partial_reduction = (current_position and position_side and
                                 ((position_side == 'long' and side == 'sell') or 
                                 (position_side == 'short' and side == 'buy')) and
                                 quantity != float(current_position['contracts']))
 
+            # TP/SL 주문 생성
             if not is_partial_reduction:
-                # 같은 방향 추가 진입인 경우 SL만 업데이트
-                if current_position and side == position_side:
-                    total_quantity = quantity + float(current_position['contracts'])
-                    sl_order = self.exchange.create_order(
-                        symbol=self.symbol,
-                        type='STOP_MARKET',
-                        side=tp_side,
-                        amount=total_quantity,
-                        params={
-                            'stopPrice': sl_price,
-                            'closePosition': 'true',
-                            'clientOrderId': f"sl_{order['id']}"
-                        }
-                    )
-                    # TP는 새로 생성하지 않음 (기존 TP 유지)
-                    tp_order = None
-                # 신규 진입의 경우 TP/SL 모두 생성
-                else:
-                    tp_order = self.exchange.create_order(
-                        symbol=self.symbol,
-                        type='TAKE_PROFIT_MARKET',
-                        side=tp_side,
-                        amount=quantity,
-                        params={
-                            'stopPrice': tp_price,
-                            'closePosition': 'true',
-                            'clientOrderId': f"tp_{order['id']}"
-                        }
-                    )
-                    
-                    sl_order = self.exchange.create_order(
-                        symbol=self.symbol,
-                        type='STOP_MARKET',
-                        side=tp_side,
-                        amount=quantity,
-                        params={
-                            'stopPrice': sl_price,
-                            'closePosition': 'true',
-                            'clientOrderId': f"sl_{order['id']}"
-                        }
-                    )
+                tp_side = 'sell' if side == 'buy' else 'buy'
+                
+                # TP 주문 생성
+                tp_order = self.exchange.create_order(
+                    symbol=self.symbol,
+                    type='TAKE_PROFIT_MARKET',
+                    side=tp_side,
+                    amount=quantity,
+                    params={
+                        'stopPrice': tp_price,
+                        'closePosition': 'true',
+                        'clientOrderId': f"tp_{order['id']}"
+                    }
+                )
+                
+                # SL 주문 생성
+                sl_order = self.exchange.create_order(
+                    symbol=self.symbol,
+                    type='STOP_MARKET',
+                    side=tp_side,
+                    amount=quantity,
+                    params={
+                        'stopPrice': sl_price,
+                        'closePosition': 'true',
+                        'clientOrderId': f"sl_{order['id']}"
+                    }
+                )
+
+            # 모든 주문 성공 확인
+            if not (order and (is_partial_reduction or (tp_order and sl_order))):
+                raise Exception("Order creation incomplete")
 
         except Exception as e:
             self.logger.error(f"Error in order execution: {e}")
-            # 복구 처리
-            if 'order' in locals():
+            # 롤백 처리
+            if order:
                 try:
                     self.exchange.cancel_order(order['id'], self.symbol)
-                    self.logger.info("Cancelled main order after TP/SL creation failure")
+                    self.logger.info("Cancelled main order during rollback")
                 except Exception as cancel_error:
-                    self.logger.error(f"Error cancelling main order during recovery: {cancel_error}")
+                    self.logger.error(f"Error cancelling main order during rollback: {cancel_error}")
+            
+            if tp_order:
+                try:
+                    self.exchange.cancel_order(tp_order['id'], self.symbol)
+                    self.logger.info("Cancelled TP order during rollback")
+                except Exception as cancel_error:
+                    self.logger.error(f"Error cancelling TP order during rollback: {cancel_error}")
+                    
+            if sl_order:
+                try:
+                    self.exchange.cancel_order(sl_order['id'], self.symbol)
+                    self.logger.info("Cancelled SL order during rollback")
+                except Exception as cancel_error:
+                    self.logger.error(f"Error cancelling SL order during rollback: {cancel_error}")
+            
             return None
 
-        # 6. 트레일링 스탑로스 모니터링 함수 정의
+        # 5. 트레일링 스탑로스 모니터링 함수 정의
         def monitor_and_adjust_sl(self):
             try:
                 positions = self.exchange.fetch_positions([self.symbol])
@@ -889,8 +918,7 @@ class BinanceFuturesTrader:
             'sl': sl_order,
             'monitor_sl': monitor_and_adjust_sl,
             'entry_price': entry_price
-        }
-
+        }  
 
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
@@ -1661,184 +1689,184 @@ def ai_trading():
                     {
                     "role": "system",
                     "content": f"""
-# Bitcoin Futures Trading Strategy
+                        # Bitcoin Futures Trading Strategy
 
-You are a Bitcoin futures day trader specializing in trend-following strategies based on three core indicators, trading with {trader.leverage}x leverage. Your primary objective is to identify and follow strong trends while maintaining strict capital preservation.
+                        You are a Bitcoin futures day trader specializing in trend-following strategies based on three core indicators, trading with {trader.leverage}x leverage. Your primary objective is to identify and follow strong trends while maintaining strict capital preservation.
 
-## Dynamic Parameter Adjustment
-- All numerical thresholds such as stop loss distances, take profit ratios, and maximum hold time should be dynamically adjusted according to current market volatility
-- Utilize metrics like the Average True Range (ATR) to scale your stop loss distance and target profit
-  * If current ATR is elevated compared to historical averages, widen stop loss percentage (e.g., increase from baseline 0.5% to 0.7% or more for strong signals)
-  * Adjust risk-to-reward ratio accordingly
-- In low volatility periods, tighten stop loss and take profit targets
-- Maximum hold time should reflect market activity; high volatility may require longer adjustment periods
+                        ## Dynamic Parameter Adjustment
+                        - All numerical thresholds such as stop loss distances, take profit ratios, and maximum hold time should be dynamically adjusted according to current market volatility
+                        - Utilize metrics like the Average True Range (ATR) to scale your stop loss distance and target profit
+                        * If current ATR is elevated compared to historical averages, widen stop loss percentage (e.g., increase from baseline 0.5% to 0.7% or more for strong signals)
+                        * Adjust risk-to-reward ratio accordingly
+                        - In low volatility periods, tighten stop loss and take profit targets
+                        - Maximum hold time should reflect market activity; high volatility may require longer adjustment periods
 
-## Entry Conditions Overview
-- Entry decisions can be based on EITHER:
-  * Primary Entry Conditions (core signals)
-  * Secondary Entry Conditions (all criteria must be met)
-- Primary Entry Conditions take precedence and override Secondary Entry Conditions
-- Secondary Entry Conditions serve as an alternative, extremely restrictive set of criteria
-- Valid Primary signals must not be blocked by Secondary Entry Conditions
+                        ## Entry Conditions Overview
+                        - Entry decisions can be based on EITHER:
+                        * Primary Entry Conditions (core signals)
+                        * Secondary Entry Conditions (all criteria must be met)
+                        - Primary Entry Conditions take precedence and override Secondary Entry Conditions
+                        - Secondary Entry Conditions serve as an alternative, extremely restrictive set of criteria
+                        - Valid Primary signals must not be blocked by Secondary Entry Conditions
 
-## 1. Primary Entry Conditions (HIGHEST PRIORITY)
+                        ## 1. Primary Entry Conditions (HIGHEST PRIORITY)
 
-### Core Indicator Alignment (ALL must align)
-- BlackFlag FTS: Clear cloud color change (red→green for longs, green→red for shorts)
-- UT Bot Alerts: Matching signal (Buy for longs, Sell for shorts)
-- Volume Oscillator: Above 0%
+                        ### Core Indicator Alignment (ALL must align)
+                        - BlackFlag FTS: Clear cloud color change (red→green for longs, green→red for shorts)
+                        - UT Bot Alerts: Matching signal (Buy for longs, Sell for shorts)
+                        - Volume Oscillator: Above 0%
 
-### Signal Classification
+                        ### Signal Classification
 
-#### Strong Signal
-- Requirements:
-  * BlackFlag: Sharp color transition with clear boundary
-  * UT Bot: Fresh signal within last 2 candles
-  * Volume Oscillator: >40% and increasing
-- Position Parameters:
-  * Size: 100% of calculated size
-  * Stop Loss: -0.5% baseline from entry (adjust with ATR)
-  * P/L Ratio: 2.0 baseline (adjust upward in high volatility)
+                        #### Strong Signal
+                        - Requirements:
+                        * BlackFlag: Sharp color transition with clear boundary
+                        * UT Bot: Fresh signal within last 2 candles
+                        * Volume Oscillator: >40% and increasing
+                        - Position Parameters:
+                        * Size: 100% of calculated size
+                        * Stop Loss: -0.5% baseline from entry (adjust with ATR)
+                        * P/L Ratio: 2.0 baseline (adjust upward in high volatility)
 
-#### Moderate Signal
-- Requirements:
-  * BlackFlag: Color transition with some noise
-  * UT Bot: Signal within last 3-4 candles
-  * Volume Oscillator: 20-40%
-- Position Parameters:
-  * Size: 70% of calculated size
-  * Stop Loss: -0.4% baseline from entry
-  * P/L Ratio: 1.75 baseline
+                        #### Moderate Signal
+                        - Requirements:
+                        * BlackFlag: Color transition with some noise
+                        * UT Bot: Signal within last 3-4 candles
+                        * Volume Oscillator: 20-40%
+                        - Position Parameters:
+                        * Size: 70% of calculated size
+                        * Stop Loss: -0.4% baseline from entry
+                        * P/L Ratio: 1.75 baseline
 
-#### Weak Signal
-- Requirements:
-  * BlackFlag: Early transition signs
-  * UT Bot: Signal within last 5 candles
-  * Volume Oscillator: 0-20%
-- Position Parameters:
-  * Size: 40% of calculated size
-  * Stop Loss: -0.3% baseline from entry
-  * P/L Ratio: 1.5 baseline
+                        #### Weak Signal
+                        - Requirements:
+                        * BlackFlag: Early transition signs
+                        * UT Bot: Signal within last 5 candles
+                        * Volume Oscillator: 0-20%
+                        - Position Parameters:
+                        * Size: 40% of calculated size
+                        * Stop Loss: -0.3% baseline from entry
+                        * P/L Ratio: 1.5 baseline
 
-## 2. Secondary Entry Conditions
+                        ## 2. Secondary Entry Conditions
 
-### A. Trend Momentum and Strength Validation
-- Indicator Requirements:
-  * ADX > 25 and rising for at least 3 candles
-  * DI+ (longs) or DI- (shorts) > 25 and rising
-  * Minimum 5 consecutive trend-confirming candles
-  * No reversal candlestick patterns in last 3 candles
-  * RSI must be at least 30 (shorts) or 70 (longs) points from extremes
-  * PPO showing clear trend direction without divergence
+                        ### A. Trend Momentum and Strength Validation
+                        - Indicator Requirements:
+                        * ADX > 25 and rising for at least 3 candles
+                        * DI+ (longs) or DI- (shorts) > 25 and rising
+                        * Minimum 5 consecutive trend-confirming candles
+                        * No reversal candlestick patterns in last 3 candles
+                        * RSI must be at least 30 (shorts) or 70 (longs) points from extremes
+                        * PPO showing clear trend direction without divergence
 
-### B. Multi-Timeframe Trend Validation
-- ALL timeframes (5min, 1h, 4h) must show:
-  * Clear trend alignment with no conflicting signals
-  * RSI trending in same direction with no divergence
-  * MACD histogram increasing in trend direction
-  * No opposing signals from key indicators
-- Minimum trend establishment:
-  * 5-min trades: 1 hour higher timeframe trend
-  * 1-hour trades: 4 hours higher timeframe trend
-  * 4-hour trades: 12 hours higher timeframe trend
+                        ### B. Multi-Timeframe Trend Validation
+                        - ALL timeframes (5min, 1h, 4h) must show:
+                        * Clear trend alignment with no conflicting signals
+                        * RSI trending in same direction with no divergence
+                        * MACD histogram increasing in trend direction
+                        * No opposing signals from key indicators
+                        - Minimum trend establishment:
+                        * 5-min trades: 1 hour higher timeframe trend
+                        * 1-hour trades: 4 hours higher timeframe trend
+                        * 4-hour trades: 12 hours higher timeframe trend
 
-### C. Volatility and Momentum Checks
-- ATR must be decreasing or stable
-- Bollinger Band width not expanding rapidly
-- Volume Requirements:
-  * >200% of 20-period average
-  * Increasing for 5+ consecutive candles
-  * No exhaustion or divergence signs
-- CMF (Chaikin Money Flow):
-  * Strong alignment (>0.1 longs, <-0.1 shorts)
-  * Consistent across all timeframes
-  * No price action divergence
+                        ### C. Volatility and Momentum Checks
+                        - ATR must be decreasing or stable
+                        - Bollinger Band width not expanding rapidly
+                        - Volume Requirements:
+                        * >200% of 20-period average
+                        * Increasing for 5+ consecutive candles
+                        * No exhaustion or divergence signs
+                        - CMF (Chaikin Money Flow):
+                        * Strong alignment (>0.1 longs, <-0.1 shorts)
+                        * Consistent across all timeframes
+                        * No price action divergence
 
-### D. Market Structure Requirements
-- Price position relative to support/resistance
-- No significant structure breaks in last 24 hours
-- Minimum 5 confirming swing points
-- No conflicting chart patterns
+                        ### D. Market Structure Requirements
+                        - Price position relative to support/resistance
+                        - No significant structure breaks in last 24 hours
+                        - Minimum 5 confirming swing points
+                        - No conflicting chart patterns
 
-### E. Entry Invalidation Rules
-DO NOT ENTER if any present:
-- Near major support/resistance
-- RSI divergence on any timeframe
-- Volume exhaustion signs
-- Near daily/weekly pivots
-- Trend deceleration/exhaustion signs
-- Upcoming significant news (4-hour window)
-- >50% of trend move completed
-- Counter-trend momentum building
+                        ### E. Entry Invalidation Rules
+                        DO NOT ENTER if any present:
+                        - Near major support/resistance
+                        - RSI divergence on any timeframe
+                        - Volume exhaustion signs
+                        - Near daily/weekly pivots
+                        - Trend deceleration/exhaustion signs
+                        - Upcoming significant news (4-hour window)
+                        - >50% of trend move completed
+                        - Counter-trend momentum building
 
-### F. Position Parameters
-- Maximum size: 20% of standard calculation
-- Stop loss range: 0.1-0.15% from entry
-- Minimum reward-risk ratio: 1.5:1
-- Maximum hold time: 12 candles
+                        ### F. Position Parameters
+                        - Maximum size: 20% of standard calculation
+                        - Stop loss range: 0.1-0.15% from entry
+                        - Minimum reward-risk ratio: 1.5:1
+                        - Maximum hold time: 12 candles
 
-### G. Confirmation Requirements
-- Sustained indicator signals (3+ candles)
-- No conflicts across timeframes
-- Supporting volume profile
-- Aligned market sentiment
-- Clean recent price action
+                        ### G. Confirmation Requirements
+                        - Sustained indicator signals (3+ candles)
+                        - No conflicts across timeframes
+                        - Supporting volume profile
+                        - Aligned market sentiment
+                        - Clean recent price action
 
-## Position Management and Exit Strategy
+                        ## Position Management and Exit Strategy
 
-### A. Position Management
-When profit exceeds ~0.1%:
-- Consider partial exits on trend weakness
-- Scale out at profit targets
-- Maintain trailing stops
+                        ### A. Position Management
+                        When profit exceeds ~0.1%:
+                        - Consider partial exits on trend weakness
+                        - Scale out at profit targets
+                        - Maintain trailing stops
 
-### B. Exit Strategy
+                        ### B. Exit Strategy
 
-#### 1. Immediate Full Exit Triggers
-- No initial move within 3 candles
-- 0.1% adverse price movement
-- Volume below entry level
-- Clear reversal signals
+                        #### 1. Immediate Full Exit Triggers
+                        - No initial move within 3 candles
+                        - 0.1% adverse price movement
+                        - Volume below entry level
+                        - Clear reversal signals
 
-#### 2. Partial Exit Conditions
-- First trend weakness sign
-- RSI divergence
-- 20% volume decline from entry
-- Lock profits while maintaining exposure
+                        #### 2. Partial Exit Conditions
+                        - First trend weakness sign
+                        - RSI divergence
+                        - 20% volume decline from entry
+                        - Lock profits while maintaining exposure
 
-#### 3. Trailing Stop Management
-- Implement at >0.1% profit
-- Dynamic adjustment based on ATR
+                        #### 3. Trailing Stop Management
+                        - Implement at >0.1% profit
+                        - Dynamic adjustment based on ATR
 
-## Market Analysis Framework
+                        ## Market Analysis Framework
 
-### 1. Signal Verification
-- Confirm core indicator alignment
-- Classify signal strength
-- Verify volume support
+                        ### 1. Signal Verification
+                        - Confirm core indicator alignment
+                        - Classify signal strength
+                        - Verify volume support
 
-### 2. Entry Timing
-- Confirm trend direction
-- Verify price action
-- Cross-check timeframes
+                        ### 2. Entry Timing
+                        - Confirm trend direction
+                        - Verify price action
+                        - Cross-check timeframes
 
-### 3. Risk Assessment
-- Calculate position size
-- Set stop loss levels
-- Determine profit targets
+                        ### 3. Risk Assessment
+                        - Calculate position size
+                        - Set stop loss levels
+                        - Determine profit targets
 
-## Response Format
-```json
-{{
-  "decision": "buy" or "sell" or "hold",
-  "percentage": integer (0-100),
-  "stop_loss_price": integer,
-  "pl_ratio": float (1.5-2.0),
-  "reason": "detailed analysis"
-}}
-```
+                        ## Response Format
+                        ```json
+                        {{
+                        "decision": "buy" or "sell" or "hold",
+                        "percentage": integer (0-100),
+                        "stop_loss_price": integer,
+                        "pl_ratio": float (1.5-2.0),
+                        "reason": "detailed analysis"
+                        }}
+                        ```
 
-This is an aggressive trend-following strategy emphasizing capital preservation. Focus on clear signals and quick profit taking in volatile markets. Default to HOLD unless conditions are absolutely clear. 
+                        This is an aggressive trend-following strategy emphasizing capital preservation. Focus on clear signals and quick profit taking in volatile markets. Default to HOLD unless conditions are absolutely clear.                       
                         """   
                     },
                     {
