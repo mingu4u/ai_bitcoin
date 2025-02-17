@@ -1711,18 +1711,23 @@ def ai_trading():
 
                         ## 1. Primary Entry Conditions (HIGHEST PRIORITY)
 
-                        ### Core Indicator Alignment (ALL must align)
-                        - BlackFlag FTS: Clear cloud color change (red→green for longs, green→red for shorts)
-                        - UT Bot Alerts: Matching signal (Buy for longs, Sell for shorts)
-                        - Volume Oscillator: Above 0%
+                        ### Core Indicator Alignment (ALL must be RECENT and align)
+                        - Signal Freshness Requirements (5min timeframe):
+                        * BlackFlag FTS: Color change must be within last 5 candles
+                        * UT Bot Alerts: Signal must be within specified candles (2 for strong, 3-4 for moderate, 5 for weak)
+                        * Volume Oscillator: Current reading must be above specified threshold
+                        - Direction Requirements:
+                        * BlackFlag FTS: Clear cloud color change (red→green for longs, green→red for shorts)
+                        * UT Bot Alerts: Matching signal (Buy for longs, Sell for shorts)
+                        * Volume Oscillator: Above 0%
 
-                        ### Signal Classification
+                        ### Signal Classification (STRICT TIMING REQUIREMENTS)
 
                         #### Strong Signal
                         - Requirements:
-                        * BlackFlag: Sharp color transition with clear boundary
-                        * UT Bot: Fresh signal within last 2 candles
-                        * Volume Oscillator: >40% and increasing
+                        * BlackFlag: Sharp color transition with clear boundary WITHIN LAST 2 CANDLES
+                        * UT Bot: Fresh signal WITHIN LAST 2 CANDLES ONLY
+                        * Volume Oscillator: >40% and increasing in CURRENT CANDLE
                         - Position Parameters:
                         * Size: 100% of calculated size
                         * Stop Loss: -0.5% baseline from entry (adjust with ATR)
@@ -1730,23 +1735,31 @@ def ai_trading():
 
                         #### Moderate Signal
                         - Requirements:
-                        * BlackFlag: Color transition with some noise
-                        * UT Bot: Signal within last 3-4 candles
-                        * Volume Oscillator: 20-40%
+                        * BlackFlag: Color transition with some noise WITHIN LAST 3-4 CANDLES ONLY
+                        * UT Bot: Signal WITHIN LAST 3-4 CANDLES ONLY
+                        * Volume Oscillator: 20-40% in CURRENT CANDLE
                         - Position Parameters:
                         * Size: 70% of calculated size
-                        * Stop Loss: -0.4% baseline from entry
+                        * Stop Loss: -0.4% baseline from entry (adjust with ATR)
                         * P/L Ratio: 1.75 baseline
 
                         #### Weak Signal
                         - Requirements:
-                        * BlackFlag: Early transition signs
-                        * UT Bot: Signal within last 5 candles
-                        * Volume Oscillator: 0-20%
+                        * BlackFlag: Early transition signs WITHIN LAST 5 CANDLES ONLY
+                        * UT Bot: Signal WITHIN LAST 5 CANDLES ONLY
+                        * Volume Oscillator: 0-20% in CURRENT CANDLE
                         - Position Parameters:
                         * Size: 40% of calculated size
-                        * Stop Loss: -0.3% baseline from entry
+                        * Stop Loss: -0.3% baseline from entry (adjust with ATR)
                         * P/L Ratio: 1.5 baseline
+
+                        ### Entry Invalidation (TIMING SPECIFIC)
+                        IMMEDIATELY REJECT entry if:
+                        - Any core signal is older than 5 candles
+                        - Signal age doesn't match strength classification
+                        - Mixed timing between indicators (e.g., new UT Bot but old BlackFlag)
+                        - Different signal strengths between indicators
+
 
                         ## 2. Secondary Entry Conditions
 
