@@ -1919,13 +1919,13 @@ def ai_trading():
 
                         ## Response Format
                         ```json
-                        {
+                        {{
                             "decision": "buy" or "sell" or "hold",
                             "percentage": integer (0-100),
                             "stop_loss_price": integer,
                             "pl_ratio": float (1.5-2.0),
                             "reason": "detailed analysis"
-                        }
+                        }}
                         ```
 
                         This is an aggressive trend-following strategy emphasizing capital preservation and RAPID RESPONSE to market changes. Default to HOLD unless ALL conditions are met with FRESH signals only. NO EXCEPTIONS to timing requirements.     
