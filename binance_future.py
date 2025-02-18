@@ -1568,7 +1568,7 @@ def ai_trading():
     btc_avg_buy_price = 0  # 기본값 설정
     position_side = None
     position_size = 0
-    unrealized_pnl = 0
+    unrealized_pnl = None
 
     for position in positions:
         if float(position.get('contracts', 0) or 0) != 0:
@@ -1752,12 +1752,12 @@ def ai_trading():
                         - PPO: {df_4h['ppo'].iloc[-1]:.2f}  
 
                         **[Portfolio]**  
-                        • Total USDT Assets: {total_usdt:.1f}  
-                        • Free USDT Balance: {free_usdt:.1f}  
-                        • Used USDT Holdings: {used_usdt:.1f}  
+                        • Total USDT Assets: {total_usdt:.1f}
+                        • Free USDT Balance: {free_usdt:.1f}
+                        • Used USDT Holdings: {used_usdt:.1f}
                         • BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT  
                         • Current Position Side: {position_side}  ← “long”, “short”, or “none”
-
+                        • Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
                         You should factor in these data points before making a final trading decision (buy, sell, hold).
 
                         ────────────────────────────────────────────────────────
