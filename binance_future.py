@@ -609,6 +609,9 @@ class BinanceFuturesTrader:
             raise
 
 
+
+
+
     def _calculate_weighted_sl_price(self, position_size, position_sl_price, new_size, new_sl_price):
         """가중 평균 스탑로스 가격 계산"""
         total_size = position_size + new_size
@@ -618,7 +621,7 @@ class BinanceFuturesTrader:
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         """
         시장가 주문과 TP/SL 설정을 처리하는 함수
-        
+
         Args:
             side (str): 'buy' 또는 'sell'
             buy_amount (float): 주문 금액 (USDT)
@@ -626,49 +629,49 @@ class BinanceFuturesTrader:
             sl_price (float): 스탑로스 가격
         """
         # 상수 정의
-        SAFETY_MARGIN = 0.002          # 안전 마진 (0.2%)
-        TRAILING_THRESHOLD = 0.004     # 트레일링 시작 기준 수익률 (0.4%)
-        TRAILING_BUFFER = 0.0012       # 트레일링 버퍼 (0.12%)
-        MINIMUM_ORDER_VALUE = 10       # 최소 주문 금액 (USDT)
-        MIN_PRICE_DIFF = 0.001        # 최소 가격 차이 (0.1%)
-        MAX_BALANCE_USE = 0.80        # 최대 사용 가능 잔고 비율 (80%)
-        API_DELAY = 0.5               # API 호출 후 대기 시간
+        SAFETY_MARGIN = 0.002      # 안전 마진 (0.2%)
+        TRAILING_THRESHOLD = 0.004 # 트레일링 시작 기준 수익률 (0.4%)
+        TRAILING_BUFFER = 0.0012   # 트레일링 버퍼 (0.12%)
+        MINIMUM_ORDER_VALUE = 10   # 최소 주문 금액 (USDT)
+        MIN_PRICE_DIFF = 0.001     # 최소 가격 차이 (0.1%)
+        MAX_BALANCE_USE = 0.80     # 최대 사용 가능 잔고 비율 (80%)
+        API_DELAY = 0.5            # API 호출 후 대기 시간
 
         def cancel_orders(orders_to_cancel):
             """TP/SL 주문 취소 헬퍼 함수"""
-            for order in orders_to_cancel:
+            for o in orders_to_cancel:
                 try:
-                    self.exchange.cancel_order(order['id'], self.symbol)
-                    self.logger.info(f"Cancelled order: {order['id']} (Type: {order['info'].get('origType', 'Unknown')})")
+                    self.exchange.cancel_order(o['id'], self.symbol)
+                    self.logger.info(f"Cancelled order: {o['id']} (ClientOrderId={o.get('clientOrderId','')})")
                 except Exception as e:
-                    self.logger.error(f"Error cancelling order {order['id']}: {e}")
+                    self.logger.error(f"Error cancelling order {o['id']}: {e}")
                 time.sleep(API_DELAY)
 
         # 1. 현재가 조회 및 TP/SL 가격 계산
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             current_price = ticker['last']
-            
+
             # TP/SL 가격 보정
-            min_price_diff = current_price * MIN_PRICE_DIFF
-            
+            min_price_diff_val = current_price * MIN_PRICE_DIFF
+
             if side == 'buy':
-                if sl_price >= current_price or (current_price - sl_price) < min_price_diff:
+                if sl_price >= current_price or (current_price - sl_price) < min_price_diff_val:
                     sl_price = current_price * (1 - SAFETY_MARGIN)
                     self.logger.warning(f"Invalid SL price for long position. Adjusted to {sl_price}")
-                
+
                 tp_price = current_price + pl_ratio * (current_price - sl_price)
-                if tp_price <= current_price or (tp_price - current_price) < pl_ratio * min_price_diff:
+                if tp_price <= current_price or (tp_price - current_price) < pl_ratio * min_price_diff_val:
                     tp_price = current_price * (1 + SAFETY_MARGIN)
                     self.logger.warning(f"Invalid TP price for long position. Adjusted to {tp_price}")
-            
-            else:  # sell
-                if sl_price <= current_price or (sl_price - current_price) < min_price_diff:
+
+            else:  # side == 'sell'
+                if sl_price <= current_price or (sl_price - current_price) < min_price_diff_val:
                     sl_price = current_price * (1 + SAFETY_MARGIN)
                     self.logger.warning(f"Invalid SL price for short position. Adjusted to {sl_price}")
-                
+
                 tp_price = current_price - pl_ratio * (sl_price - current_price)
-                if tp_price >= current_price or (current_price - tp_price) < pl_ratio * min_price_diff:
+                if tp_price >= current_price or (current_price - tp_price) < pl_ratio * min_price_diff_val:
                     tp_price = current_price * (1 - SAFETY_MARGIN)
                     self.logger.warning(f"Invalid TP price for short position. Adjusted to {tp_price}")
 
@@ -681,28 +684,25 @@ class BinanceFuturesTrader:
             positions = self.exchange.fetch_positions([self.symbol])
             current_position = None
             position_side = None
-
             for pos in positions:
                 if float(pos.get('contracts', 0) or 0) != 0:
                     current_position = pos
                     position_side = pos['side']
                     break
-
         except Exception as e:
             self.logger.error(f"Error fetching positions: {e}")
             return None
 
         # 3. 신규 포지션 진입을 위한 잔고 확인 및 주문 수량 계산
         try:
-            # 먼저 현재 포지션 확인(이미 current_position과 position_side가 할당되어 있다고 가정)
             is_reduction = False
             if current_position and ((position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy')):
                 is_reduction = True
 
             if is_reduction:
-                # 반대 방향 축소(reduction)일 경우 잔고 체크는 생략하고 주문량만 계산
+                # 반대 방향 축소(reduction)일 경우
                 quantity = (buy_amount * self.leverage) / current_price
-                # 최소 주문 금액 체크 추가 (주문 가치가 충분한지 확인)
+                # 최소 주문 금액 체크
                 if quantity * current_price < MINIMUM_ORDER_VALUE:
                     self.logger.error(f"Partial reduction order value too small: {quantity * current_price} USDT")
                     return None
@@ -716,6 +716,7 @@ class BinanceFuturesTrader:
                 if buy_amount > max_safe_amount:
                     buy_amount = max_safe_amount
                     self.logger.warning(f"Order amount adjusted to {buy_amount} USDT")
+
                 quantity = (buy_amount * self.leverage) / current_price
                 if quantity * current_price < MINIMUM_ORDER_VALUE:
                     self.logger.error(f"Order value too small: {quantity * current_price} USDT")
@@ -733,49 +734,36 @@ class BinanceFuturesTrader:
         tp_order = None
         sl_order = None
         is_full_reduction = False
-        
+
         try:
             # 현재 열린 주문 조회
             open_orders = self.exchange.fetch_open_orders(self.symbol)
-            tp_orders = [order for order in open_orders if
-                        order['info'].get('origType', '') == 'TAKE_PROFIT_MARKET']
-            sl_orders = [order for order in open_orders if
-                        order['info'].get('origType', '') == 'STOP_MARKET']
+
+            # clientOrderId가 'tp_'로 시작하면 TP 주문, 'sl_'로 시작하면 SL 주문으로 간주
+            tp_orders = [o for o in open_orders if o.get('clientOrderId','').startswith('tp_')]
+            sl_orders = [o for o in open_orders if o.get('clientOrderId','').startswith('sl_')]
 
             if current_position and position_side:
                 # A. 같은 방향 추가 진입
                 if side == position_side:
-                    # TP는 유지, SL만 가중평균으로 새로 설정
-                    # 기존 SL 주문 취소
                     if sl_orders:
                         cancel_orders(sl_orders)
-                    
-                    # 가중평균 SL 가격 계산
-                    current_sl_price = float(sl_orders[0]['info']['stopPrice']) if sl_orders else sl_price
-                    current_size = float(current_position['contracts'])
-                    weighted_sl_price = self._calculate_weighted_sl_price(
-                        current_size, current_sl_price,
-                        quantity, sl_price
-                    )
-                    sl_price = weighted_sl_price
 
                 # B. 반대 방향 축소
                 elif ((position_side == 'long' and side == 'sell') or 
                     (position_side == 'short' and side == 'buy')):
                     is_full_reduction = quantity >= float(current_position['contracts'])
-                    
                     if is_full_reduction:
-                        # 전량 청산 시에만 TP/SL 취소
+                        # 전량 청산 시에만 TP/SL 모두 취소
                         if tp_orders:
                             cancel_orders(tp_orders)
                         if sl_orders:
                             cancel_orders(sl_orders)
                         quantity = float(current_position['contracts'])
                     else:
-                        # 부분 청산 시 TP/SL 유지
+                        # 부분 청산 시 기존 TP/SL 유지
                         tp_order = None
                         sl_order = None
-
             else:
                 # C. 신규 진입
                 # 기존 TP/SL 주문이 있다면 모두 취소
@@ -784,7 +772,7 @@ class BinanceFuturesTrader:
                 if sl_orders:
                     cancel_orders(sl_orders)
 
-            # 포지션 주문 실행
+            # 포지션 주문 실행 (시장가)
             order = self.exchange.create_market_order(
                 symbol=self.symbol,
                 side=side,
@@ -792,14 +780,14 @@ class BinanceFuturesTrader:
             )
             entry_price = current_price
 
-            # TP/SL 주문 생성 (신규 진입 또는 같은 방향 추가 진입 시에만)
+            # TP/SL 주문 생성 (신규 진입 또는 동일 방향 추가 진입)
+            # 반대 방향 축소인 경우에는 이미 TP/SL 유지/폐기 결정 완료
             if not (current_position and position_side and 
-                ((position_side == 'long' and side == 'sell') or 
+                    ((position_side == 'long' and side == 'sell') or 
                     (position_side == 'short' and side == 'buy'))):
-                
                 tp_side = 'sell' if side == 'buy' else 'buy'
                 
-                # 신규 진입에만 새 TP 생성
+                # 신규 진입이면 TP 생성
                 if not current_position:
                     tp_order = self.exchange.create_order(
                         symbol=self.symbol,
@@ -812,8 +800,8 @@ class BinanceFuturesTrader:
                             'clientOrderId': f"tp_{order['id']}"
                         }
                     )
-                
-                # SL은 항상 새로 생성 (가중평균 적용)
+
+                # SL은 무조건 새로 생성
                 sl_order = self.exchange.create_order(
                     symbol=self.symbol,
                     type='STOP_MARKET',
@@ -826,7 +814,7 @@ class BinanceFuturesTrader:
                     }
                 )
 
-            # 주문 성공 확인
+            # 주문 성공 여부 확인
             if not order:
                 raise Exception("Main order creation failed")
 
@@ -839,58 +827,57 @@ class BinanceFuturesTrader:
                     self.logger.info("Cancelled main order during rollback")
                 except Exception as cancel_error:
                     self.logger.error(f"Error cancelling main order during rollback: {cancel_error}")
-            
+
             if tp_order:
                 try:
                     self.exchange.cancel_order(tp_order['id'], self.symbol)
                     self.logger.info("Cancelled TP order during rollback")
                 except Exception as cancel_error:
                     self.logger.error(f"Error cancelling TP order during rollback: {cancel_error}")
-                    
+
             if sl_order:
                 try:
                     self.exchange.cancel_order(sl_order['id'], self.symbol)
                     self.logger.info("Cancelled SL order during rollback")
                 except Exception as cancel_error:
                     self.logger.error(f"Error cancelling SL order during rollback: {cancel_error}")
-            
+
             return None
 
         # 5. 트레일링 스탑로스 모니터링 함수 정의
-        def monitor_and_adjust_sl(self):
+        def monitor_and_adjust_sl():
             try:
-                positions = self.exchange.fetch_positions([self.symbol])
-                current_position = next((pos for pos in positions if float(pos.get('contracts', 0) or 0) != 0), None)
-                
-                if not current_position:
+                positions_ = self.exchange.fetch_positions([self.symbol])
+                current_pos = next((p for p in positions_ if float(p.get('contracts', 0) or 0) != 0), None)
+
+                if not current_pos:
                     return None
 
                 current_market_price = self.exchange.fetch_ticker(self.symbol)['last']
-                position_size = float(current_position['contracts'])
-                position_side = current_position['side']
+                position_size = float(current_pos['contracts'])
+                pos_side = current_pos['side']
 
                 # 수익률 계산
-                profit_percentage = (current_market_price - entry_price) / entry_price if position_side == 'long' \
-                                else (entry_price - current_market_price) / entry_price
+                profit_percentage = (current_market_price - entry_price) / entry_price if pos_side == 'long' \
+                                    else (entry_price - current_market_price) / entry_price
 
                 if profit_percentage >= TRAILING_THRESHOLD:
                     # 새로운 SL 가격 계산
-                    new_sl_price = current_market_price * (1 - TRAILING_BUFFER) if position_side == 'long' \
+                    new_sl_price = current_market_price * (1 - TRAILING_BUFFER) if pos_side == 'long' \
                                 else current_market_price * (1 + TRAILING_BUFFER)
 
-                    # 기존 SL 주문 취소
+                    # 기존 SL 주문 취소 (clientOrderId로 식별)
                     try:
-                        open_orders = self.exchange.fetch_open_orders(self.symbol)
-                        sl_orders = [order for order in open_orders 
-                                if order['info'].get('origType', '') == 'STOP_MARKET']
-                        cancel_orders(sl_orders)
+                        open_orders_ = self.exchange.fetch_open_orders(self.symbol)
+                        existing_sl = [o for o in open_orders_ if o.get('clientOrderId','').startswith('sl_')]
+                        cancel_orders(existing_sl)
 
-                        # 새로운 SL 주문 생성
-                        tp_side = 'sell' if position_side == 'long' else 'buy'
+                        # 새 SL 주문 생성
+                        t_side = 'sell' if pos_side == 'long' else 'buy'
                         new_sl_order = self.exchange.create_order(
                             symbol=self.symbol,
                             type='STOP_MARKET',
-                            side=tp_side,
+                            side=t_side,
                             amount=position_size,
                             params={
                                 'stopPrice': new_sl_price,
@@ -901,12 +888,12 @@ class BinanceFuturesTrader:
                         self.logger.info(f"Trailing SL updated: {new_sl_price}")
                         return new_sl_order
 
-                    except Exception as e:
-                        self.logger.error(f"Error updating trailing SL: {e}")
+                    except Exception as e_:
+                        self.logger.error(f"Error updating trailing SL: {e_}")
                         return None
 
-            except Exception as e:
-                self.logger.error(f"Error in SL monitoring: {e}")
+            except Exception as e_:
+                self.logger.error(f"Error in SL monitoring: {e_}")
                 return None
 
         self.logger.info(f"Position opened - Side: {side}, Amount: {buy_amount} USDT")
@@ -1689,7 +1676,7 @@ def ai_trading():
                         ───────────────────────────────────────────────────────────────
                         # Bitcoin Futures Trading Strategy (Integrated Prompt)
 
-                        You are a Bitcoin futures day trader on the 5-minute timeframe with {{trader.leverage}}x leverage. Your strategy centers on three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume Oscillator) and includes additional confluence checks (RSI, MACD, ATR, CMF, ADX, DI+, DI−, etc.). Strict timing rules apply—no aged signals, immediate exits on signal deterioration, and precise position management. Capital preservation is paramount.
+                        You are a Bitcoin futures day trader on the 5-minute timeframe with {trader.leverage}x leverage. Your strategy centers on three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume Oscillator) and includes additional confluence checks (RSI, MACD, ATR, CMF, ADX, DI+, DI−, etc.). Strict timing rules apply—no aged signals, immediate exits on signal deterioration, and precise position management. Capital preservation is paramount.
 
                         ───────────────────────────────────────────────────────────────
                         ## 1. ALWAYS Use Correct Exit Commands
@@ -1709,60 +1696,60 @@ def ai_trading():
                         **Technical Indicators (5-min, 1-hour, 4-hour timeframes)**
 
                         → 5-Minute Chart Data:  
-                        - RSI(14): {{df_5min['rsi'].iloc[-1]:.2f}}  
-                        - MACD: {{df_5min['macd'].iloc[-1]:.2f}}  
+                        - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}  
+                        - MACD: {df_5min['macd'].iloc[-1]:.2f}
                         - Bollinger Bands (20):  
-                          * Middle: {{df_5min['bb_bbm'].iloc[-1]:.2f}}  
-                          * Upper: {{df_5min['bb_bbh'].iloc[-1]:.2f}}  
-                          * Lower: {{df_5min['bb_bbl'].iloc[-1]:.2f}}  
+                        * Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}
+                        * Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}
+                        * Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
                         - Stochastic Oscillator (14, 3):  
-                          * %K: {{df_5min['stoch_k'].iloc[-1]:.2f}}  
-                          * %D: {{df_5min['stoch_d'].iloc[-1]:.2f}}  
-                        - ATR: {{df_5min['atr'].iloc[-1]:.2f}}  
-                        - Williams %R: {{df_5min['williams_r'].iloc[-1]:.2f}}  
-                        - CMF: {{df_5min['cmf'].iloc[-1]:.2f}}  
-                        - ADX: {{df_5min['adx'].iloc[-1]:.2f}}  
-                        - DI+: {{df_5min['di_plus'].iloc[-1]:.2f}}  
-                        - DI-: {{df_5min['di_minus'].iloc[-1]:.2f}}  
-                        - PPO: {{df_5min['ppo'].iloc[-1]:.2f}}
+                        * %K: {df_5min['stoch_k'].iloc[-1]:.2f}
+                        * %D: {df_5min['stoch_d'].iloc[-1]:.2f} 
+                        - ATR: {df_5min['atr'].iloc[-1]:.2f} 
+                        - Williams %R: {df_5min['williams_r'].iloc[-1]:.2f}
+                        - CMF: {df_5min['cmf'].iloc[-1]:.2f} 
+                        - ADX: {df_5min['adx'].iloc[-1]:.2f}  
+                        - DI+: {df_5min['di_plus'].iloc[-1]:.2f}  
+                        - DI-: {df_5min['di_minus'].iloc[-1]:.2f}  
+                        - PPO: {df_5min['ppo'].iloc[-1]:.2f}
 
                         → 1-Hour Chart Data:  
-                        - RSI(14): {{df_hourly['rsi'].iloc[-1]:.2f}}  
-                        - MACD: {{df_hourly['macd'].iloc[-1]:.2f}}  
+                        - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}  
+                        - MACD: {df_hourly['macd'].iloc[-1]:.2f}  
                         - Bollinger Bands:  
-                          * Middle: {{df_hourly['bb_bbm'].iloc[-1]:.2f}}  
-                          * Upper: {{df_hourly['bb_bbh'].iloc[-1]:.2f}}  
-                          * Lower: {{df_hourly['bb_bbl'].iloc[-1]:.2f}}  
-                        - ATR: {{df_hourly['atr'].iloc[-1]:.2f}}  
-                        - Williams %R: {{df_hourly['williams_r'].iloc[-1]:.2f}}  
-                        - CMF: {{df_hourly['cmf'].iloc[-1]:.2f}}  
-                        - ADX: {{df_hourly['adx'].iloc[-1]:.2f}}  
-                        - DI+: {{df_hourly['di_plus'].iloc[-1]:.2f}}  
-                        - DI-: {{df_hourly['di_minus'].iloc[-1]:.2f}}  
-                        - PPO: {{df_hourly['ppo'].iloc[-1]:.2f}}
+                        * Middle: {df_hourly['bb_bbm'].iloc[-1]:.2f}  
+                        * Upper: {df_hourly['bb_bbh'].iloc[-1]:.2f}  
+                        * Lower: {df_hourly['bb_bbl'].iloc[-1]:.2f}  
+                        - ATR: {df_hourly['atr'].iloc[-1]:.2f}  
+                        - Williams %R: {df_hourly['williams_r'].iloc[-1]:.2f}  
+                        - CMF: {df_hourly['cmf'].iloc[-1]:.2f}  
+                        - ADX: {df_hourly['adx'].iloc[-1]:.2f}  
+                        - DI+: {df_hourly['di_plus'].iloc[-1]:.2f}  
+                        - DI-: {df_hourly['di_minus'].iloc[-1]:.2f}  
+                        - PPO: {df_hourly['ppo'].iloc[-1]:.2f}
 
                         → 4-Hour Chart Data:  
-                        - RSI(14): {{df_4h['rsi'].iloc[-1]:.2f}}  
-                        - MACD: {{df_4h['macd'].iloc[-1]:.2f}}  
+                        - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}  
+                        - MACD: {df_4h['macd'].iloc[-1]:.2f}  
                         - Bollinger Bands:  
-                          * Middle: {{df_4h['bb_bbm'].iloc[-1]:.2f}}  
-                          * Upper: {{df_4h['bb_bbh'].iloc[-1]:.2f}}  
-                          * Lower: {{df_4h['bb_bbl'].iloc[-1]:.2f}}  
-                        - ATR: {{df_4h['atr'].iloc[-1]:.2f}}  
-                        - Williams %R: {{df_4h['williams_r'].iloc[-1]:.2f}}  
-                        - CMF: {{df_4h['cmf'].iloc[-1]:.2f}}  
-                        - ADX: {{df_4h['adx'].iloc[-1]:.2f}}  
-                        - DI+: {{df_4h['di_plus'].iloc[-1]:.2f}}  
-                        - DI-: {{df_4h['di_minus'].iloc[-1]:.2f}}  
-                        - PPO: {{df_4h['ppo'].iloc[-1]:.2f}}
+                        * Middle: {df_4h['bb_bbm'].iloc[-1]:.2f}  
+                        * Upper: {df_4h['bb_bbh'].iloc[-1]:.2f}  
+                        * Lower: {df_4h['bb_bbl'].iloc[-1]:.2f}  
+                        - ATR: {df_4h['atr'].iloc[-1]:.2f}  
+                        - Williams %R: {df_4h['williams_r'].iloc[-1]:.2f}  
+                        - CMF: {df_4h['cmf'].iloc[-1]:.2f}  
+                        - ADX: {df_4h['adx'].iloc[-1]:.2f}  
+                        - DI+: {df_4h['di_plus'].iloc[-1]:.2f}  
+                        - DI-: {df_4h['di_minus'].iloc[-1]:.2f}  
+                        - PPO: {df_4h['ppo'].iloc[-1]:.2f}
 
                         **[Portfolio]**  
-                        • Total USDT Assets: {{total_usdt:.1f}}  
-                        • Free USDT Balance: {{free_usdt:.1f}}  
-                        • Used USDT Holdings: {{used_usdt:.1f}}  
-                        • BTC Average Purchase Price: {{btc_avg_buy_price:.1f}} USDT  
-                        • Current Position Side: {{position_side}}  ← “long”, “short”, or “none”  
-                        • Current Position PnL: {{unrealized_nl}} % ← -100~100 or None(no position)
+                        • Total USDT Assets: {total_usdt:.1f}  
+                        • Free USDT Balance: {free_usdt:.1f}  
+                        • Used USDT Holdings: {used_usdt:.1f}  
+                        • BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT  
+                        • Current Position Side: {position_side}  ← “long”, “short”, or “none”  
+                        • Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
 
                         You should factor in these data points before making a final trading decision (buy, sell, hold).
 
@@ -1771,51 +1758,54 @@ def ai_trading():
 
                         ### A. Critical Timing  
                         • BlackFlag FTS:  
-                          - LONG if Red→Green transition is fresh (≤2 candles ago).  
-                          - SHORT if Green→Red transition is fresh (≤2 candles ago).  
+                        - LONG if Red→Green transition is fresh (≤2 candles ago).  
+                        - SHORT if Green→Red transition is fresh (≤2 candles ago).  
                         • UT Bot Alerts:  
-                          - Must appear within the last 2 candles in the same direction.  
+                        - Must appear within the last 2 candles in the same direction.  
                         • Volume Oscillator:  
-                          - Must be positive (>0) on the current candle, indicating rising volume momentum.
+                        - Must be positive (>0) on the current candle, indicating rising volume momentum.
 
                         Any stale signals or misalignment → “hold” (no entry).  
                         **This is mandatory: if any core indicator signal is older than 2 candles, you must not enter. Always “hold” unless all three are fresh (≤2 candles).**
 
-                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)  
-                        Use these for extra confirmation or rejection. Major divergences or contradictory signals can override the primary conditions and prompt a hold. Adjust stops/position size using ATR. Watch momentum (MACD, ADX) and money flow (CMF).
+                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI−)  
+                        Use these for extra confirmation or rejection of the primary indicators only.  
+                        **You may never open a position solely on Additional Indicators if the primary indicators do not show a valid fresh entry signal.**  
+                        Major divergences or contradictory signals can override or cancel a primary entry (leading to a “hold”), but cannot create a new entry on their own.  
+                        Adjust stops/position size using ATR. Watch momentum (MACD, ADX) and money flow (CMF).
 
                         ### C. Signal Classification: Strong, Moderate, Weak
 
                         • Strong Signal  
-                          - Primary indicators in perfect alignment + High volume (≥250% avg) + Low/stable ATR.  
-                          - Position Size: 100% of calculated size.  
-                          - Stop Loss: ±0.5% from entry (refined with Cloud/ATR).  
-                          - P/L Ratio: ~2.0.
+                        - Primary indicators in perfect alignment + High volume (≥250% avg) + Low/stable ATR.  
+                        - Position Size: 100% of calculated size.  
+                        - Stop Loss: ±0.5% from entry (refined with Cloud/ATR).  
+                        - P/L Ratio: ~2.0.
 
                         • Moderate Signal  
-                          - Decent volume and volatility, clean primary indicator alignment.  
-                          - Position Size: ~60%.  
-                          - Stop Loss: ±0.4% from entry or Cloud.  
-                          - P/L Ratio: ~1.75 (1.5-2.0 range).
+                        - Decent volume and volatility, clean primary indicator alignment.  
+                        - Position Size: ~60%.  
+                        - Stop Loss: ±0.4% from entry or Cloud.  
+                        - P/L Ratio: ~1.75 (1.5-2.0 range).
 
                         • Weak Signal  
-                          - Indicators align but momentum/volume borderline, or partial confluence. Possibly higher volatility.  
-                          - Position Size: ~30%.  
-                          - Stop Loss: ±0.3% from entry (Cloud + ATR checks).  
-                          - P/L Ratio: ~1.5 (1.5-2.0 range).
+                        - Indicators align but momentum/volume borderline, or partial confluence. Possibly higher volatility.  
+                        - Position Size: ~30%.  
+                        - Stop Loss: ±0.3% from entry (Cloud + ATR checks).  
+                        - P/L Ratio: ~1.5 (1.5-2.0 range).
 
                         ───────────────────────────────────────────────────────────────
                         ## 4. Stop Loss & Take Profit
 
                         1) Cloud-Based Stop Loss  
-                          - LONG: near the deepest green portion of the latest Green Cloud.  
-                          - SHORT: near the deepest red portion of the latest Red Cloud.  
-                          - If that is unreasonably far, switch to ATR ±0.3-0.5% guidelines.
+                        - LONG: near the deepest green portion of the latest Green Cloud.  
+                        - SHORT: near the deepest red portion of the latest Red Cloud.  
+                        - If that is unreasonably far, switch to ATR ±0.3-0.5% guidelines.
 
                         2) P/L Ratio (1.5-2.0)  
-                          - Strong: ~2.0 baseline.  
-                          - Moderate: ~1.75 baseline.  
-                          - Weak: ~1.5 baseline.
+                        - Strong: ~2.0 baseline.  
+                        - Moderate: ~1.75 baseline.  
+                        - Weak: ~1.5 baseline.
 
                         Adjust within 1.5-2.0 based on real-time volatility.
 
@@ -1866,7 +1856,7 @@ def ai_trading():
                         4) Maintain capital preservation: exit immediately on conflicting or invalid signals.
 
                         ───────────────────────────────────────────────────────────────
-                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤2 candles old), and if the 5-minute MACD shows two consecutive candles indicating a trend reversal, perform a full exit. For position sizing, apply the Position Sizing Rules above when computing the percentage (0-100) for entries and exits. 
+                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤2 candles old) for any entry, and if the 5-minute MACD shows two consecutive candles indicating a trend reversal, perform a full exit. Additional Indicators can only confirm or reject a fresh primary signal—never enter on Additional Indicators alone. For position sizing, apply the Position Sizing Rules above when computing the percentage (0-100) for entries and exits.
                         """   
                     },
                     {
