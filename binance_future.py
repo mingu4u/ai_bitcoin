@@ -694,29 +694,36 @@ class BinanceFuturesTrader:
 
         # 3. 신규 포지션 진입을 위한 잔고 확인 및 주문 수량 계산
         try:
-            balance = self.exchange.fetch_balance()
-            available_balance = float(balance['USDT']['free'])
-            
-            if available_balance < MINIMUM_ORDER_VALUE:
-                self.logger.error(f"Insufficient balance: {available_balance} USDT")
-                return None
-            
-            max_safe_amount = available_balance * MAX_BALANCE_USE
-            if buy_amount > max_safe_amount:
-                buy_amount = max_safe_amount
-                self.logger.warning(f"Order amount adjusted to {buy_amount} USDT")
-            
-            quantity = (buy_amount * self.leverage) / current_price
-            
-            if quantity * current_price < MINIMUM_ORDER_VALUE:
-                self.logger.error(f"Order value too small: {quantity * current_price} USDT")
-                return None
-            
-            min_amount = self.exchange.markets[self.symbol]['limits']['amount']['min']
-            if quantity < min_amount:
-                self.logger.error(f"Order quantity too small: {quantity}")
-                return None
+            # 먼저 현재 포지션 확인(이미 current_position과 position_side가 할당되어 있다고 가정)
+            is_reduction = False
+            if current_position and ((position_side == 'long' and side == 'sell') or (position_side == 'short' and side == 'buy')):
+                is_reduction = True
 
+            if is_reduction:
+                # 반대 방향 축소(reduction)일 경우 잔고 체크는 생략하고 주문량만 계산
+                quantity = (buy_amount * self.leverage) / current_price
+                # 최소 주문 금액 체크 추가 (주문 가치가 충분한지 확인)
+                if quantity * current_price < MINIMUM_ORDER_VALUE:
+                    self.logger.error(f"Partial reduction order value too small: {quantity * current_price} USDT")
+                    return None
+            else:
+                balance = self.exchange.fetch_balance()
+                available_balance = float(balance['USDT']['free'])
+                if available_balance < MINIMUM_ORDER_VALUE:
+                    self.logger.error(f"Insufficient balance: {available_balance} USDT")
+                    return None
+                max_safe_amount = available_balance * MAX_BALANCE_USE
+                if buy_amount > max_safe_amount:
+                    buy_amount = max_safe_amount
+                    self.logger.warning(f"Order amount adjusted to {buy_amount} USDT")
+                quantity = (buy_amount * self.leverage) / current_price
+                if quantity * current_price < MINIMUM_ORDER_VALUE:
+                    self.logger.error(f"Order value too small: {quantity * current_price} USDT")
+                    return None
+                min_amount = self.exchange.markets[self.symbol]['limits']['amount']['min']
+                if quantity < min_amount:
+                    self.logger.error(f"Order quantity too small: {quantity}")
+                    return None
         except Exception as e:
             self.logger.error(f"Error calculating order quantity: {e}")
             return None
@@ -751,8 +758,6 @@ class BinanceFuturesTrader:
                         quantity, sl_price
                     )
                     sl_price = weighted_sl_price
-                    total_quantity = current_size + quantity
-                    quantity = total_quantity
 
                 # B. 반대 방향 축소
                 elif ((position_side == 'long' and side == 'sell') or 
@@ -794,8 +799,8 @@ class BinanceFuturesTrader:
                 
                 tp_side = 'sell' if side == 'buy' else 'buy'
                 
-                # 신규 진입이거나 전량 청산인 경우에만 새 TP 생성
-                if not current_position or is_full_reduction:
+                # 신규 진입에만 새 TP 생성
+                if not current_position:
                     tp_order = self.exchange.create_order(
                         symbol=self.symbol,
                         type='TAKE_PROFIT_MARKET',
@@ -803,7 +808,7 @@ class BinanceFuturesTrader:
                         amount=quantity,
                         params={
                             'stopPrice': tp_price,
-                            'closePosition': 'true',
+                            'closePosition': True,
                             'clientOrderId': f"tp_{order['id']}"
                         }
                     )
@@ -816,7 +821,7 @@ class BinanceFuturesTrader:
                     amount=quantity,
                     params={
                         'stopPrice': sl_price,
-                        'closePosition': 'true',
+                        'closePosition': True,
                         'clientOrderId': f"sl_{order['id']}"
                     }
                 )
@@ -890,7 +895,7 @@ class BinanceFuturesTrader:
                             params={
                                 'stopPrice': new_sl_price,
                                 'closePosition': True,
-                                'reduceOnly': True
+                                'clientOrderId': f"sl_{order['id']}"
                             }
                         )
                         self.logger.info(f"Trailing SL updated: {new_sl_price}")
@@ -1053,7 +1058,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
 #     columns = [column[0] for column in c.description]
 #     return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
 
-def get_recent_trades(conn, num_trades=40):
+def get_recent_trades(conn, num_trades=20):
     f"""
     최근 n개의 거래 내역을 시간 역순으로 가져오는 함수
     
@@ -1120,7 +1125,7 @@ def generate_reflection(trades_df, current_market_data):
                     Please analyze the following trading performance data and provide a structured analysis to improve future trading decisions.
 
                     **Input Data:**
-                    - **Recent 40 Trades:**
+                    - **Recent 20 Trades:**
                     {trades_df.to_json(orient='records')}
                     [Contains: Timestamp, Trade Type (AI/Manual), Decision (buy/sell/hold), Position Size %, Reason, Balance Information, Price Data]
 
@@ -1681,175 +1686,187 @@ def ai_trading():
                     {
                     "role": "system",
                     "content": f"""
-                        ────────────────────────────────────────────────────────────────
+                        ───────────────────────────────────────────────────────────────
                         # Bitcoin Futures Trading Strategy (Integrated Prompt)
 
-                        You are a Bitcoin futures day trader on the 5‐minute timeframe with {trader.leverage}x leverage. Your strategy centers on three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume Oscillator) and includes additional confluence checks (RSI, MACD, ATR, CMF, ADX, DI+, DI−, etc.). Strict timing rules apply—no aged signals, immediate exits on signal deterioration, and precise position management. Capital preservation is paramount.
+                        You are a Bitcoin futures day trader on the 5-minute timeframe with {{trader.leverage}}x leverage. Your strategy centers on three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume Oscillator) and includes additional confluence checks (RSI, MACD, ATR, CMF, ADX, DI+, DI−, etc.). Strict timing rules apply—no aged signals, immediate exits on signal deterioration, and precise position management. Capital preservation is paramount.
 
-                        ────────────────────────────────────────────────────────────────
+                        ───────────────────────────────────────────────────────────────
                         ## 1. ALWAYS Use Correct Exit Commands
                         • "buy" to exit shorts  
                         • "sell" to exit longs  
 
                         This ensures the correct order type is used when closing an existing position.
 
-                        ────────────────────────────────────────────────────────────────
+                        ───────────────────────────────────────────────────────────────
                         ## 2. Market Data and Portfolio Placeholders
 
-                        Below are placeholders for real‐time data. They MUST be considered in your analysis and final decision. (Replace the curly braces with actual values at runtime):
+                        Below are placeholders for real-time data. They MUST be considered as secondary in your analysis (the three primary indicators are main) and in your final decision.
 
                         **[Market Data]**  
-                        • Current Price: {current_price:.2f} USDT  
+                        • Current Price: {{current_price:.2f}} USDT  
 
-                        **Technical Indicators (5‐min, 1‐hour, 4‐hour timeframes)**
+                        **Technical Indicators (5-min, 1-hour, 4-hour timeframes)**
 
-                        → 5‐Minute Chart Data:  
-                        - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}  
-                        - MACD: {df_5min['macd'].iloc[-1]:.2f}  
+                        → 5-Minute Chart Data:  
+                        - RSI(14): {{df_5min['rsi'].iloc[-1]:.2f}}  
+                        - MACD: {{df_5min['macd'].iloc[-1]:.2f}}  
                         - Bollinger Bands (20):  
-                        * Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}  
-                        * Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}  
-                        * Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}  
+                          * Middle: {{df_5min['bb_bbm'].iloc[-1]:.2f}}  
+                          * Upper: {{df_5min['bb_bbh'].iloc[-1]:.2f}}  
+                          * Lower: {{df_5min['bb_bbl'].iloc[-1]:.2f}}  
                         - Stochastic Oscillator (14, 3):  
-                        * %K: {df_5min['stoch_k'].iloc[-1]:.2f}  
-                        * %D: {df_5min['stoch_d'].iloc[-1]:.2f}  
-                        - ATR: {df_5min['atr'].iloc[-1]:.2f}  
-                        - Williams %R: {df_5min['williams_r'].iloc[-1]:.2f}  
-                        - CMF: {df_5min['cmf'].iloc[-1]:.2f}  
-                        - ADX: {df_5min['adx'].iloc[-1]:.2f}  
-                        - DI+: {df_5min['di_plus'].iloc[-1]:.2f}  
-                        - DI−: {df_5min['di_minus'].iloc[-1]:.2f}  
-                        - PPO: {df_5min['ppo'].iloc[-1]:.2f}  
+                          * %K: {{df_5min['stoch_k'].iloc[-1]:.2f}}  
+                          * %D: {{df_5min['stoch_d'].iloc[-1]:.2f}}  
+                        - ATR: {{df_5min['atr'].iloc[-1]:.2f}}  
+                        - Williams %R: {{df_5min['williams_r'].iloc[-1]:.2f}}  
+                        - CMF: {{df_5min['cmf'].iloc[-1]:.2f}}  
+                        - ADX: {{df_5min['adx'].iloc[-1]:.2f}}  
+                        - DI+: {{df_5min['di_plus'].iloc[-1]:.2f}}  
+                        - DI-: {{df_5min['di_minus'].iloc[-1]:.2f}}  
+                        - PPO: {{df_5min['ppo'].iloc[-1]:.2f}}
 
-                        → 1‐Hour Chart Data:  
-                        - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}  
-                        - MACD: {df_hourly['macd'].iloc[-1]:.2f}  
+                        → 1-Hour Chart Data:  
+                        - RSI(14): {{df_hourly['rsi'].iloc[-1]:.2f}}  
+                        - MACD: {{df_hourly['macd'].iloc[-1]:.2f}}  
                         - Bollinger Bands:  
-                        * Middle: {df_hourly['bb_bbm'].iloc[-1]:.2f}  
-                        * Upper: {df_hourly['bb_bbh'].iloc[-1]:.2f}  
-                        * Lower: {df_hourly['bb_bbl'].iloc[-1]:.2f}  
-                        - ATR: {df_hourly['atr'].iloc[-1]:.2f}  
-                        - Williams %R: {df_hourly['williams_r'].iloc[-1]:.2f}  
-                        - CMF: {df_hourly['cmf'].iloc[-1]:.2f}  
-                        - ADX: {df_hourly['adx'].iloc[-1]:.2f}  
-                        - DI+: {df_hourly['di_plus'].iloc[-1]:.2f}  
-                        - DI−: {df_hourly['di_minus'].iloc[-1]:.2f}  
-                        - PPO: {df_hourly['ppo'].iloc[-1]:.2f}  
+                          * Middle: {{df_hourly['bb_bbm'].iloc[-1]:.2f}}  
+                          * Upper: {{df_hourly['bb_bbh'].iloc[-1]:.2f}}  
+                          * Lower: {{df_hourly['bb_bbl'].iloc[-1]:.2f}}  
+                        - ATR: {{df_hourly['atr'].iloc[-1]:.2f}}  
+                        - Williams %R: {{df_hourly['williams_r'].iloc[-1]:.2f}}  
+                        - CMF: {{df_hourly['cmf'].iloc[-1]:.2f}}  
+                        - ADX: {{df_hourly['adx'].iloc[-1]:.2f}}  
+                        - DI+: {{df_hourly['di_plus'].iloc[-1]:.2f}}  
+                        - DI-: {{df_hourly['di_minus'].iloc[-1]:.2f}}  
+                        - PPO: {{df_hourly['ppo'].iloc[-1]:.2f}}
 
-                        → 4‐Hour Chart Data:  
-                        - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}  
-                        - MACD: {df_4h['macd'].iloc[-1]:.2f}  
+                        → 4-Hour Chart Data:  
+                        - RSI(14): {{df_4h['rsi'].iloc[-1]:.2f}}  
+                        - MACD: {{df_4h['macd'].iloc[-1]:.2f}}  
                         - Bollinger Bands:  
-                        * Middle: {df_4h['bb_bbm'].iloc[-1]:.2f}  
-                        * Upper: {df_4h['bb_bbh'].iloc[-1]:.2f}  
-                        * Lower: {df_4h['bb_bbl'].iloc[-1]:.2f}  
-                        - ATR: {df_4h['atr'].iloc[-1]:.2f}  
-                        - Williams %R: {df_4h['williams_r'].iloc[-1]:.2f}  
-                        - CMF: {df_4h['cmf'].iloc[-1]:.2f}  
-                        - ADX: {df_4h['adx'].iloc[-1]:.2f}  
-                        - DI+: {df_4h['di_plus'].iloc[-1]:.2f}  
-                        - DI−: {df_4h['di_minus'].iloc[-1]:.2f}  
-                        - PPO: {df_4h['ppo'].iloc[-1]:.2f}  
+                          * Middle: {{df_4h['bb_bbm'].iloc[-1]:.2f}}  
+                          * Upper: {{df_4h['bb_bbh'].iloc[-1]:.2f}}  
+                          * Lower: {{df_4h['bb_bbl'].iloc[-1]:.2f}}  
+                        - ATR: {{df_4h['atr'].iloc[-1]:.2f}}  
+                        - Williams %R: {{df_4h['williams_r'].iloc[-1]:.2f}}  
+                        - CMF: {{df_4h['cmf'].iloc[-1]:.2f}}  
+                        - ADX: {{df_4h['adx'].iloc[-1]:.2f}}  
+                        - DI+: {{df_4h['di_plus'].iloc[-1]:.2f}}  
+                        - DI-: {{df_4h['di_minus'].iloc[-1]:.2f}}  
+                        - PPO: {{df_4h['ppo'].iloc[-1]:.2f}}
 
                         **[Portfolio]**  
-                        • Total USDT Assets: {total_usdt:.1f}  
-                        • Free USDT Balance: {free_usdt:.1f}  
-                        • Used USDT Holdings: {used_usdt:.1f}  
-                        • BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT  
-                        • Current Position Side: {position_side}  ← “long”, “short”, or “none”  
-                        • Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)  
+                        • Total USDT Assets: {{total_usdt:.1f}}  
+                        • Free USDT Balance: {{free_usdt:.1f}}  
+                        • Used USDT Holdings: {{used_usdt:.1f}}  
+                        • BTC Average Purchase Price: {{btc_avg_buy_price:.1f}} USDT  
+                        • Current Position Side: {{position_side}}  ← “long”, “short”, or “none”  
+                        • Current Position PnL: {{unrealized_nl}} % ← -100~100 or None(no position)
 
                         You should factor in these data points before making a final trading decision (buy, sell, hold).
 
-                        ────────────────────────────────────────────────────────────────
+                        ───────────────────────────────────────────────────────────────
                         ## 3. Core Strategy Overview
 
-                        ### A. Critical Timing
+                        ### A. Critical Timing  
                         • BlackFlag FTS:  
-                        - LONG if Red→Green transition is fresh (≤2 candles ago).  
-                        - SHORT if Green→Red transition is fresh (≤2 candles ago).  
+                          - LONG if Red→Green transition is fresh (≤2 candles ago).  
+                          - SHORT if Green→Red transition is fresh (≤2 candles ago).  
                         • UT Bot Alerts:  
-                        - Must appear within the last 2 candles in the same direction.  
+                          - Must appear within the last 2 candles in the same direction.  
                         • Volume Oscillator:  
-                        - Must be positive (>0) on the current candle, indicating rising volume momentum.
+                          - Must be positive (>0) on the current candle, indicating rising volume momentum.
 
                         Any stale signals or misalignment → “hold” (no entry).  
                         **This is mandatory: if any core indicator signal is older than 2 candles, you must not enter. Always “hold” unless all three are fresh (≤2 candles).**
 
-                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI−)
+                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)  
                         Use these for extra confirmation or rejection. Major divergences or contradictory signals can override the primary conditions and prompt a hold. Adjust stops/position size using ATR. Watch momentum (MACD, ADX) and money flow (CMF).
 
                         ### C. Signal Classification: Strong, Moderate, Weak
 
                         • Strong Signal  
-                        - Primary indicators in perfect alignment + High volume (≥250% avg) + Low/stable ATR.  
-                        - Position Size: 100% of calculated size.  
-                        - Stop Loss: ±0.5% from entry (refined with Cloud/ATR).  
-                        - P/L Ratio: ~2.0.
+                          - Primary indicators in perfect alignment + High volume (≥250% avg) + Low/stable ATR.  
+                          - Position Size: 100% of calculated size.  
+                          - Stop Loss: ±0.5% from entry (refined with Cloud/ATR).  
+                          - P/L Ratio: ~2.0.
 
                         • Moderate Signal  
-                        - Decent volume and volatility, clean primary indicator alignment.  
-                        - Position Size: ~60%.  
-                        - Stop Loss: ±0.4% from entry or Cloud.  
-                        - P/L Ratio: ~1.75 (1.5–2.0 range).
+                          - Decent volume and volatility, clean primary indicator alignment.  
+                          - Position Size: ~60%.  
+                          - Stop Loss: ±0.4% from entry or Cloud.  
+                          - P/L Ratio: ~1.75 (1.5-2.0 range).
 
                         • Weak Signal  
-                        - Indicators align but momentum/volume borderline, or partial confluence. Possibly higher volatility.  
-                        - Position Size: ~30%.  
-                        - Stop Loss: ±0.3% from entry (Cloud + ATR checks).  
-                        - P/L Ratio: ~1.5 (1.5–2.0 range).
+                          - Indicators align but momentum/volume borderline, or partial confluence. Possibly higher volatility.  
+                          - Position Size: ~30%.  
+                          - Stop Loss: ±0.3% from entry (Cloud + ATR checks).  
+                          - P/L Ratio: ~1.5 (1.5-2.0 range).
 
-                        ────────────────────────────────────────────────────────────────
+                        ───────────────────────────────────────────────────────────────
                         ## 4. Stop Loss & Take Profit
 
-                        1) Cloud‐Based Stop Loss  
-                        - LONG: near the deepest green portion of the latest Green Cloud.  
-                        - SHORT: near the deepest red portion of the latest Red Cloud.  
-                        - If that is unreasonably far, switch to ATR ±0.3–0.5% guidelines.
+                        1) Cloud-Based Stop Loss  
+                          - LONG: near the deepest green portion of the latest Green Cloud.  
+                          - SHORT: near the deepest red portion of the latest Red Cloud.  
+                          - If that is unreasonably far, switch to ATR ±0.3-0.5% guidelines.
 
-                        2) P/L Ratio (1.5–2.0)  
-                        - Strong: ~2.0 baseline.  
-                        - Moderate: ~1.75 baseline.  
-                        - Weak: ~1.5 baseline.  
+                        2) P/L Ratio (1.5-2.0)  
+                          - Strong: ~2.0 baseline.  
+                          - Moderate: ~1.75 baseline.  
+                          - Weak: ~1.5 baseline.
 
-                        Adjust within 1.5–2.0 based on real‐time volatility.
+                        Adjust within 1.5-2.0 based on real-time volatility.
 
-                        ────────────────────────────────────────────────────────────────
+                        ───────────────────────────────────────────────────────────────
                         ## 5. Exit & Risk Management
 
                         • Exit if any core signal reverses or invalidates.  
                         • Volume Oscillator < 0% → immediate red flag.  
                         • If secondary indicators reveal sharp contradiction (e.g., strong RSI or MACD divergence), exit early.  
                         • Use partial exits if needed (e.g., scale out every +0.1% gain).  
-                        **• If the 5‐minute MACD shows a clear trend reversal for 2 consecutive candles in the opposite direction, perform an immediate “Full Exit” of the position.**  
+                        **• If the 5-minute MACD shows a clear trend reversal for 2 consecutive candles in the opposite direction, perform an immediate “Full Exit” of the position.**
 
-                        ────────────────────────────────────────────────────────────────
+                        ───────────────────────────────────────────────────────────────
                         ## 6. Response Format
 
                         Output a JSON object:
 
                         ```json
-                        {
+                        {{
                         "decision": "buy" or "sell" or "hold",
                         "percentage": integer (0-100),
                         "stop_loss_price": float,
                         "pl_ratio": float (1.5-2.0),
                         "reason": "Concise rationale referencing signals & data"
-                        }
+                        }}
                         ```
 
-                        - “decision”: open or close a position. “buy” closes shorts or opens a new long, “sell” closes longs or opens a new short, “hold” = no action.  
-                        - “percentage”: size of the position to open (30%/60%/100%) or 0 if closing fully.  
-                        - “stop_loss_price”: based on Cloud or ±0.3–0.5% + ATR.  
-                        - “pl_ratio”: choose between 1.5–2.0, guided by signal strength.  
-                        - “reason”: short summary referencing indicator alignment, volume, volatility, etc.
+                        - “decision”: Open or close a position. “buy” closes shorts or opens a new long, “sell” closes longs or opens a new short, “hold” = no action.
+                        - “stop_loss_price”: Based on Cloud or ±0.3-0.5% + ATR.
+                        - “pl_ratio”: Choose between 1.5 and 2.0, guided by signal strength.
+                        - “reason”: A short summary referencing indicator alignment (must include BlackFlag FTS, UT Bot Alerts, Volume OSC), volume, volatility, etc.
 
-                        ────────────────────────────────────────────────────────────────
+                        **Position Sizing Rules:**  
+                        - The "percentage" field is an integer between 0 and 100 representing the fraction of a full allocation.
+                        - For entry orders, a value of 100 means using 100% of the available balance for entry.
+                        - For exit orders, 100 means closing 100% of the current position quantity.
+                        - In practice, you may set "percentage" to any value between 0 and 100 (except when the decision is "hold") based on signal strength and risk considerations.
+                        - Use the following full-allocation benchmarks as your baseline:
+                        - For entries when Current Position Side is "long" or "none" and the decision is "buy", or when Current Position Side is "short" or "none" and the decision is "sell", 100% represents the entirety of the available balance.
+                        - For exits when Current Position Side is "short" and the decision is "buy", or when Current Position Side is "long" and the decision is "sell", 100% represents the entire current position.
+
+                        ───────────────────────────────────────────────────────────────
                         ### Final Notes
-                        1) Respect fresh signals only—≥2 candles old means no entry.  
-                        2) Use correct exit commands: a “buy” command to exit a short, a “sell” command to exit a long.  
+
+                        1) Respect fresh signals only—if any signal is 2 or more candles old, do not enter and hold.  
+                        2) Use correct exit commands: “buy” to exit a short, “sell” to exit a long.  
                         3) Incorporate the dynamically updated values from [Market Data] and [Portfolio] sections.  
                         4) Maintain capital preservation: exit immediately on conflicting or invalid signals.
+
+                        ───────────────────────────────────────────────────────────────
+                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤2 candles old), and if the 5-minute MACD shows two consecutive candles indicating a trend reversal, perform a full exit. For position sizing, apply the Position Sizing Rules above when computing the percentage (0-100) for entries and exits. 
                         """   
                     },
                     {
@@ -1927,7 +1944,7 @@ def ai_trading():
                 # 같은 방향 추가 주문이면 잔고 기준으로 계산
                 else:
                     order_amount = total_balance * (result.percentage / 100) * 0.9996
-            else:  # 신규 진입일 때
+            else:  # 신규 진입일 때도 잔고 기준으로 계산
                 order_amount = total_balance * (result.percentage / 100) * 0.9996
 
             
