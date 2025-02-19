@@ -1674,7 +1674,7 @@ def ai_trading():
                     "role": "system",
                     "content": f"""
                         ───────────────────────────────────────────────────────────────
-                        # Bitcoin Futures Trading Strategy
+                        # Bitcoin Futures Trading Strategy (Integrated Prompt)
 
                         You are a Bitcoin futures day trader on the 5-minute timeframe with {trader.leverage}x leverage. Your strategy centers on three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume Oscillator) and includes additional confluence checks (RSI, MACD, ATR, CMF, ADX, DI+, DI−, etc.). Strict timing rules apply—no aged signals, immediate exits on signal deterioration, and precise position management. Capital preservation is paramount.
 
@@ -1768,7 +1768,9 @@ def ai_trading():
                         Any stale signals or misalignment → “hold” (no entry).  
                         **This is mandatory: if any core indicator signal is older than 2 candles, you must not enter. Always “hold” unless all three are fresh (≤2 candles).**
 
-                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI−)  
+                        **However, if a signal is slightly beyond 2 candles (e.g., 3 or 4 candles) but price has not moved significantly (within ±0.2% from the original trigger level), and Volume or other Additional Indicators still align, you may consider entering with a reduced position size (e.g., treat it as a “Weak Signal”). This helps avoid missing valid trades due to minor delays. If more than 4 candles have passed or price has shifted over ±0.5% from the trigger, treat it as stale and remain in “hold.”**
+
+                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)
                         Use these for extra confirmation or rejection of the primary indicators only.  
                         **You may never open a position solely on Additional Indicators if the primary indicators do not show a valid fresh entry signal.**  
                         Major divergences or contradictory signals can override or cancel a primary entry (leading to a “hold”), but cannot create a new entry on their own.  
@@ -1786,13 +1788,13 @@ def ai_trading():
                         - Decent volume and volatility, clean primary indicator alignment.  
                         - Position Size: ~60%.  
                         - Stop Loss: ±0.4% from entry or Cloud.  
-                        - P/L Ratio: ~1.75 (1.5–2.0 range).
+                        - P/L Ratio: ~1.75 (1.5-2.0 range).
 
                         • Weak Signal  
                         - Indicators align but momentum/volume borderline, or partial confluence. Possibly higher volatility.  
                         - Position Size: ~30%.  
                         - Stop Loss: ±0.3% from entry (Cloud + ATR checks).  
-                        - P/L Ratio: ~1.5 (1.5–2.0 range).
+                        - P/L Ratio: ~1.5 (1.5-2.0 range).
 
                         ### D. Price Action & Key Levels (Support/Resistance)
                         To further refine your entries/exits, identify notable swing highs and lows on the 5-minute, 1-hour, and 4-hour charts. These levels often serve as potential support (previous lows) or resistance (previous highs).  
@@ -1807,14 +1809,14 @@ def ai_trading():
                         1) Cloud-Based Stop Loss  
                         - LONG: near the deepest green portion of the latest Green Cloud.  
                         - SHORT: near the deepest red portion of the latest Red Cloud.  
-                        - If that is unreasonably far, switch to ATR ±0.3–0.5% guidelines.
+                        - If that is unreasonably far, switch to ATR ±0.3-0.5% guidelines.
 
-                        2) P/L Ratio (1.5–2.0)  
+                        2) P/L Ratio (1.5-2.0)  
                         - Strong: ~2.0 baseline.  
                         - Moderate: ~1.75 baseline.  
                         - Weak: ~1.5 baseline.
 
-                        Adjust within 1.5–2.0 based on real-time volatility.
+                        Adjust within 1.5-2.0 based on real-time volatility.
 
                         ───────────────────────────────────────────────────────────────
                         ## 5. Exit & Risk Management
@@ -1841,7 +1843,7 @@ def ai_trading():
                         ```
 
                         - “decision”: Open or close a position. “buy” closes shorts or opens a new long, “sell” closes longs or opens a new short, “hold” = no action.  
-                        - “stop_loss_price”: Based on Cloud or ±0.3–0.5% + ATR.  
+                        - “stop_loss_price”: Based on Cloud or ±0.3-0.5% + ATR.  
                         - “pl_ratio”: Choose between 1.5 and 2.0, guided by signal strength.  
                         - “reason”: A short summary referencing indicator alignment (must include BlackFlag FTS, UT Bot Alerts, Volume OSC), volume, volatility, etc.
 
@@ -1863,7 +1865,7 @@ def ai_trading():
                         4) Maintain capital preservation: exit immediately on conflicting or invalid signals.
 
                         ───────────────────────────────────────────────────────────────
-                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤2 candles old) for any entry, and if the 5-minute MACD shows two consecutive candles indicating a trend reversal, perform a full exit. Additional Indicators can only confirm or reject a fresh primary signal—never enter on Additional Indicators alone. For position sizing, apply the Position Sizing Rules above when computing the percentage (0-100) for entries and exits. Now, also incorporate local highs/lows across the 5-minute, 1-hour, and 4-hour charts to locate potential support/resistance zones and further refine or reject your primary signals.
+                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤2 candles old) for any entry—though slight delays (3–4 candles) may still qualify if price remains near the trigger (+/–0.2%) and volume momentum persists. If more than 4 candles pass or price moves >0.5% away, treat it as stale. Additional Indicators can only confirm or reject a fresh or slightly delayed primary signal—never enter on Additional Indicators alone. For position sizing, apply the updated Position Sizing Rules above when computing the percentage (0–100) for entries and exits, and factor in local highs/lows for possible support/resistance.  
                         """   
                     },
                     {
