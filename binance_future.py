@@ -1758,18 +1758,37 @@ def ai_trading():
 
                         ### A. Critical Timing
 
-                        **For Long Entry:**  
-                        - **BlackFlag FTS:** Must show a red-to-green transition (indicating a change from bearish to bullish) within the last 3 candles.  
-                        - **UT Bot Alerts:** Must display a BUY alert within the last 3 candles.  
-                        - **Volume Oscillator:** Must be positive on the current candle, confirming rising volume momentum supportive of a long move.
+                        For Long Entry:
+                        • BlackFlag FTS:  
+                        - Within the last 3 candles, the background cloud behind the price must visibly shift from red (bearish zone) to green (bullish zone).  
+                        - This cloud color transition indicates a change from a downward bias to an upward bias.  
+                        - Example: You see a red-colored cloud flipping to green immediately behind the candles, signaling a fresh bullish opportunity.
 
-                        **For Short Entry:**  
-                        - **BlackFlag FTS:** Must show a green-to-red transition (indicating a change from bullish to bearish) within the last 3 candles.  
-                        - **UT Bot Alerts:** Must display a SELL alert within the last 3 candles.  
-                        - **Volume Oscillator:** Must be positive on the current candle, confirming sufficient momentum for a short move.
+                        • UT Bot Alerts:  
+                        - A distinct green “Buy” label (icon) must appear on or near the latest candles within the last 3 bars.  
+                        - This label often looks like a small green arrow/box with the word “Buy,” signaling a potential upward move.
 
-                        Any stale signals or misalignment → “hold” (no entry).  
-                        **This is mandatory: if any core indicator signal is older than 3 candles, you must not enter. Always “hold” unless all three primary indicators are fresh (≤3 candles).**
+                        • Volume Oscillator:  
+                        - The oscillator's plotted blue line (and numeric reading in a small blue box) must be positive (e.g., above +0.0%) on the current candle.  
+                        - A positive reading (e.g., +8.5%) indicates rising volume momentum that can support a long position.  
+                        - If the oscillator is negative (e.g., -13.0%), momentum is considered insufficient for a valid long entry.
+
+                        For Short Entry:
+                        • BlackFlag FTS:  
+                        - Within the last 3 candles, the background cloud must change from green (bullish zone) to red (bearish zone).  
+                        - Effectively, you see a green-colored cloud flipping to red behind the candles, indicating a fresh downward bias.
+
+                        • UT Bot Alerts:  
+                        - A red “Sell” label (icon) must appear on or near the latest candles within the last 3 bars.  
+                        - This label is usually a small red arrow/box with the word “Sell,” highlighting a potential downward move.
+
+                        • Volume Oscillator:  
+                        - The oscillator (blue line and numeric reading) must be positive on the current candle for a valid short.  
+                        - A positive value here confirms there is enough volume momentum to drive a move downward.  
+                        - If it is negative, that indicates declining volume momentum, invalidating a fresh short entry.
+
+                        Any stale signals or misalignment of these three primary indicators → “hold” (no entry).  
+                        This is mandatory: if any of the three core signals (cloud color shift, UT Bot Alerts icon, or Volume Oscillator positivity) is older than 3 candles or is contradictory, no entry is taken. Always “hold” unless all three are fresh (≤3 candles) and align in the same direction.                        
 
                         ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)
                         Use these solely for extra confirmation or for rejecting the primary signal.  
@@ -2029,7 +2048,7 @@ def ai_trading():
                 
                 def periodic_sl_monitoring():
                     try:
-                        new_sl_order = monitor_sl_func(trader)
+                        new_sl_order = monitor_sl_func()
                         if new_sl_order:
                             logger.info(f"Trailing SL order updated: {new_sl_order}")
                     except Exception as e:
