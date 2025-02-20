@@ -1761,48 +1761,48 @@ def ai_trading():
                         **For Long Entry:**  
                         - **BlackFlag FTS:** Must show a red-to-green transition, indicating a fresh upward signal within the last 3 candles.  
                         - **UT Bot Alerts:** Must display a BUY alert within the last 3 candles.  
-                        - **Volume Oscillator:** Must be positive on the current candle, confirming rising volume momentum supportive of a long move.
+                        - **Volume Oscillator:** Must be positive on the current candle, confirming sufficient momentum to support a long move.
 
                         **For Short Entry:**  
                         - **BlackFlag FTS:** Must show a green-to-red transition, indicating a fresh downward signal within the last 3 candles.  
                         - **UT Bot Alerts:** Must display a SELL alert within the last 3 candles.  
-                        - **Volume Oscillator:** Must be positive on the current candle, indicating sufficient momentum for a short move.
+                        - **Volume Oscillator:** Must be positive on the current candle, confirming sufficient momentum to support a short move.
 
                         Any stale signals or misalignment → “hold” (no entry).  
                         **This is mandatory: if any core indicator signal is older than 3 candles, you must not enter. Always “hold” unless all three primary indicators are fresh (≤3 candles).**
 
-                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)  
-                        Use these for extra confirmation or rejection of the primary indicators only.  
-                        **You may never open a position solely on Additional Indicators if the primary indicators do not show a valid fresh entry signal.**  
-                        Major divergences or contradictory signals can override or cancel a primary entry (leading to a “hold”), but cannot create a new entry on their own.  
-                        Adjust stops/position size using ATR. Watch momentum (MACD, ADX) and money flow (CMF).
+                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)
+                        Use these solely for extra confirmation or rejection of the primary indicators.  
+                        **You must not open a position based only on Additional Indicators if the primary indicators do not show a valid fresh entry signal.**  
+                        While additional indicators may override or cancel a primary entry (resulting in a “hold”), they cannot independently generate a new entry.  
+                        Adjust stops and position size using ATR; monitor momentum (MACD, ADX) and money flow (CMF).
 
                         ### C. Signal Classification: Strong, Moderate, Weak
 
                         • **Strong Signal**  
-                        - Primary indicators are in perfect alignment with high volume (≥250% avg) and low/stable ATR.  
+                        - Primary indicators are in perfect alignment with high volume (≥250% avg) and low, stable ATR.  
                         - Position Size: 100% of calculated size.  
                         - Stop Loss: ±0.5% from entry (refined with Cloud/ATR).  
                         - P/L Ratio: ~2.0.
 
                         • **Moderate Signal**  
-                        - Decent volume and volatility with clean primary indicator alignment.  
+                        - Adequate volume and volatility with clean primary indicator alignment.  
                         - Position Size: ~60%.  
                         - Stop Loss: ±0.4% from entry or Cloud.  
-                        - P/L Ratio: ~1.75 (range between 1.5 and 2.0).
+                        - P/L Ratio: ~1.75 (between 1.5 and 2.0).
 
                         • **Weak Signal**  
-                        - Primary indicators are borderline (possibly slightly delayed or lower volume), or there is partial confluence.  
+                        - Primary indicators are borderline (possibly slightly delayed or with lower volume), or only partially conclusive.  
                         - Position Size: ~30%.  
-                        - Stop Loss: ±0.3% from entry (with Cloud + ATR checks).  
-                        - P/L Ratio: ~1.5 (range between 1.5 and 2.0).
+                        - Stop Loss: ±0.3% from entry (combined with Cloud and ATR checks).  
+                        - P/L Ratio: ~1.5 (between 1.5 and 2.0).
 
                         ### D. Price Action & Key Levels (Support/Resistance)
-                        To further refine your entries/exits, identify notable swing highs and lows on the 5-minute, 1-hour, and 4-hour charts. These levels often serve as potential support (previous lows) or resistance (previous highs).  
-                        • A fresh primary signal appearing just below a strong resistance may pose risk—consider waiting for a breakout or additional confirmation of rejection.  
-                        • Conversely, if a primary buy signal aligns with a well-established support level on a higher timeframe, it strengthens the case for entry.  
-                        • Use these S/R zones as additional criteria for confluence or rejection; do not enter solely based on price action if the three primary indicators are not validating a fresh signal.  
-                        • When prices approach or breach these levels, look for divergences or volume spikes to confirm or reject the trade.
+                        Identify notable swing highs and lows on the 5-minute, 1-hour, and 4-hour charts as potential support or resistance zones.  
+                        • A primary signal generated just below a strong resistance may be risky—consider waiting for a breakout or confirmation of the resistance being rejected.  
+                        • Conversely, a primary buy signal aligning with a well-established support level on a higher timeframe reinforces the entry.  
+                        • Use these support/resistance zones to add confluence or rejection criteria. Do not rely solely on price action if the three primary indicators do not confirm a fresh signal.  
+                        • When price nears or breaches these levels, check for price divergences or volume spikes to confirm or rule out the trade.
 
                         ───────────────────────────────────────────────────────────────
                         ## 4. Stop Loss & Take Profit
@@ -1810,23 +1810,23 @@ def ai_trading():
                         1) **Cloud-Based Stop Loss**  
                         - **LONG:** Place near the deepest green portion of the latest Green Cloud.  
                         - **SHORT:** Place near the deepest red portion of the latest Red Cloud.  
-                        - If that is unreasonably far, resort to ATR guidelines (±0.3-0.5% from entry).
+                        - If this level is unreasonably far, refer to ATR guidelines (±0.3-0.5% from entry).
 
                         2) **P/L Ratio (1.5-2.0)**  
-                        - For Strong Signal: Approximately 2.0 baseline.  
-                        - For Moderate Signal: Approximately 1.75 baseline.  
-                        - For Weak Signal: Approximately 1.5 baseline.
+                        - Strong Signal: Approximately 2.0 baseline.  
+                        - Moderate Signal: Approximately 1.75 baseline.  
+                        - Weak Signal: Approximately 1.5 baseline.
 
-                        Adjust within this range based on real-time volatility.
+                        Adjust within this range based on current volatility.
 
                         ───────────────────────────────────────────────────────────────
                         ## 5. Exit & Risk Management
 
-                        • Exit if any core signal reverses or becomes invalid.  
-                        • Volume Oscillator falling below 0% is an immediate red flag.  
-                        • If secondary indicators show sharp contradictions (e.g., a strong RSI or MACD divergence), exit early.  
-                        • Use partial exits if needed (for example, scaling out every +0.1% gain).  
-                        **• If the 5-minute MACD shows a clear trend reversal for 2 consecutive candles in the opposite direction, perform an immediate “Full Exit” of the position.**
+                        • Exit if any core signal reverses or invalidates.  
+                        • If the Volume Oscillator drops below 0%, it is an immediate red flag.  
+                        • If secondary indicators show a significant contradiction (such as a strong RSI or MACD divergence), exit early.  
+                        • Use partial exits if needed (for example, scaling out increments of +0.1% gains).  
+                        **• If the 5-minute MACD shows a clear trend reversal for 2 consecutive candles in the opposite direction, execute an immediate “Full Exit” of the position.**
 
                         ───────────────────────────────────────────────────────────────
                         ## 6. Response Format
@@ -1843,23 +1843,23 @@ def ai_trading():
                         }}
                         ```
 
-                        - **decision:** Open or close a position. “buy” closes shorts or opens a new long; “sell” closes longs or opens a new short; “hold” means no action.  
+                        - **decision:** Open or close a position. “buy” is used to close shorts or open a new long; “sell” is used to close longs or open a new short; “hold” means take no action.  
                         - **stop_loss_price:** Determined based on Cloud levels or ATR guidelines (±0.3-0.5% from entry).  
-                        - **pl_ratio:** Choose a value between 1.5 and 2.0, guided by the signal strength.  
-                        - **reason:** Provide a concise rationale that clearly explains the current state of each primary indicator:  
-                        - **BlackFlag FTS:** Describe whether it shows a red-to-green (for long) or green-to-red (for short) transition and note its freshness.  
-                        - **UT Bot Alerts:** Specify if a BUY or SELL alert has been issued within the required candle window.  
-                        - **Volume Oscillator:** Confirm that it is positive, indicating sufficient momentum.  
-                        Include any other relevant details regarding volume and volatility.
+                        - **pl_ratio:** Choose a value between 1.5 and 2.0, guided by the strength of the signal.  
+                        - **reason:** Provide a concise rationale that explains in detail the current state of each primary indicator. In your explanation, clearly describe:
+                        - How the **BlackFlag FTS** is behaving (for example, whether it shows a red-to-green transition for long or a green-to-red transition for short, and comment on its freshness).
+                        - Whether **UT Bot Alerts** have issued a BUY or SELL alert within the required 3-candle window.
+                        - The condition of the **Volume Oscillator**, confirming that it is positive, which indicates sufficient momentum.
+                        Include any additional relevant details regarding volume and volatility.
 
                         **Position Sizing Rules:**  
-                        - The "percentage" field is an integer between 0 and 100 representing the fraction of a full allocation.  
-                        - For entry orders, 100 means using 100% of the available balance for entry.  
-                        - For exit orders, 100 indicates closing 100% of the current position quantity.  
-                        - In practice, you may set the percentage to any value from 0 to 100 (except when decision is “hold”) based on signal strength and risk considerations.  
-                        - Use the following full-allocation benchmarks as your baseline:  
-                        - For entries when Current Position Side is "long" or "none" and the decision is "buy", or when Current Position Side is "short" or "none" and the decision is "sell", 100% represents the entirety of the available balance.  
-                        - For exits when Current Position Side is "short" and the decision is "buy", or when Current Position Side is "long" and the decision is "sell", 100% represents the entire current position.
+                        - The "percentage" field is an integer between 0 and 100 representing the fraction of a full allocation.
+                        - For entry orders, 100 means using 100% of the available balance for entry.
+                        - For exit orders, 100 means closing 100% of the current position quantity.
+                        - In practice, you may choose any value between 0 and 100 (except when the decision is “hold”) based on signal strength and risk considerations.
+                        - Use the following full-allocation benchmarks as your baseline:
+                        - For entries: If Current Position Side is "long" or "none" and the decision is "buy", or if Current Position Side is "short" or "none" and the decision is "sell", 100% represents the entirety of the available balance.
+                        - For exits: If Current Position Side is "short" and the decision is "buy", or if Current Position Side is "long" and the decision is "sell", 100% represents closing the entire current position.
 
                         ───────────────────────────────────────────────────────────────
                         ### Final Notes
@@ -1870,9 +1870,11 @@ def ai_trading():
                         4) Maintain capital preservation by exiting immediately on conflicting or invalid signals.
 
                         ───────────────────────────────────────────────────────────────
-                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤3 candles old) for any entry—even though slight delays of 3–4 candles may be acceptable if the price remains within ±0.2% of the trigger level and volume momentum persists; otherwise, treat it as stale if more than 4 candles have passed or if the price moves more than 0.5% away from the trigger. Additional Indicators can only confirm or reject a fresh (or slightly delayed) primary signal—never generate an entry on their own. For position sizing, apply the Position Sizing Rules above when computing the percentage (0–100) for entries and exits. Also, incorporate local highs/lows across the 5-minute, 1-hour, and 4-hour charts to identify potential support/resistance zones and further refine or reject your primary signals.
+                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤3 candles old) for any entry—even though slight delays of 3-4 candles may be acceptable if the price remains within ±0.2% of the trigger level and volume momentum persists; otherwise, treat it as stale if more than 4 candles have passed or if the price moves more than 0.5% away from the trigger. Additional Indicators can only confirm or reject a fresh (or slightly delayed) primary signal—never generate an entry on their own. For position sizing, apply the Position Sizing Rules above when computing the percentage (0-100) for entries and exits. Also, incorporate local highs/lows across the 5-minute, 1-hour, and 4-hour charts to identify potential support/resistance zones and further refine or reject your primary signals.
+
 
                         ───────────────────────────────────────────────────────────────
+  
                         """   
                     },
                     {
