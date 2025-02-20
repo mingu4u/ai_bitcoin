@@ -1749,7 +1749,7 @@ def ai_trading():
                         • Used USDT Holdings: {used_usdt:.1f}  
                         • BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT  
                         • Current Position Side: {position_side}  ← “long”, “short”, or “none”  
-                        • Current Position PnL: {unrealized_nl} % ← -100~100 or None(no position)
+                        • Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
 
                         You must first check the Portfolio information before making any trading decision. If Current Position Side is "none", then no exit orders should be executed; if a close signal is generated, it must be treated as a new entry (reversal) rather than closing a non-existing position.
 
@@ -1771,7 +1771,7 @@ def ai_trading():
                         Any stale signals or misalignment → “hold” (no entry).  
                         **This is mandatory: if any core indicator signal is older than 3 candles, you must not enter. Always “hold” unless all three primary indicators are fresh (≤3 candles).**
 
-                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI−)
+                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)
                         Use these solely for extra confirmation or for rejecting the primary signal.  
                         **Do not open a position based only on Additional Indicators if the primary indicators do not show a valid fresh entry signal.**  
                         While additional indicators may override or cancel a primary entry (resulting in a “hold”), they cannot independently generate an entry.  
@@ -1810,9 +1810,9 @@ def ai_trading():
                         1) **Cloud-Based Stop Loss**  
                         - **LONG:** Place near the deepest green portion of the latest Green Cloud.  
                         - **SHORT:** Place near the deepest red portion of the latest Red Cloud.  
-                        - If this level is unreasonably far, refer to ATR guidelines (±0.3–0.5% from entry).
+                        - If this level is unreasonably far, refer to ATR guidelines (±0.3-0.5% from entry).
 
-                        2) **P/L Ratio (1.5–2.0)**  
+                        2) **P/L Ratio (1.5-2.0)**  
                         - Strong Signal: Approximately 2.0 baseline.  
                         - Moderate Signal: Approximately 1.75 baseline.  
                         - Weak Signal: Approximately 1.5 baseline.
@@ -1843,8 +1843,8 @@ def ai_trading():
                         }}
                         ```
 
-                        - **decision:** Determine whether to open or close a position. “buy” is used to close shorts or open a new long; “sell” is used to close longs or open a new short; “hold” means take no action. Additionally, make sure to check your current position: if the portfolio shows “none,” then no exit order should be issued.
-                        - **stop_loss_price:** Set based on Cloud levels or ATR guidelines (±0.3–0.5% from entry).  
+                        - **decision:** Determine whether to open or close a position. “buy” is used to close shorts or open a new long; “sell” is used to close longs or open a new short; “hold” means take no action. Additionally, make sure to check your current position: if the Current Position Side shows “none”, then no exit order should be issued.
+                        - **stop_loss_price:** Set based on Cloud levels or ATR guidelines (±0.3-0.5% from entry).  
                         - **pl_ratio:** Choose a value between 1.5 and 2.0 according to the signal strength.  
                         - **reason:** Provide a detailed explanation that includes:
                         - A clear statement of the current portfolio status (e.g., whether you have an active position and its side—long, short, or none).
