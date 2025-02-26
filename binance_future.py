@@ -402,146 +402,76 @@ def analyze_chart_signals(image_path,
         time_text = pytesseract.image_to_string(roi_xaxis, config=ocr_config)
         time_label = time_text.strip().replace("\n","").replace(" ","")
 
-        # Step E: stop_loss_price OCR - Improved filtering
+        # Step E: stop_loss_price OCR
         if direction == "long":
-            # Green color for long positions (more targeted HSV range)
-            lower_green_precise = np.array([45, 120, 120])
-            upper_green_precise = np.array([75, 255, 255])
-            mask_candidate = cv2.inRange(roi_cloud_hsv, lower_green_precise, upper_green_precise)
+            rgb_color = np.uint8([[[80,175,76]]])
+            hsv_ref = cv2.cvtColor(rgb_color, cv2.COLOR_BGR2HSV)
+            mask_candidate = cv2.inRange(roi_cloud_hsv, hsv_ref*0.9, hsv_ref*1.1)
         else:
-            # Red color for short positions (more targeted HSV range)
-            lower_red_precise = np.array([0, 150, 150])
-            upper_red_precise = np.array([10, 255, 255])
-            mask_candidate = cv2.inRange(roi_cloud_hsv, lower_red_precise, upper_red_precise)
-
-        # Apply morphological operations to clean up the mask
-        kernel = np.ones((3,3), np.uint8)
-        mask_candidate = cv2.morphologyEx(mask_candidate, cv2.MORPH_OPEN, kernel)
-        mask_candidate = cv2.morphologyEx(mask_candidate, cv2.MORPH_CLOSE, kernel)
-
-        # Only look at the right side of the flip point
+            rgb_color = np.uint8([[[82,82,255]]])
+            hsv_ref = cv2.cvtColor(rgb_color, cv2.COLOR_BGR2HSV)
+            mask_candidate = cv2.inRange(roi_cloud_hsv, hsv_ref*0.9, hsv_ref*1.1)
         candidate_center_y = None
         if flip_x_local < roi_w:
             right_side_mask = mask_candidate[:, flip_x_local:]
-            
-            # Find contours in the right side mask
-            contours, _ = cv2.findContours(right_side_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            # Filter contours by area to eliminate noise
-            valid_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 100]
-            
-            if valid_contours:
-                # Find the rightmost contour
-                rightmost_contour = max(valid_contours, key=lambda c: np.max(c[:,:,0]))
-                
-                # Get bounding box
-                x, y, w_box, h_box = cv2.boundingRect(rightmost_contour)
-                
-                # Adjust x-coordinate to global coordinates
-                x += flip_x_local
-                
-                # Find center y of the contour
-                candidate_center_y = y + h_box // 2
-                
-                # Draw the detected contour area on debug image
-                cv2.rectangle(debug_img, (cx1+x, cy1+y), (cx1+x+w_box, cy1+y+h_box), (0,255,255), 2)
-
+            points = cv2.findNonZero(right_side_mask)
+            if points is not None:
+                points[:,:,0] += flip_x_local
+                max_x = np.max(points[:,:,0])
+                candidate_points = points[points[:,:,0] == max_x]
+                candidate_points = candidate_points.reshape(-1,2)
+                candidate_center_y = int(np.mean(candidate_points[:,1]))
         stop_loss_price = None
         if candidate_center_y is not None:
-            # Focus on the price box at the right side of the chart
             global_center_y = cy1 + candidate_center_y
-            
-            # Define a tighter ROI around the price area
-            # Look specifically at the upper right corner where the price is displayed
-            s_x1 = int(w * 0.92)
-            s_x2 = int(w * 0.98)  # Extend slightly to ensure we capture the full price
-            
-            # Use a tighter vertical band based on the detected y-position
-            band_half = 15  # Smaller band to focus on just the price box
+            band_half = 20
             new_s_y1 = max(0, global_center_y - band_half)
             new_s_y2 = min(h, global_center_y + band_half)
-            
-            # Extract the ROI for the price
+            s_x1 = int(w * 0.92)
+            s_x2 = int(w * 0.97)
             roi_stoploss = img_bf[new_s_y1:new_s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, new_s_y1), (s_x2, new_s_y2), (0,255,0), 2)
-            
-            # Convert to HSV for color filtering
-            roi_stoploss_hsv = cv2.cvtColor(roi_stoploss, cv2.COLOR_BGR2HSV)
-            
-            # Apply targeted color filtering for the price box
-            if direction == "long":
-                mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_green_precise, upper_green_precise)
-            else:
-                mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_red_precise, upper_red_precise)
-            
-            # Clean up the mask
-            mask_stoploss_sl = cv2.morphologyEx(mask_stoploss_sl, cv2.MORPH_OPEN, kernel)
-            mask_stoploss_sl = cv2.morphologyEx(mask_stoploss_sl, cv2.MORPH_CLOSE, kernel)
-            
-            # Find contours
-            contours_sl, _ = cv2.findContours(mask_stoploss_sl, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
-            if contours_sl:
-                # Find the largest color box
-                largest_contour = max(contours_sl, key=cv2.contourArea)
-                x_box, y_box, w_box, h_box = cv2.boundingRect(largest_contour)
-                
-                # Draw rectangle around the price box
+        else:
+            s_x1 = int(w * 0.92)
+            s_y1 = int(h * 0.05)
+            s_x2 = int(w * 0.97)
+            s_y2 = int(h * 0.68)
+            roi_stoploss = img_bf[s_y1:s_y2, s_x1:s_x2]
+            cv2.rectangle(debug_img, (s_x1, s_y1), (s_x2, s_y2), (255,0,255), 2)
+        roi_stoploss_hsv = cv2.cvtColor(roi_stoploss, cv2.COLOR_BGR2HSV)
+        if direction == "long":
+            mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_green, upper_green)
+        else:
+            mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_red1, upper_red1) | cv2.inRange(roi_stoploss_hsv, lower_red2, upper_red2)
+        kernel = np.ones((3,3), np.uint8)
+        mask_stoploss_sl = cv2.morphologyEx(mask_stoploss_sl, cv2.MORPH_OPEN, kernel)
+        contours_sl, _ = cv2.findContours(mask_stoploss_sl, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours_sl:
+            candidate_contours = [cnt for cnt in contours_sl if cv2.contourArea(cnt) > 500]
+            if candidate_contours:
+                candidate = max(candidate_contours, key=cv2.contourArea)
+                x_box, y_box, w_box, h_box = cv2.boundingRect(candidate)
                 cv2.rectangle(debug_img, (s_x1+x_box, new_s_y1+y_box), (s_x1+x_box+w_box, new_s_y1+y_box+h_box), (0,255,0), 2)
-                
-                # Extract just the price box
-                price_roi = roi_stoploss[y_box:y_box+h_box, x_box:x_box+w_box]
-                
-                # Apply thresholding to enhance text
-                gray = cv2.cvtColor(price_roi, cv2.COLOR_BGR2GRAY)
-                _, thresh = cv2.threshold(gray, 150, 255, cv2.THRESH_BINARY)
-                
-                # OCR configuration for numeric values
+                candidate_roi = roi_stoploss[y_box:y_box+h_box, x_box:x_box+w_box]
                 ocr_config_sl = "--psm 7 -c tessedit_char_whitelist=0123456789,."
-                
-                # Try OCR on both the original and thresholded image
-                stop_loss_text = pytesseract.image_to_string(price_roi, config=ocr_config_sl)
-                if not stop_loss_text:
-                    stop_loss_text = pytesseract.image_to_string(thresh, config=ocr_config_sl)
-                
-                # Process the OCR result
-                normalized_text = stop_loss_text.replace(',', '').strip().replace("\n","").replace(" ","")
+                stop_loss_text = pytesseract.image_to_string(candidate_roi, config=ocr_config_sl)
+                normalized_text = stop_loss_text.replace(',', '')
+                normalized_text = normalized_text.strip().replace("\n","").replace(" ","")
                 matches = re.findall(r"\d+\.\d+|\d+", normalized_text)
-                
                 if matches:
                     try:
                         stop_loss_price = float(matches[0])
-                        # Draw the detected price on debug image
-                        cv2.putText(debug_img, f"SL: {stop_loss_price}", (s_x1, new_s_y1-10), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
                     except:
                         stop_loss_price = None
-        else:
-            # Fallback: search in wider area when no candidate is found
-            s_x1 = int(w * 0.92)
-            s_x2 = int(w * 0.98)
-            
-            # Search in the top right area of the chart
-            top_margin = int(h * 0.05)
-            bottom_margin = int(h * 0.3)
-            s_y1 = top_margin
-            s_y2 = bottom_margin
-            
-            roi_stoploss = img_bf[s_y1:s_y2, s_x1:s_x2]
-            cv2.rectangle(debug_img, (s_x1, s_y1), (s_x2, s_y2), (255,0,255), 2)
-            
-            # Apply OCR directly
+        if stop_loss_price is None:
             ocr_config_sl = "--psm 7 -c tessedit_char_whitelist=0123456789,."
             stop_loss_text = pytesseract.image_to_string(roi_stoploss, config=ocr_config_sl)
-            normalized_text = stop_loss_text.replace(',', '').strip().replace("\n","").replace(" ","")
+            normalized_text = stop_loss_text.replace(',', '')
+            normalized_text = normalized_text.strip().replace("\n","").replace(" ","")
             matches = re.findall(r"\d+\.\d+|\d+", normalized_text)
-            
             if matches:
                 try:
                     stop_loss_price = float(matches[0])
-                    # Draw the detected price on debug image
-                    cv2.putText(debug_img, f"Fallback SL: {stop_loss_price}", (s_x1, s_y1-10), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,255), 1)
                 except:
                     stop_loss_price = None
         return {"flip_detected": True,
