@@ -2317,8 +2317,8 @@ def capture_and_analyze_chart(driver, chart_processor=None):
         file_path = os.path.join(script_dir, filename)
         
         # 이미지 파일로 저장
-        img.save(file_path)
-        logger.info(f"차트 스크린샷이 저장되었습니다: {file_path}")
+        # img.save(file_path)
+        # logger.info(f"차트 스크린샷이 저장되었습니다: {file_path}")
         
         # base64로 인코딩
         buffered = io.BytesIO()
@@ -2328,7 +2328,7 @@ def capture_and_analyze_chart(driver, chart_processor=None):
         # 신호 분석 수행 (차트 프로세서가 제공된 경우)
         signal_analysis = None
         if chart_processor is not None:
-            signal_analysis = chart_processor.process_chart_image(file_path)
+            signal_analysis = chart_processor.process_chart_image(file_path, debug=True)
             if signal_analysis:
                 logger.info("차트 신호 분석 완료")
             else:
