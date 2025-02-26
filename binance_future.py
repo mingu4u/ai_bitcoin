@@ -257,19 +257,19 @@ class SignalTracker:
         }
 
 def analyze_chart_signals(image_path,
-                            # BlackFlag FTS parameters (normalized coordinates)
-                            blackflag_cloud_roi=(0.0, 0.0, 0.9, 0.67),
-                            blackflag_xaxis_yrange=(0.85, 0.90),
-                            blackflag_chunk_size=10,
-                            blackflag_needed_red_chunks=2,
-                            blackflag_needed_green_chunks=2,
-                            # UT Bot parameters
-                            utbot_xaxis_yrange=(0.85, 0.90),
-                            # Volume Oscillator parameters (normalized ROI)
-                            volume_roi=(0.92, 0.65, 0.97, 0.84),
-                            # Debug flag and prefix
-                            debug=False,
-                            debug_prefix="debug_"):
+                         # BlackFlag FTS parameters (normalized coordinates)
+                         blackflag_cloud_roi=(0.0, 0.0, 0.9, 0.67),
+                         blackflag_xaxis_yrange=(0.85, 0.90),
+                         blackflag_chunk_size=10,
+                         blackflag_needed_red_chunks=2,
+                         blackflag_needed_green_chunks=2,
+                         # UT Bot parameters
+                         utbot_xaxis_yrange=(0.85, 0.90),
+                         # Volume Oscillator parameters (normalized ROI)
+                         volume_roi=(0.92, 0.65, 0.97, 0.84),
+                         # Debug flag and prefix
+                         debug=False,
+                         debug_prefix="debug_"):
     """
     하나의 이미지에서 아래 3개 신호/값을 감지하여 반환합니다.
 
@@ -295,11 +295,15 @@ def analyze_chart_signals(image_path,
     if img is None:
         print("이미지를 로드할 수 없습니다:", image_path)
         return None
+    
     h, w = img.shape[:2]
-
+    if h <= 0 or w <= 0:
+        print(f"이미지 크기가 유효하지 않습니다: {w}x{h}")
+        return None
+        
     # 전역 debug 이미지: 원본 이미지의 복사본에 각 검출 결과를 덧그림
     debug_img = img.copy()
-
+    
     # 디버그 이미지 저장 도우미 – 최종에 한 번만 저장
     def save_debug_final(image, suffix):
         if debug:
@@ -2283,61 +2287,87 @@ def login_with_cookies():
 #         logger.error(f"스크린샷 캡처 및 인코딩 중 오류 발생: {e}")
 #         return None, None
 
-
-# 새로 추가된 차트 캡처 및 분석 함수
-def capture_and_analyze_chart(driver, chart_processor=None):
+def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
     """
     차트 이미지를 캡처하고 신호를 분석하는 함수
     
     Args:
         driver: Selenium 웹드라이버
         chart_processor: 차트 신호 프로세서 인스턴스
+        save_image: 이미지 저장 여부 (기본값: False)
+        debug: 디버그 모드 활성화 여부 (기본값: False)
         
     Returns:
-        tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로)
+        tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로 또는 None)
     """
     try:
         # 스크린샷 캡처
+        logger.info("스크린샷 캡처 시작")
         png = driver.get_screenshot_as_png()
+        logger.info("스크린샷 메모리에 캡처 완료")
         
         # PIL Image로 변환
-        img = Image.open(io.BytesIO(png))
+        img_pil = Image.open(io.BytesIO(png))
+        logger.info("PIL Image 변환 완료")
         
         # 이미지 리사이즈 (필요시)
-        img.thumbnail((2000, 2000))
+        img_pil.thumbnail((2000, 2000))
         
-        # 파일명에 현재 시간 포함
+        # 파일 경로 설정 (저장 여부와 관계없이 경로 생성)
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"chart_{current_time}.png"
-        
-        # 현재 스크립트의 경로를 가져옴
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # 파일 저장 경로 설정
         file_path = os.path.join(script_dir, filename)
         
-        # 이미지 파일로 저장
-        # img.save(file_path)
-        # logger.info(f"차트 스크린샷이 저장되었습니다: {file_path}")
+        # 저장 옵션이 활성화된 경우에만 파일로 저장
+        if save_image:
+            img_pil.save(file_path)
+            logger.info(f"스크린샷 저장 완료: {file_path}")
         
-        # base64로 인코딩
+        # Base64 인코딩 (UI 표시용)
         buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
+        img_pil.save(buffered, format="PNG")
         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
         
-        # 신호 분석 수행 (차트 프로세서가 제공된 경우)
+        # OpenCV 이미지로 변환 (PIL → OpenCV)
+        img_np = np.array(img_pil)
+        # RGB to BGR (PIL is RGB, OpenCV uses BGR)
+        img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+        logger.info("OpenCV 이미지 변환 완료")
+        
+        # 이미지가 올바르게 로드되었는지 확인
+        if img_cv is None or img_cv.size == 0:
+            logger.error("OpenCV 이미지 변환 실패 또는 이미지가 비어 있습니다")
+            return base64_image, None, file_path if save_image else None
+        
+        # 신호 분석 수행 (메모리 내 이미지 사용)
         signal_analysis = None
         if chart_processor is not None:
-            signal_analysis = chart_processor.process_chart_image(file_path, debug=True)
-            if signal_analysis:
-                logger.info("차트 신호 분석 완료")
-            else:
-                logger.warning("차트 신호 분석 실패")
+            # 임시 이미지 파일 생성 (analyze_chart_signals가 파일 경로를 필요로 하므로)
+            temp_path = os.path.join(script_dir, f"temp_{current_time}.png")
+            cv2.imwrite(temp_path, img_cv)
+            
+            try:
+                logger.info(f"차트 신호 분석 시작 (debug={debug})")
+                signal_analysis = chart_processor.process_chart_image(
+                    image_path=temp_path,
+                    debug=debug
+                )
+                
+                if signal_analysis:
+                    logger.info("차트 신호 분석 완료")
+                else:
+                    logger.warning("차트 신호 분석 결과 없음")
+            finally:
+                # 분석 후 임시 파일 삭제 (저장 옵션이 비활성화된 경우)
+                if not save_image and os.path.exists(temp_path):
+                    os.remove(temp_path)
+                    logger.info(f"임시 파일 삭제: {temp_path}")
         
-        return base64_image, signal_analysis, file_path
+        return base64_image, signal_analysis, file_path if save_image else None
         
     except Exception as e:
-        logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}")
+        logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}", exc_info=True)
         return None, None, None
 
 
@@ -2382,7 +2412,8 @@ def ai_trading():
         # logger.info(f"TradingView 스크린샷 캡처 완료.")
     
         # 이미지 캡처 및 신호 분석 (수정된 부분)
-        chart_image, signals_analysis, saved_file_path = capture_and_analyze_chart(driver, chart_processor)    
+        chart_image, signals_analysis, saved_file_path = capture_and_analyze_chart(
+    driver, chart_processor, save_image=True, debug=True)   
         
         if chart_image:
             logger.info(f"TradingView 스크린샷 캡처 및 분석 완료.")
