@@ -12,7 +12,9 @@ def load_data():
        conn = get_connection()
        query = """SELECT timestamp, trade_type, order_id, decision, percentage, reason, 
                  btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                 btc_current_price, reflection, tp_order_id, sl_order_id 
+                 btc_current_price, reflection, tp_order_id, sl_order_id,
+                 blackflag_signal, blackflag_candles_ago, utbot_signal, 
+                 utbot_candles_ago, volume_osc_current, stop_loss_price
                  FROM trades"""
        df = pd.read_sql_query(query, conn)
        conn.close()
@@ -97,6 +99,41 @@ def main():
        st.write(f"First trade date: {filtered_df['timestamp'].min()}")
        st.write(f"Last trade date: {filtered_df['timestamp'].max()}")
        
+       # 최근 세 지표 상태와 손절가 설정 표시
+       latest_trade = df.iloc[0]
+       
+       # 세 지표 상태를 확장 가능한 섹션으로 표시
+       with st.expander("Latest Trading Signals Status"):
+           col1, col2 = st.columns(2)
+           
+           with col1:
+               st.subheader("BlackFlag FTS")
+               if pd.notna(latest_trade.get('blackflag_signal')):
+                   st.write(f"Signal: {latest_trade['blackflag_signal']}")
+                   st.write(f"Candles Ago: {latest_trade['blackflag_candles_ago']}")
+               else:
+                   st.write("No BlackFlag signal data available")
+               
+               st.subheader("UT Bot Alert")
+               if pd.notna(latest_trade.get('utbot_signal')):
+                   st.write(f"Signal: {latest_trade['utbot_signal']}")
+                   st.write(f"Candles Ago: {latest_trade['utbot_candles_ago']}")
+               else:
+                   st.write("No UT Bot signal data available")
+           
+           with col2:
+               st.subheader("Volume Oscillator")
+               if pd.notna(latest_trade.get('volume_osc_current')):
+                   st.write(f"Current Value: {latest_trade['volume_osc_current']:.2f}%")
+               else:
+                   st.write("No Volume Oscillator data available")
+               
+               st.subheader("Stop Loss Price")
+               if pd.notna(latest_trade.get('stop_loss_price')):
+                   st.write(f"Price: {latest_trade['stop_loss_price']:.2f} USDT")
+               else:
+                   st.write("No Stop Loss price data available")
+       
        # reflection을 확장 가능한 섹션으로 표시
        if not df.empty and 'reflection' in df.columns and pd.notna(df.iloc[0]['reflection']):
            with st.expander("Recent trade reflection"):
@@ -115,7 +152,11 @@ def main():
        
        start_idx = (page_number - 1) * page_size
        end_idx = min(start_idx + page_size, len(filtered_df))
-       st.dataframe(filtered_df.iloc[start_idx:end_idx])
+       
+       # 표시할 컬럼 선택
+       display_columns = ['timestamp', 'trade_type', 'decision', 'percentage', 'reason', 
+                          'btc_balance', 'usdt_balance', 'total_assets', 'btc_current_price']
+       st.dataframe(filtered_df.iloc[start_idx:end_idx][display_columns])
    else:
        st.info("No trade history available for the selected type.")
 
@@ -170,6 +211,89 @@ def main():
                st.plotly_chart(fig)
    else:
        st.info("No balance data available for visualization.")
+
+   # 신호 분석 섹션 추가
+   if not filtered_df.empty:
+       st.header('Trading Signals Analysis')
+       
+       # 신호별 성공률 분석
+       if 'blackflag_signal' in filtered_df.columns and 'utbot_signal' in filtered_df.columns:
+           # 신호 분석 탭 생성
+           tabs = st.tabs(["BlackFlag Analysis", "UT Bot Analysis", "Signal Combination"])
+           
+           with tabs[0]:
+               # BlackFlag 신호별 성공률
+               if pd.notna(filtered_df['blackflag_signal']).any():
+                   st.subheader('BlackFlag FTS Signal Success Rate')
+                   
+                   # 신호별 거래 분류
+                   filtered_df['trade_success'] = filtered_df['total_assets'].diff() > 0
+                   blackflag_success = filtered_df.groupby('blackflag_signal')['trade_success'].agg(['count', 'sum'])
+                   blackflag_success['success_rate'] = (blackflag_success['sum'] / blackflag_success['count']) * 100
+                   
+                   st.dataframe(blackflag_success.reset_index().rename(
+                       columns={'count': 'Total Trades', 'sum': 'Successful Trades', 'success_rate': 'Success Rate (%)'}))
+                   
+                   # 신호별 수익률 시각화
+                   fig = px.bar(
+                       blackflag_success.reset_index(),
+                       x='blackflag_signal',
+                       y='success_rate',
+                       title='BlackFlag Signal Success Rate (%)',
+                       color='blackflag_signal'
+                   )
+                   st.plotly_chart(fig)
+               else:
+                   st.info("No BlackFlag signal data available for analysis.")
+           
+           with tabs[1]:
+               # UT Bot 신호별 성공률
+               if pd.notna(filtered_df['utbot_signal']).any():
+                   st.subheader('UT Bot Alert Success Rate')
+                   
+                   utbot_success = filtered_df.groupby('utbot_signal')['trade_success'].agg(['count', 'sum'])
+                   utbot_success['success_rate'] = (utbot_success['sum'] / utbot_success['count']) * 100
+                   
+                   st.dataframe(utbot_success.reset_index().rename(
+                       columns={'count': 'Total Trades', 'sum': 'Successful Trades', 'success_rate': 'Success Rate (%)'}))
+                   
+                   # 신호별 수익률 시각화
+                   fig = px.bar(
+                       utbot_success.reset_index(),
+                       x='utbot_signal',
+                       y='success_rate',
+                       title='UT Bot Signal Success Rate (%)',
+                       color='utbot_signal'
+                   )
+                   st.plotly_chart(fig)
+               else:
+                   st.info("No UT Bot signal data available for analysis.")
+           
+           with tabs[2]:
+               # 신호 조합별 성공률
+               if pd.notna(filtered_df['blackflag_signal']).any() and pd.notna(filtered_df['utbot_signal']).any():
+                   st.subheader('Signal Combination Analysis')
+                   
+                   # 신호 조합 생성
+                   filtered_df['signal_combo'] = filtered_df['blackflag_signal'] + ' + ' + filtered_df['utbot_signal']
+                   
+                   combo_success = filtered_df.groupby('signal_combo')['trade_success'].agg(['count', 'sum'])
+                   combo_success['success_rate'] = (combo_success['sum'] / combo_success['count']) * 100
+                   
+                   st.dataframe(combo_success.reset_index().rename(
+                       columns={'count': 'Total Trades', 'sum': 'Successful Trades', 'success_rate': 'Success Rate (%)'}))
+                   
+                   # 조합별 수익률 시각화
+                   fig = px.bar(
+                       combo_success.reset_index(),
+                       x='signal_combo',
+                       y='success_rate',
+                       title='Signal Combination Success Rate (%)',
+                       color='signal_combo'
+                   )
+                   st.plotly_chart(fig)
+               else:
+                   st.info("Insufficient signal data for combination analysis.")
 
    # AI와 수동 거래 비교 분석
    if trade_type == 'ALL' and not df.empty:

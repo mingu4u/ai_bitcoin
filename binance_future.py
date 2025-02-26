@@ -35,9 +35,730 @@ import time
 import logging
 from typing import Optional, Dict, Any
 import platform
+import cv2
+
+class SignalTracker:
+    def __init__(self, cache_file="trading_signals_cache.json"):
+        """
+        트레이딩 신호를 추적하고 저장하는 클래스
+        
+        Args:
+            cache_file (str): 신호 캐시를 저장할 파일 경로
+        """
+        self.cache_file = cache_file
+        self.signals = {
+            "BlackFlag": {
+                "signal": None,
+                "candles_ago": None,
+                "timestamp": None,
+                "stop_loss_price": None
+            },
+            "UTBot": {
+                "signal": None,
+                "candles_ago": None,
+                "timestamp": None
+            },
+            "VolumeOsc": {
+                "values": [None] * 10,  # 최근 10개 캔들의 값을 저장
+                "timestamps": [None] * 10
+            }
+        }
+        
+        # 캐시 파일이 존재하면 로드
+        self.load_cache()
+    
+    def load_cache(self):
+        """캐시 파일에서 신호 데이터 로드"""
+        if os.path.exists(self.cache_file):
+            try:
+                with open(self.cache_file, 'r') as f:
+                    cached_data = json.load(f)
+                    self.signals = cached_data
+                print(f"캐시 파일 '{self.cache_file}'에서 신호 데이터를 로드했습니다.")
+            except Exception as e:
+                print(f"캐시 파일 로드 중 오류 발생: {e}")
+    
+    def save_cache(self):
+        """현재 신호 데이터를 캐시 파일에 저장"""
+        try:
+            with open(self.cache_file, 'w') as f:
+                json.dump(self.signals, f, indent=4)
+            print(f"신호 데이터를 캐시 파일 '{self.cache_file}'에 저장했습니다.")
+        except Exception as e:
+            print(f"캐시 파일 저장 중 오류 발생: {e}")
+    
+    def update_from_image_analysis(self, analysis_result, current_time=None):
+        """
+        이미지 분석 결과를 바탕으로 신호 정보 업데이트
+        
+        Args:
+            analysis_result (dict): analyze_chart_signals 함수의 반환 결과
+            current_time (datetime, optional): 현재 시간. 기본값은 현재 시간.
+        """
+        if current_time is None:
+            current_time = datetime.now()
+        
+        # BlackFlag FTS 업데이트 (새로운 신호가 있을 때만)
+        blackflag = analysis_result.get("BlackFlag", {})
+        if blackflag.get("flip_detected") != "none" and blackflag.get("flip_time"):
+            try:
+                # flip_time이 HH:MM 형식이라고 가정
+                signal_time_str = blackflag.get("flip_time", "").strip()
+                if signal_time_str:
+                    # 시간 파싱
+                    hour, minute = map(int, signal_time_str.split(':'))
+                    
+                    # 현재 날짜에 시간 적용
+                    signal_time = current_time.replace(hour=hour, minute=minute)
+                    
+                    # 만약 계산된 시간이 현재 시간보다 미래라면 어제 날짜로 조정
+                    if signal_time > current_time:
+                        signal_time = signal_time - timedelta(days=1)
+                    
+                    # BlackFlag 신호 방향 매핑
+                    signal_direction = "Buy" if blackflag.get("flip_detected") == "long" else "Sell"
+                    
+                    # 기존 신호가 없거나 새로운 신호가 더 최근인 경우만 업데이트
+                    if (self.signals["BlackFlag"]["timestamp"] is None or 
+                        signal_time > datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])):
+                        self.signals["BlackFlag"] = {
+                            "signal": signal_direction,
+                            "candles_ago": self._calculate_candles_ago(signal_time, current_time),
+                            "timestamp": signal_time.isoformat(),
+                            "stop_loss_price": blackflag.get("stop_loss_price")
+                        }
+                        print(f"BlackFlag 신호 업데이트: {signal_direction}, {signal_time_str}, SL: {blackflag.get('stop_loss_price')}")
+            except Exception as e:
+                print(f"BlackFlag 시간 파싱 오류: {e}, 원본 시간: {blackflag.get('flip_time')}")
+        
+        # UT Bot Alerts 업데이트 (새로운 신호가 있을 때만)
+        utbot = analysis_result.get("UTBot", {})
+        if utbot.get("alert_signal") != "None" and utbot.get("alert_time"):
+            try:
+                # alert_time이 HH:MM 형식이라고 가정
+                signal_time_str = utbot.get("alert_time", "").strip()
+                if signal_time_str:
+                    # 시간 파싱
+                    hour, minute = map(int, signal_time_str.split(':'))
+                    
+                    # 현재 날짜에 시간 적용
+                    signal_time = current_time.replace(hour=hour, minute=minute)
+                    
+                    # 만약 계산된 시간이 현재 시간보다 미래라면 어제 날짜로 조정
+                    if signal_time > current_time:
+                        signal_time = signal_time - timedelta(days=1)
+                    
+                    # 기존 신호가 없거나 새로운 신호가 더 최근인 경우만 업데이트
+                    if (self.signals["UTBot"]["timestamp"] is None or 
+                        signal_time > datetime.fromisoformat(self.signals["UTBot"]["timestamp"])):
+                        self.signals["UTBot"] = {
+                            "signal": utbot.get("alert_signal"),
+                            "candles_ago": self._calculate_candles_ago(signal_time, current_time),
+                            "timestamp": signal_time.isoformat()
+                        }
+                        print(f"UTBot 신호 업데이트: {utbot.get('alert_signal')}, {signal_time_str}")
+            except Exception as e:
+                print(f"UTBot 시간 파싱 오류: {e}, 원본 시간: {utbot.get('alert_time')}")
+        
+        # Volume Oscillator 업데이트 (항상 업데이트, FIFO 방식)
+        vol_osc_value = analysis_result.get("VolumeOsc")
+        if vol_osc_value is not None:
+            # 값을 왼쪽으로 시프트하고 새 값을 추가
+            self.signals["VolumeOsc"]["values"].pop(0)
+            self.signals["VolumeOsc"]["values"].append(vol_osc_value)
+            
+            # 타임스탬프도 같이 업데이트
+            self.signals["VolumeOsc"]["timestamps"].pop(0)
+            self.signals["VolumeOsc"]["timestamps"].append(current_time.isoformat())
+            
+            print(f"Volume Oscillator 업데이트: {vol_osc_value}")
+        
+        # 신호 캔들 수 업데이트
+        self.update_candles_ago(current_time)
+        
+        # 캐시 저장
+        self.save_cache()
+    
+    def update_candles_ago(self, current_time=None):
+        """현재 시간 기준으로 신호 발생 후 경과한 캔들 수 업데이트"""
+        if current_time is None:
+            current_time = datetime.now()
+        
+        # BlackFlag 캔들 수 업데이트
+        if self.signals["BlackFlag"]["timestamp"]:
+            signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
+            self.signals["BlackFlag"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
+            
+            # 10캔들 이상 지난 신호는 None 처리
+            if self.signals["BlackFlag"]["candles_ago"] > 10:
+                self.signals["BlackFlag"] = {
+                    "signal": None,
+                    "candles_ago": None,
+                    "timestamp": None,
+                    "stop_loss_price": None
+                }
+        
+        # UTBot 캔들 수 업데이트
+        if self.signals["UTBot"]["timestamp"]:
+            signal_time = datetime.fromisoformat(self.signals["UTBot"]["timestamp"])
+            self.signals["UTBot"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
+            
+            # 10캔들 이상 지난 신호는 None 처리
+            if self.signals["UTBot"]["candles_ago"] > 10:
+                self.signals["UTBot"] = {
+                    "signal": None,
+                    "candles_ago": None,
+                    "timestamp": None
+                }
+    
+    def _calculate_candles_ago(self, signal_time, current_time):
+        """
+        신호 발생 시간과 현재 시간 사이의 캔들 수 계산 (5분 캔들 기준)
+        
+        Args:
+            signal_time (datetime): 신호 발생 시간
+            current_time (datetime): 현재 시간
+            
+        Returns:
+            int: 경과된 캔들 수
+        """
+        # 두 시간 사이의 차이를 분 단위로 계산
+        time_diff = (current_time - signal_time).total_seconds() / 60
+        
+        # 5분 캔들 기준으로 몇 개의 캔들이 지났는지 계산
+        candles_ago = int(time_diff // 5)
+        
+        return candles_ago
+    
+    def generate_prompt_data(self):
+        """
+        AI 프롬프트에 전달할 신호 데이터 생성
+        
+        Returns:
+            dict: AI 프롬프트에 사용될 신호 데이터
+        """
+        return {
+            "BlackFlag": {
+                "signal": self.signals["BlackFlag"]["signal"],
+                "candles_ago": self.signals["BlackFlag"]["candles_ago"],
+                "stop_loss_price": self.signals["BlackFlag"]["stop_loss_price"]
+            },
+            "UTBot": {
+                "signal": self.signals["UTBot"]["signal"],
+                "candles_ago": self.signals["UTBot"]["candles_ago"]
+            },
+            "VolumeOsc": {
+                "values": self.signals["VolumeOsc"]["values"],
+                "current": self.signals["VolumeOsc"]["values"][-1]
+            }
+        }
+
+def analyze_chart_signals(image_path,
+                            # BlackFlag FTS parameters (normalized coordinates)
+                            blackflag_cloud_roi=(0.0, 0.0, 0.9, 0.67),
+                            blackflag_xaxis_yrange=(0.85, 0.90),
+                            blackflag_chunk_size=10,
+                            blackflag_needed_red_chunks=2,
+                            blackflag_needed_green_chunks=2,
+                            # UT Bot parameters
+                            utbot_xaxis_yrange=(0.85, 0.90),
+                            # Volume Oscillator parameters (normalized ROI)
+                            volume_roi=(0.92, 0.65, 0.97, 0.84),
+                            # Debug flag and prefix
+                            debug=False,
+                            debug_prefix="debug_"):
+    """
+    하나의 이미지에서 아래 3개 신호/값을 감지하여 반환합니다.
+
+      1) BlackFlag FTS 신호 – Flip 신호, flip time, stop_loss_price를
+         long, short 두 방향 모두 검출한 후, 프레임에서 오른쪽(큰 flip_x) 신호만 결과로 출력.
+         (결과 예: {"flip_detected": "long", "flip_x": 123, "flip_time": "18:25", "stop_loss_price": 95295.4})
+      2) UT Bot Alerts 신호 – Buy(하늘색) 또는 Sell(주황색) 박스 중 오른쪽(최신) 박스를 선택하고,
+         그 박스 중심 아래 x축 영역 OCR로 신호 시간(alert_time)을 판독.
+      3) Volume Oscillator 값 – volume_roi 영역 내 파란색 박스를 찾아 그 내부 숫자(예:-11.51%)를 OCR해
+         '%'제거 후 float형으로 반환.
+    
+    모든 좌표는 정규화(0~1) 값이며, debug=True이면 debug_prefix를 이용해 debug 이미지(세 지표가 모두 표시된 한 개 이미지)를 저장합니다.
+    반환 예시:
+      {
+        "BlackFlag": { "flip_detected": "long" or "short" or "none", "flip_x": ..., "flip_time": ..., "stop_loss_price": ... },
+        "UTBot": { "alert_signal": "Buy"/"Sell"/"None", "alert_time": "hh:mm" },
+        "VolumeOsc": -11.51
+      }
+    """
+
+    # 이미지 로드
+    img = cv2.imread(image_path)
+    if img is None:
+        print("이미지를 로드할 수 없습니다:", image_path)
+        return None
+    h, w = img.shape[:2]
+
+    # 전역 debug 이미지: 원본 이미지의 복사본에 각 검출 결과를 덧그림
+    debug_img = img.copy()
+
+    # 디버그 이미지 저장 도우미 – 최종에 한 번만 저장
+    def save_debug_final(image, suffix):
+        if debug:
+            path = f"{debug_prefix}{suffix}.png"
+            cv2.imwrite(path, image)
+            print("[Debug] Saved:", path)
+
+    # 정규화 좌표 → 픽셀 좌표 변환 함수
+    def to_px(norm_roi):
+        x1n, y1n, x2n, y2n = norm_roi
+        return (int(x1n * w), int(y1n * h), int(x2n * w), int(y2n * h))
+
+    ############### BlackFlag FTS Detection ###############
+    # run_blackflag_detection()는 주어진 방향("long" 또는 "short")에 대해 검출 결과를 반환함.
+    # OCR 및 좌표 계산은 원본 이미지(img)를 사용하고, 결과 debug 오버레이는 debug_img에 그림.
+    def run_blackflag_detection(direction):
+        # OCR 계산용 복사본(원본 이미지 손상을 피하기 위해)
+        img_bf = img.copy()
+        cx1, cy1, cx2, cy2 = to_px(blackflag_cloud_roi)
+        roi_cloud_bgr = img_bf[cy1:cy2, cx1:cx2]
+        roi_cloud_hsv = cv2.cvtColor(roi_cloud_bgr, cv2.COLOR_BGR2HSV)
+        roi_h, roi_w = roi_cloud_hsv.shape[:2]
+        # 화면에 구름영역 박스 표시 (debug_img)
+        cv2.rectangle(debug_img, (cx1, cy1), (cx2, cy2), (0,255,255), 2)
+
+        # HSV 범위
+        lower_red1 = np.array([0, 70, 70]);     upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([170, 70, 70]);    upper_red2 = np.array([180, 255, 255])
+        lower_green = np.array([35, 60, 70]);     upper_green = np.array([85, 255, 255])
+
+        # Step B: chunk별 색상 판별
+        chunk_colors = []
+        n_chunks = roi_w // blackflag_chunk_size
+        for i in range(n_chunks):
+            x_start = i * blackflag_chunk_size
+            x_end = x_start + blackflag_chunk_size
+            col_slice = roi_cloud_hsv[:, x_start:x_end]
+            mask_r1 = cv2.inRange(col_slice, lower_red1, upper_red1)
+            mask_r2 = cv2.inRange(col_slice, lower_red2, upper_red2)
+            mask_red = mask_r1 | mask_r2
+            mask_green = cv2.inRange(col_slice, lower_green, upper_green)
+            red_count = np.count_nonzero(mask_red)
+            green_count = np.count_nonzero(mask_green)
+            if direction == "long":
+                chunk_colors.append("green" if green_count > red_count else "red")
+            else:
+                chunk_colors.append("red" if red_count > green_count else "green")
+        # Step C: flip 신호 판별 (연속된 chunk 조건)
+        if direction == "long":
+            first_color = "red"
+            second_color = "green"
+            first_needed = blackflag_needed_red_chunks
+            second_needed = blackflag_needed_green_chunks
+        else:
+            first_color = "green"
+            second_color = "red"
+            first_needed = blackflag_needed_green_chunks
+            second_needed = blackflag_needed_red_chunks
+        flip_x_local = None
+        i_idx = 0
+        while i_idx < n_chunks:
+            valid_first = True
+            for r in range(first_needed):
+                if i_idx + r >= n_chunks or chunk_colors[i_idx + r] != first_color:
+                    valid_first = False
+                    break
+            if not valid_first:
+                i_idx += 1
+                continue
+            start_second_idx = i_idx + first_needed
+            valid_second = True
+            for g in range(second_needed):
+                if start_second_idx + g >= n_chunks or chunk_colors[start_second_idx + g] != second_color:
+                    valid_second = False
+                    break
+            if valid_second:
+                flip_x_local = start_second_idx * blackflag_chunk_size
+                break
+            else:
+                i_idx += 1
+
+        if flip_x_local is None:
+            return {"flip_detected": False, "flip_x": None, "flip_time": "", "stop_loss_price": None}
+
+        # Step D: flip_x_global 및 flip time OCR
+        flip_x_global = cx1 + flip_x_local
+        cv2.line(debug_img, (flip_x_global, cy1), (flip_x_global, cy2), (0,255,255), 2)
+        x_margin = 50
+        x1px = max(0, flip_x_global - x_margin)
+        x2px = min(w, flip_x_global + x_margin)
+        y1p = int(blackflag_xaxis_yrange[0] * h)
+        y2p = int(blackflag_xaxis_yrange[1] * h)
+        roi_xaxis = img_bf[y1p:y2p, x1px:x2px]
+        cv2.rectangle(debug_img, (x1px, y1p), (x2px, y2p), (255,0,255), 2)
+        ocr_config = "--psm 7 --oem 3"
+        time_text = pytesseract.image_to_string(roi_xaxis, config=ocr_config)
+        time_label = time_text.strip().replace("\n","").replace(" ","")
+
+        # Step E: stop_loss_price OCR
+        if direction == "long":
+            rgb_color = np.uint8([[[80,175,76]]])
+            hsv_ref = cv2.cvtColor(rgb_color, cv2.COLOR_BGR2HSV)
+            mask_candidate = cv2.inRange(roi_cloud_hsv, hsv_ref*0.9, hsv_ref*1.1)
+        else:
+            rgb_color = np.uint8([[[82,82,255]]])
+            hsv_ref = cv2.cvtColor(rgb_color, cv2.COLOR_BGR2HSV)
+            mask_candidate = cv2.inRange(roi_cloud_hsv, hsv_ref*0.9, hsv_ref*1.1)
+        candidate_center_y = None
+        if flip_x_local < roi_w:
+            right_side_mask = mask_candidate[:, flip_x_local:]
+            points = cv2.findNonZero(right_side_mask)
+            if points is not None:
+                points[:,:,0] += flip_x_local
+                max_x = np.max(points[:,:,0])
+                candidate_points = points[points[:,:,0] == max_x]
+                candidate_points = candidate_points.reshape(-1,2)
+                candidate_center_y = int(np.mean(candidate_points[:,1]))
+        stop_loss_price = None
+        if candidate_center_y is not None:
+            global_center_y = cy1 + candidate_center_y
+            band_half = 20
+            new_s_y1 = max(0, global_center_y - band_half)
+            new_s_y2 = min(h, global_center_y + band_half)
+            s_x1 = int(w * 0.92)
+            s_x2 = int(w * 0.97)
+            roi_stoploss = img_bf[new_s_y1:new_s_y2, s_x1:s_x2]
+            cv2.rectangle(debug_img, (s_x1, new_s_y1), (s_x2, new_s_y2), (0,255,0), 2)
+        else:
+            s_x1 = int(w * 0.92)
+            s_y1 = int(h * 0.05)
+            s_x2 = int(w * 0.97)
+            s_y2 = int(h * 0.68)
+            roi_stoploss = img_bf[s_y1:s_y2, s_x1:s_x2]
+            cv2.rectangle(debug_img, (s_x1, s_y1), (s_x2, s_y2), (255,0,255), 2)
+        roi_stoploss_hsv = cv2.cvtColor(roi_stoploss, cv2.COLOR_BGR2HSV)
+        if direction == "long":
+            mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_green, upper_green)
+        else:
+            mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_red1, upper_red1) | cv2.inRange(roi_stoploss_hsv, lower_red2, upper_red2)
+        kernel = np.ones((3,3), np.uint8)
+        mask_stoploss_sl = cv2.morphologyEx(mask_stoploss_sl, cv2.MORPH_OPEN, kernel)
+        contours_sl, _ = cv2.findContours(mask_stoploss_sl, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours_sl:
+            candidate_contours = [cnt for cnt in contours_sl if cv2.contourArea(cnt) > 500]
+            if candidate_contours:
+                candidate = max(candidate_contours, key=cv2.contourArea)
+                x_box, y_box, w_box, h_box = cv2.boundingRect(candidate)
+                cv2.rectangle(debug_img, (s_x1+x_box, new_s_y1+y_box), (s_x1+x_box+w_box, new_s_y1+y_box+h_box), (0,255,0), 2)
+                candidate_roi = roi_stoploss[y_box:y_box+h_box, x_box:x_box+w_box]
+                ocr_config_sl = "--psm 7 -c tessedit_char_whitelist=0123456789,."
+                stop_loss_text = pytesseract.image_to_string(candidate_roi, config=ocr_config_sl)
+                normalized_text = stop_loss_text.replace(',', '')
+                normalized_text = normalized_text.strip().replace("\n","").replace(" ","")
+                matches = re.findall(r"\d+\.\d+|\d+", normalized_text)
+                if matches:
+                    try:
+                        stop_loss_price = float(matches[0])
+                    except:
+                        stop_loss_price = None
+        if stop_loss_price is None:
+            ocr_config_sl = "--psm 7 -c tessedit_char_whitelist=0123456789,."
+            stop_loss_text = pytesseract.image_to_string(roi_stoploss, config=ocr_config_sl)
+            normalized_text = stop_loss_text.replace(',', '')
+            normalized_text = normalized_text.strip().replace("\n","").replace(" ","")
+            matches = re.findall(r"\d+\.\d+|\d+", normalized_text)
+            if matches:
+                try:
+                    stop_loss_price = float(matches[0])
+                except:
+                    stop_loss_price = None
+        return {"flip_detected": True,
+                "flip_x": flip_x_global,
+                "flip_time": time_label,
+                "stop_loss_price": stop_loss_price}
+
+    ############### UT Bot Alerts Detection ###############
+    def detect_utbot():
+        img_ut = img.copy()
+        img_hsv = cv2.cvtColor(img_ut, cv2.COLOR_BGR2HSV)
+        # HSV 범위: 하늘색 for Buy, 주황색 for Sell
+        lower_cyan   = np.array([80, 100, 100])
+        upper_cyan   = np.array([100, 255, 255])   # Buy
+        lower_orange = np.array([10, 150, 100])
+        upper_orange = np.array([25, 255, 255])    # Sell
+
+        bounding_data = []
+        # Buy 신호 탐색
+        mask_buy = cv2.inRange(img_hsv, lower_cyan, upper_cyan)
+        contours_buy, _ = cv2.findContours(mask_buy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours_buy:
+            area = cv2.contourArea(cnt)
+            if area < 1500:
+                continue
+            x, y, w_box, h_box = cv2.boundingRect(cnt)
+            cx = x + w_box // 2
+            bounding_data.append({
+                "signal": "Buy",
+                "cx": cx,
+                "box": (x, y, w_box, h_box)
+            })
+            cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (255,255,0), 2)
+        # Sell 신호 탐색
+        mask_sell = cv2.inRange(img_hsv, lower_orange, upper_orange)
+        contours_sell, _ = cv2.findContours(mask_sell, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours_sell:
+            area = cv2.contourArea(cnt)
+            if area < 1500:
+                continue
+            x, y, w_box, h_box = cv2.boundingRect(cnt)
+            cx = x + w_box // 2
+            bounding_data.append({
+                "signal": "Sell",
+                "cx": cx,
+                "box": (x, y, w_box, h_box)
+            })
+            cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (0,165,255), 2)
+        alert_signal = "None"
+        alert_time = ""
+        center_x = None
+        if len(bounding_data) > 0:
+            best_box = max(bounding_data, key=lambda d: d["cx"])
+            alert_signal = best_box["signal"]
+            center_x = best_box["cx"]
+            (bx, by, bw, bh) = best_box["box"]
+            cv2.rectangle(debug_img, (bx,by), (bx+bw,by+bh), (0,255,255), 3)
+        if alert_signal != "None" and center_x is not None:
+            x_margin = 35
+            x1px = max(0, center_x - x_margin)
+            x2px = min(w, center_x + x_margin)
+            y1p = int(utbot_xaxis_yrange[0] * h)
+            y2p = int(utbot_xaxis_yrange[1] * h)
+            roi_time = img_ut[y1p:y2p, x1px:x2px]
+            cv2.rectangle(debug_img, (x1px,y1p), (x2px,y2p), (0,0,255), 2)
+            ocr_config = "--psm 7 --oem 3"
+            time_ocr_text = pytesseract.image_to_string(roi_time, config=ocr_config)
+            alert_time = time_ocr_text.strip().replace("\n"," ").strip()
+        return {"alert_signal": alert_signal, "alert_time": alert_time}
+    ############ End UT Bot Detection ############
+    
+    ############## Volume Oscillator Detection ##############
+    def read_volume_osc():
+        img_vol = img.copy()
+        x1 = int(volume_roi[0] * w)
+        y1 = int(volume_roi[1] * h)
+        x2 = int(volume_roi[2] * w)
+        y2 = int(volume_roi[3] * h)
+        cv2.rectangle(debug_img, (x1, y1), (x2, y2), (255,0,255), 2)
+        roi_osc = img_vol[y1:y2, x1:x2]
+        roi_hsv = cv2.cvtColor(roi_osc, cv2.COLOR_BGR2HSV)
+        lower_blue = np.array([100, 100, 50])
+        upper_blue = np.array([140, 255, 255])
+        mask_blue = cv2.inRange(roi_hsv, lower_blue, upper_blue)
+        kernel = np.ones((3,3), np.uint8)
+        mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_OPEN, kernel)
+        contours, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        sub_roi = roi_osc
+        if contours:
+            max_cnt = max(contours, key=cv2.contourArea)
+            x_box, y_box, w_box, h_box = cv2.boundingRect(max_cnt)
+            cv2.rectangle(debug_img, (x1+x_box, y1+y_box), (x1+x_box+w_box, y1+y_box+h_box), (255,255,0), 2)
+            sub_roi = roi_osc[y_box:y_box+h_box, x_box:x_box+w_box]
+        ocr_config = "--psm 7 --oem 3"
+        ocr_text = pytesseract.image_to_string(sub_roi, config=ocr_config)
+        ocr_text = ocr_text.strip().replace("\n", "").replace(" ", "")
+        ocr_text = ocr_text.replace("%", "")
+        matches = re.findall(r"[+-]?\d+\.\d+|[+-]?\d+", ocr_text)
+        vol_value = None
+        if matches:
+            try:
+                vol_value = float(matches[0])
+            except ValueError:
+                vol_value = None
+        return vol_value
+    ############ End Volume Oscillator Detection ############
+
+    # 각 지표 검출 함수 호출
+    result_long = run_blackflag_detection("long")
+    result_short = run_blackflag_detection("short")
+    
+    # 통합된 BlackFlag 결과: 두 방향 모두 검출된 경우 오른쪽(최대 flip_x) 신호만 선택
+    if result_long.get("flip_detected") and result_short.get("flip_detected"):
+        if result_long["flip_x"] is not None and result_short["flip_x"] is not None:
+            if result_long["flip_x"] >= result_short["flip_x"]:
+                blackflag_final = {"flip_detected": "long",
+                                   "flip_x": result_long["flip_x"],
+                                   "flip_time": result_long["flip_time"],
+                                   "stop_loss_price": result_long["stop_loss_price"]}
+            else:
+                blackflag_final = {"flip_detected": "short",
+                                   "flip_x": result_short["flip_x"],
+                                   "flip_time": result_short["flip_time"],
+                                   "stop_loss_price": result_short["stop_loss_price"]}
+        elif result_long["flip_x"] is not None:
+            blackflag_final = {"flip_detected": "long",
+                               "flip_x": result_long["flip_x"],
+                               "flip_time": result_long["flip_time"],
+                               "stop_loss_price": result_long["stop_loss_price"]}
+        else:
+            blackflag_final = {"flip_detected": "short",
+                               "flip_x": result_short["flip_x"],
+                               "flip_time": result_short["flip_time"],
+                               "stop_loss_price": result_short["stop_loss_price"]}
+    elif result_long.get("flip_detected"):
+        blackflag_final = {"flip_detected": "long",
+                           "flip_x": result_long["flip_x"],
+                           "flip_time": result_long["flip_time"],
+                           "stop_loss_price": result_long["stop_loss_price"]}
+    elif result_short.get("flip_detected"):
+        blackflag_final = {"flip_detected": "short",
+                           "flip_x": result_short["flip_x"],
+                           "flip_time": result_short["flip_time"],
+                           "stop_loss_price": result_short["stop_loss_price"]}
+    else:
+        blackflag_final = {"flip_detected": "none", "flip_x": None, "flip_time": "", "stop_loss_price": None}
+
+    # UT Bot 및 Volume Oscillator 검출 함수 호출
+    utbot_result = detect_utbot()
+    volume_result = read_volume_osc()
+
+    # 최종 debug 이미지 저장(하나로 통합)
+    save_debug_final(debug_img, "merged")
+
+    return {"BlackFlag": blackflag_final,
+            "UTBot": utbot_result,
+            "VolumeOsc": volume_result}
 
 
+class ChartSignalProcessor:
+    """
+    트레이딩 뷰 차트에서 신호를 처리하고 AI 프롬프트에 전달할 데이터를 생성하는 클래스
+    """
+    
+    def __init__(self):
+        """트레이딩 신호 트래커 초기화"""
+        self.signal_tracker = SignalTracker()
+    
+    def process_chart_image(self, image_path, debug=False):
+        """
+        차트 이미지 처리 및 신호 업데이트
+        
+        Args:
+            image_path (str): 처리할 이미지 파일 경로
+            debug (bool): 디버그 이미지 저장 여부
+            
+        Returns:
+            dict: 분석 결과 (성공 시) 또는 None (실패 시)
+        """
+        try:
+            # 이미지 분석 수행
+            analysis_result = analyze_chart_signals(
+                image_path=image_path,
+                debug=debug,
+                debug_prefix=f"debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
+            )
+            
+            if analysis_result:
+                # 현재 시간으로 신호 트래커 업데이트
+                current_time = datetime.now()
+                self.signal_tracker.update_from_image_analysis(analysis_result, current_time)
+                return analysis_result
+            return None
+        except Exception as e:
+            print(f"차트 이미지 처리 중 오류 발생: {e}")
+            return None
+    
+    def generate_ai_prompt_data(self):
+        """
+        AI 프롬프트에 전달할 데이터 생성
+        
+        Returns:
+            dict: AI 프롬프트에 사용될 포맷팅된 신호 데이터
+        """
+        # 현재 시간 기준으로 캔들 경과 업데이트
+        self.signal_tracker.update_candles_ago()
+        
+        # 프롬프트용 데이터 생성
+        signal_data = self.signal_tracker.generate_prompt_data()
+        
+        # 프롬프트용 텍스트 포맷팅
+        formatted_data = {
+            "BlackFlag_Signal": signal_data["BlackFlag"]["signal"],
+            "BlackFlag_CandlesAgo": signal_data["BlackFlag"]["candles_ago"],
+            "UTBot_Signal": signal_data["UTBot"]["signal"],
+            "UTBot_CandlesAgo": signal_data["UTBot"]["candles_ago"],
+            "VolumeOsc_Current": signal_data["VolumeOsc"]["current"],
+            "VolumeOsc_History": signal_data["VolumeOsc"]["values"],
+            "StopLoss_Price": signal_data["BlackFlag"]["stop_loss_price"]
+        }
+        
+        return formatted_data
+    
+    def create_prompt_text(self):
+        """
+        AI 프롬프트에 전달할 텍스트 생성
+        
+        Returns:
+            str: AI 프롬프트에 사용될 포맷팅된 신호 텍스트
+        """
+        data = self.generate_ai_prompt_data()
+        
+        # BlackFlag 신호 정보
+        blackflag_info = "None" if data["BlackFlag_Signal"] is None else \
+                          f"{data['BlackFlag_Signal']} ({data['BlackFlag_CandlesAgo']} 캔들 전)"
+        
+        # UTBot 신호 정보
+        utbot_info = "None" if data["UTBot_Signal"] is None else \
+                     f"{data['UTBot_Signal']} ({data['UTBot_CandlesAgo']} 캔들 전)"
+        
+        # Volume Oscillator 정보
+        vol_history = ", ".join([str(round(v, 2)) if v is not None else "None" 
+                                 for v in data["VolumeOsc_History"]])
+        
+        # Stop Loss 가격 정보
+        sl_price = "None" if data["StopLoss_Price"] is None else str(data["StopLoss_Price"])
+        
+        # 프롬프트 텍스트 구성
+        prompt_text = f"""
+        ### Trading Signals Data
 
+        **BlackFlag FTS Signal:** {blackflag_info}
+
+        **UT Bot Alert:** {utbot_info}
+
+        **Volume Oscillator:**
+        - Current Value: {data["VolumeOsc_Current"]}
+        - Last 10 candles: [{vol_history}] (oldest to newest)
+
+        **Stop Loss Price:** {sl_price}
+        """
+        
+        return prompt_text
+
+# def main():
+#     """
+#     메인 함수 - 트레이딩 신호 처리 및 AI 프롬프트 생성 예시
+#     """
+#     # 차트 신호 프로세서 초기화
+#     processor = ChartSignalProcessor()
+    
+#     # 예시: 차트 이미지 처리
+#     image_path = "chart_image.png"  # 실제 이미지 경로로 변경 필요
+    
+#     # 이미지가 존재하는지 확인
+#     if os.path.exists(image_path):
+#         # 이미지 분석 및 신호 업데이트
+#         result = processor.process_chart_image(image_path, debug=True)
+        
+#         if result:
+#             print("차트 분석 결과:", result)
+            
+#             # AI 프롬프트 데이터 생성
+#             prompt_data = processor.generate_ai_prompt_data()
+#             print("\nAI 프롬프트 데이터:", json.dumps(prompt_data, indent=2))
+            
+#             # AI 프롬프트 텍스트 생성
+#             prompt_text = processor.create_prompt_text()
+#             print("\nAI 프롬프트 텍스트:")
+#             print(prompt_text)
+#         else:
+#             print("차트 분석 실패")
+#     else:
+#         print(f"이미지 파일을 찾을 수 없습니다: {image_path}")
 
 class BinanceFuturesTrader:
     def __init__(self, api_key: str, api_secret: str, logger):
@@ -997,44 +1718,103 @@ def signal_handler(signum, frame):
 
 
 # SQLite 데이터베이스 초기화 함수 - 거래 내역을 저장할 테이블을 생성
+# SQLite 데이터베이스 초기화 함수 - 거래 내역을 저장할 테이블을 생성 (수정됨)
 def init_db():
     conn = sqlite3.connect('bitcoin_trades.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS trades
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  timestamp TEXT,
-                  trade_type TEXT,
-                  order_id TEXT,
-                  decision TEXT,
-                  percentage INTEGER,
-                  reason TEXT,
-                  btc_balance REAL,
-                  usdt_balance REAL,
-                  total_assets REAL,
-                  btc_avg_buy_price REAL,
-                  btc_current_price REAL,
-                  reflection TEXT,
-                  tp_order_id TEXT,
-                  sl_order_id TEXT)''')
+    
+    # 기존 테이블 구조 확인
+    c.execute("PRAGMA table_info(trades)")
+    columns = [column[1] for column in c.fetchall()]
+    
+    # 테이블이 존재하지 않으면 새로 생성
+    if not columns:
+        c.execute('''CREATE TABLE IF NOT EXISTS trades
+                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT,
+                    trade_type TEXT,
+                    order_id TEXT,
+                    decision TEXT,
+                    percentage INTEGER,
+                    reason TEXT,
+                    btc_balance REAL,
+                    usdt_balance REAL,
+                    total_assets REAL,
+                    btc_avg_buy_price REAL,
+                    btc_current_price REAL,
+                    reflection TEXT,
+                    tp_order_id TEXT,
+                    sl_order_id TEXT,
+                    blackflag_signal TEXT,
+                    blackflag_candles_ago INTEGER,
+                    utbot_signal TEXT,
+                    utbot_candles_ago INTEGER,
+                    volume_osc_current REAL,
+                    stop_loss_price REAL)''')
+    else:
+        # 필요한 새 컬럼 추가
+        new_columns = {
+            'blackflag_signal': 'TEXT',
+            'blackflag_candles_ago': 'INTEGER',
+            'utbot_signal': 'TEXT',
+            'utbot_candles_ago': 'INTEGER',
+            'volume_osc_current': 'REAL',
+            'stop_loss_price': 'REAL'
+        }
+        
+        # 존재하지 않는 컬럼만 추가
+        for col_name, col_type in new_columns.items():
+            if col_name not in columns:
+                c.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
+                print(f"Added new column: {col_name}")
+    
     conn.commit()
     return conn
 
 # 거래 기록을 DB에 저장하는 함수
 
-# 거래 기록 함수 수정
+# 거래 기록 함수 수정 - 신호 데이터 포함
 def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, 
               usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, 
-              reflection='', tp_order_id=None, sl_order_id=None):
+              reflection='', tp_order_id=None, sl_order_id=None, signals_data=None):
+    """
+    거래 기록을 DB에 저장하는 함수
+    
+    Args:
+        ... (기존 매개변수) ...
+        signals_data (dict, optional): 트레이딩 신호 데이터. 기본값은 None.
+    """
     c = conn.cursor()
     timestamp = datetime.now().isoformat()
+    
+    # 신호 데이터가 있는 경우 이를 추출
+    blackflag_signal = None
+    blackflag_candles_ago = None
+    utbot_signal = None
+    utbot_candles_ago = None
+    volume_osc_current = None
+    stop_loss_price = None
+    
+    if signals_data:
+        blackflag_signal = signals_data.get("BlackFlag", {}).get("signal")
+        blackflag_candles_ago = signals_data.get("BlackFlag", {}).get("candles_ago")
+        utbot_signal = signals_data.get("UTBot", {}).get("signal")
+        utbot_candles_ago = signals_data.get("UTBot", {}).get("candles_ago")
+        volume_osc_current = signals_data.get("VolumeOsc", {}).get("current")
+        stop_loss_price = signals_data.get("BlackFlag", {}).get("stop_loss_price")
+    
     c.execute("""INSERT INTO trades 
-                 (timestamp, trade_type, order_id, decision, percentage, reason, 
-                 btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                 btc_current_price, reflection, tp_order_id, sl_order_id) 
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-              (timestamp, trade_type, order_id, decision, percentage, reason, 
-               btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-               btc_current_price, reflection, tp_order_id, sl_order_id))
+                (timestamp, trade_type, order_id, decision, percentage, reason, 
+                btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                btc_current_price, reflection, tp_order_id, sl_order_id,
+                blackflag_signal, blackflag_candles_ago, utbot_signal, 
+                utbot_candles_ago, volume_osc_current, stop_loss_price) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (timestamp, trade_type, order_id, decision, percentage, reason, 
+            btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+            btc_current_price, reflection, tp_order_id, sl_order_id,
+            blackflag_signal, blackflag_candles_ago, utbot_signal,
+            utbot_candles_ago, volume_osc_current, stop_loss_price))
     conn.commit()
     
 # 최근 투자 기록 조회
@@ -1461,8 +2241,58 @@ def login_with_cookies():
 
 
 
-# 스크린샷 캡쳐 및 base64 이미지 인코딩        
-def capture_and_encode_screenshot(driver, type, save="no"):
+# # 스크린샷 캡쳐 및 base64 이미지 인코딩        
+# def capture_and_encode_screenshot(driver, type, save="no"):
+#     try:
+#         # 스크린샷 캡처
+#         png = driver.get_screenshot_as_png()
+        
+#         # PIL Image로 변환
+#         img = Image.open(io.BytesIO(png))
+        
+#         # 이미지 리사이즈 (OpenAI API 제한에 맞춤)
+#         img.thumbnail((2000, 2000))
+        
+#         # 현재 시간을 파일명에 포함
+#         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+#         filename = f"{type}_chart_{current_time}.png"
+        
+#         # 현재 스크립트의 경로를 가져옴
+#         script_dir = os.path.dirname(os.path.abspath(__file__))
+        
+#         # 파일 저장 경로 설정
+#         file_path = os.path.join(script_dir, filename)
+        
+#         # 이미지 파일로 저장
+#         if save == "yes":
+#             img.save(file_path)
+#             logger.info(f"스크린샷이 저장되었습니다: {file_path}")
+        
+#         # 이미지를 바이트로 변환
+#         buffered = io.BytesIO()
+#         img.save(buffered, format="PNG")
+        
+#         # base64로 인코딩
+#         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+        
+#         return base64_image, file_path
+#     except Exception as e:
+#         logger.error(f"스크린샷 캡처 및 인코딩 중 오류 발생: {e}")
+#         return None, None
+
+
+# 새로 추가된 차트 캡처 및 분석 함수
+def capture_and_analyze_chart(driver, chart_processor=None):
+    """
+    차트 이미지를 캡처하고 신호를 분석하는 함수
+    
+    Args:
+        driver: Selenium 웹드라이버
+        chart_processor: 차트 신호 프로세서 인스턴스
+        
+    Returns:
+        tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로)
+    """
     try:
         # 스크린샷 캡처
         png = driver.get_screenshot_as_png()
@@ -1470,12 +2300,12 @@ def capture_and_encode_screenshot(driver, type, save="no"):
         # PIL Image로 변환
         img = Image.open(io.BytesIO(png))
         
-        # 이미지 리사이즈 (OpenAI API 제한에 맞춤)
+        # 이미지 리사이즈 (필요시)
         img.thumbnail((2000, 2000))
         
-        # 현재 시간을 파일명에 포함
+        # 파일명에 현재 시간 포함
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{type}_chart_{current_time}.png"
+        filename = f"chart_{current_time}.png"
         
         # 현재 스크립트의 경로를 가져옴
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1484,21 +2314,28 @@ def capture_and_encode_screenshot(driver, type, save="no"):
         file_path = os.path.join(script_dir, filename)
         
         # 이미지 파일로 저장
-        if save == "yes":
-            img.save(file_path)
-            logger.info(f"스크린샷이 저장되었습니다: {file_path}")
-        
-        # 이미지를 바이트로 변환
-        buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
+        img.save(file_path)
+        logger.info(f"차트 스크린샷이 저장되었습니다: {file_path}")
         
         # base64로 인코딩
+        buffered = io.BytesIO()
+        img.save(buffered, format="PNG")
         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
         
-        return base64_image, file_path
+        # 신호 분석 수행 (차트 프로세서가 제공된 경우)
+        signal_analysis = None
+        if chart_processor is not None:
+            signal_analysis = chart_processor.process_chart_image(file_path)
+            if signal_analysis:
+                logger.info("차트 신호 분석 완료")
+            else:
+                logger.warning("차트 신호 분석 실패")
+        
+        return base64_image, signal_analysis, file_path
+        
     except Exception as e:
-        logger.error(f"스크린샷 캡처 및 인코딩 중 오류 발생: {e}")
-        return None, None
+        logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}")
+        return None, None, None
 
 
 def modify_orderbook(orderbook):
@@ -1524,17 +2361,31 @@ def modify_orderbook(orderbook):
 
 ### 메인 AI 트레이딩 로직
 def ai_trading():
+    
+    # 차트 신호 프로세서 초기화 (새로 추가)
+    chart_processor = ChartSignalProcessor()
     ### 데이터 가져오기
     # 7. Selenium으로 차트 캡처
     driver = None
+    chart_image = None
     try:
         # TradingView 차트 캡처
         driver = login_with_cookies()
         driver.get("https://kr.tradingview.com/chart/zcDfxQQ8/?symbol=BINANCE%3ABTCUSDT.P")
         logger.info("TradingView 페이지 로드 완료")
         time.sleep(3)
-        chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
-        logger.info(f"TradingView 스크린샷 캡처 완료.")
+    
+        # chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
+        # logger.info(f"TradingView 스크린샷 캡처 완료.")
+    
+        # 이미지 캡처 및 신호 분석 (수정된 부분)
+        chart_image, signals_analysis, saved_file_path = capture_and_analyze_chart(driver, chart_processor)    
+        
+        if chart_image:
+            logger.info(f"TradingView 스크린샷 캡처 및 분석 완료.")
+        else:
+            logger.error("스크린샷 캡처 실패")
+                    
     except WebDriverException as e:
         logger.error(f"캡쳐시 WebDriver 오류 발생: {e}")
         chart_image = None
@@ -1665,8 +2516,10 @@ def ai_trading():
             }
             # 반성 및 개선 내용 생성
             reflection = generate_reflection(recent_trades, current_market_data)
-    
-            # AI 모델에 반성 내용 제공
+            # 차트 신호 데이터를 AI 프롬프트에 포함 (새로 추가)
+            trading_signals_text = chart_processor.create_prompt_text()
+            
+            # AI 모델에 프롬프트 제공 (수정된 부분)
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -1759,18 +2612,18 @@ def ai_trading():
                         ### A. Critical Timing
 
                         **For Long Entry:**  
-                        - **BlackFlag FTS:** Must show a red-to-green transition (indicating a change from bearish to bullish) within the last 3 candles.  
-                        - **UT Bot Alerts:** Must display a BUY alert within the last 3 candles.  
-                        - **Volume Oscillator:** Must be positive on the current candle, confirming rising volume momentum supportive of a long move.
+                        - **BlackFlag FTS:** Must show a red-to-green transition (indicating a change from bearish to bullish) within the last 3 candles. Refer to the "BlackFlag FTS Signal" data in the trading signals section to confirm the signal and its freshness.
+                        - **UT Bot Alerts:** Must display a BUY alert within the last 3 candles. Refer to the "UT Bot Alert" data in the trading signals section to confirm the signal and its freshness.
+                        - **Volume Oscillator:** Must be positive on the current candle, confirming rising volume momentum supportive of a long move. Refer to the "Volume Oscillator" data in the trading signals section to check current value and recent history.
 
                         **For Short Entry:**  
-                        - **BlackFlag FTS:** Must show a green-to-red transition (indicating a change from bullish to bearish) within the last 3 candles.  
-                        - **UT Bot Alerts:** Must display a SELL alert within the last 3 candles.  
-                        - **Volume Oscillator:** Must be positive on the current candle, confirming sufficient momentum for a short move.
+                        - **BlackFlag FTS:** Must show a green-to-red transition (indicating a change from bullish to bearish) within the last 3 candles. Refer to the "BlackFlag FTS Signal" data in the trading signals section to confirm the signal and its freshness.
+                        - **UT Bot Alerts:** Must display a SELL alert within the last 3 candles. Refer to the "UT Bot Alert" data in the trading signals section to confirm the signal and its freshness.
+                        - **Volume Oscillator:** Must be positive on the current candle, confirming sufficient momentum for a short move. Refer to the "Volume Oscillator" data in the trading signals section to check current value and recent history.
 
-                        Any stale signals or misalignment → “hold” (no entry).  
-                        **This is mandatory: if any core indicator signal is older than 3 candles, you must not enter. Always “hold” unless all three primary indicators are fresh (≤3 candles).**
-
+                        Any stale signals or misalignment → "hold" (no entry).  
+                        **This is mandatory: prioritize the "Trading Signals Data" section from the user input, which provides exact information about each indicator signal and its freshness (candles ago). If any core indicator signal is older than 3 candles, you must not enter. Always "hold" unless all three primary indicators are fresh (≤3 candles).**
+                                                
                         ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)
                         Use these solely for extra confirmation or for rejecting the primary signal.  
                         **Do not open a position based only on Additional Indicators if the primary indicators do not show a valid fresh entry signal.**  
@@ -1782,19 +2635,19 @@ def ai_trading():
                         • **Strong Signal**  
                         - Primary indicators are in perfect alignment with very high volume (≥250% avg) and low, stable ATR.  
                         - Position Size: 100% of calculated size.  
-                        - Stop Loss: ±0.5% from entry (refined with Cloud/ATR).  
+                        - Stop Loss: ±0.7% from entry (refined with Cloud/ATR).  
                         - P/L Ratio: ~2.0.
 
                         • **Moderate Signal**  
                         - Adequate volume and volatility with clean and well-aligned primary indicators.  
                         - Position Size: ~60%.  
-                        - Stop Loss: ±0.4% from entry or Cloud.  
+                        - Stop Loss: ±0.5% from entry or Cloud.  
                         - P/L Ratio: ~1.75 (within a range of 1.5 to 2.0).
 
                         • **Weak Signal**  
                         - Primary indicators appear borderline (possibly slightly delayed or with lower volume), or only partially supportive.  
                         - Position Size: ~30%.  
-                        - Stop Loss: ±0.3% from entry (with Cloud + ATR checks).  
+                        - Stop Loss: ±0.4% from entry (with Cloud + ATR checks).  
                         - P/L Ratio: ~1.5 (within a range of 1.5 to 2.0).
 
                         ### D. Price Action & Key Levels (Support/Resistance)
@@ -1807,11 +2660,13 @@ def ai_trading():
                         ───────────────────────────────────────────────────────────────
                         ## 4. Stop Loss & Take Profit
 
-                        1) **Cloud-Based Stop Loss**  
-                        - **LONG:** Place near the deepest green portion of the latest Green Cloud.  
-                        - **SHORT:** Place near the deepest red portion of the latest Red Cloud.  
-                        - If this level is unreasonably far, refer to ATR guidelines (±0.3-0.5% from entry).
-
+                        1) **Stop Loss Price**
+                        - **Use the provided Stop Loss Price:** When available in the "Trading Signals Data" section, use the "Stop Loss Price" value that was directly extracted from the chart.
+                        - **Fallback method:** If Stop Loss Price is "None" in the Trading Signals Data, then use Cloud-Based Stop Loss:
+                        - **LONG:** Place near the deepest green portion of the latest Green Cloud.
+                        - **SHORT:** Place near the deepest red portion of the latest Red Cloud.
+                        - If this level is unreasonably far, refer to ATR guidelines (±0.4-0.7% from entry).
+                        
                         2) **P/L Ratio (1.5-2.0)**  
                         - Strong Signal: Approximately 2.0 baseline.  
                         - Moderate Signal: Approximately 1.75 baseline.  
@@ -1844,7 +2699,7 @@ def ai_trading():
                         ```
 
                         - **decision:** Determine whether to open or close a position. “buy” is used to close shorts or open a new long; “sell” is used to close longs or open a new short; “hold” means take no action. Additionally, make sure to check your current position: if the Current Position Side shows “none”, then no exit order should be issued.
-                        - **stop_loss_price:** Set based on Cloud levels or ATR guidelines (±0.3-0.5% from entry).  
+                        - **stop_loss_price:** Set based on Cloud levels or ATR guidelines (±0.4-0.7% from entry).  
                         - **pl_ratio:** Choose a value between 1.5 and 2.0 according to the signal strength.  
                         - **reason:** Provide a detailed explanation that includes:
                         - A clear statement of the current portfolio status (e.g., whether you have an active position and its side—long, short, or none).
@@ -1866,12 +2721,12 @@ def ai_trading():
                         ───────────────────────────────────────────────────────────────
                         ### Final Notes
 
-                        1) Always check the Portfolio information before deciding: if Current Position Side is "none", then only new entry orders should be considered; exit orders are valid only when an active position exists.  
-                        2) Respect fresh signals only—if any primary indicator is 3 or more candles old, do not enter; instead, hold.  
-                        3) Use the correct exit commands: “buy” to exit a short and “sell” to exit a long.  
-                        4) Incorporate dynamically updated values from the [Market Data] and [Portfolio] sections.  
+                        1) Always check the Portfolio information before deciding: if Current Position Side is "none", then only new entry orders should be considered; exit orders are valid only when an active position exists.
+                        2) **Prioritize the extracted signal data in the "Trading Signals Data" section**, which provides accurate information about signal freshness. Only consider signals within 3 candles old for entry decisions.
+                        3) Use the correct exit commands: "buy" to exit a short and "sell" to exit a long.
+                        4) Incorporate dynamically updated values from the [Market Data], [Portfolio], and [Trading Signals Data] sections.
                         5) Preserve capital by exiting immediately on conflicting or invalid signals.
-
+                        
                         ───────────────────────────────────────────────────────────────
                         This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤3 candles old) for any entry—even though slight delays of 3–4 candles may be acceptable if the price remains within ±0.2% of the trigger level and volume momentum persists (otherwise, treat it as stale if more than 4 candles have passed or if the price moves more than 0.5% away). Additionally, always check the Portfolio first to determine if you already have an active position; only execute exit orders if a position exists. Additional Indicators can only confirm or reject a fresh (or slightly delayed) primary signal—never generate an entry on their own. For position sizing, apply the Position Sizing Rules above when computing the percentage (0–100) for entries and exits. Also, incorporate local highs/lows across the 5-minute, 1-hour, and 4-hour charts to identify potential support/resistance zones and further refine or reject your primary signals.
                         ───────────────────────────────────────────────────────────────
@@ -1889,14 +2744,17 @@ def ai_trading():
                                 Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
                                 4-hour OHLCV with indicators (3 days): {df_4h.to_json()}
                                 Recent news headlines: {json.dumps(news_headlines)}
-                                Fear and Greed Index: {json.dumps(fear_greed_index)}"""
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{chart_image}"
-                                }
+                                Fear and Greed Index: {json.dumps(fear_greed_index)}
+                                
+                                {trading_signals_text}
+                                """
                             }
+                            # {
+                            #     "type": "image_url",
+                            #     "image_url": {
+                            #         "url": f"data:image/png;base64,{chart_image}"
+                            #     }
+                            # }
                         ]
                     }
                 ],
@@ -2012,6 +2870,9 @@ def ai_trading():
         ticker = trader.exchange.fetch_ticker('BTC/USDT')
         current_btc_price = ticker['last']
 
+        # 신호 데이터 추출
+        signals_data = chart_processor.generate_ai_prompt_data()
+
         # 거래 기록을 DB에 저장하기
         if order_executed and order_info != None:
             order_id = order_info['entry']['id']
@@ -2019,8 +2880,8 @@ def ai_trading():
             sl_order_id = order_info['sl']['id'] if order_info.get('sl') else None
             
             log_trade(conn, 'AI', order_id, result.decision, result.percentage, result.reason, 
-                    used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
-                    reflection, tp_order_id, sl_order_id)
+            used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
+            reflection, tp_order_id, sl_order_id, signals_data)
             
             # 트레일링 스탑로스 모니터링 추가
             if 'monitor_sl' in order_info:
@@ -2042,8 +2903,7 @@ def ai_trading():
             # 거래가 실행되지 않은 경우 (hold 또는 실패)
             log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
                     used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
-                    reflection, None, None)
-            
+                    reflection, None, None, signals_data)
     
     
     except sqlite3.Error as e:
