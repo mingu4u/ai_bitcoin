@@ -37,6 +37,8 @@ from typing import Optional, Dict, Any
 import platform
 import cv2
 import numpy as np
+import pytesseract
+import re
 
 class SignalTracker:
     def __init__(self, cache_file="trading_signals_cache.json"):
