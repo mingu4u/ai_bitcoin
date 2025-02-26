@@ -2287,6 +2287,89 @@ def login_with_cookies():
 #         logger.error(f"스크린샷 캡처 및 인코딩 중 오류 발생: {e}")
 #         return None, None
 
+# def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
+#     """
+#     차트 이미지를 캡처하고 신호를 분석하는 함수
+    
+#     Args:
+#         driver: Selenium 웹드라이버
+#         chart_processor: 차트 신호 프로세서 인스턴스
+#         save_image: 이미지 저장 여부 (기본값: False)
+#         debug: 디버그 모드 활성화 여부 (기본값: False)
+        
+#     Returns:
+#         tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로 또는 None)
+#     """
+#     try:
+#         # 스크린샷 캡처
+#         logger.info("스크린샷 캡처 시작")
+#         png = driver.get_screenshot_as_png()
+#         logger.info("스크린샷 메모리에 캡처 완료")
+        
+#         # PIL Image로 변환
+#         img_pil = Image.open(io.BytesIO(png))
+#         logger.info("PIL Image 변환 완료")
+        
+#         # 이미지 리사이즈 (필요시)
+#         img_pil.thumbnail((2000, 2000))
+        
+#         # 파일 경로 설정 (저장 여부와 관계없이 경로 생성)
+#         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
+#         filename = f"chart_{current_time}.png"
+#         script_dir = os.path.dirname(os.path.abspath(__file__))
+#         file_path = os.path.join(script_dir, filename)
+        
+#         # 저장 옵션이 활성화된 경우에만 파일로 저장
+#         if save_image:
+#             img_pil.save(file_path)
+#             logger.info(f"스크린샷 저장 완료: {file_path}")
+        
+#         # Base64 인코딩 (UI 표시용)
+#         buffered = io.BytesIO()
+#         img_pil.save(buffered, format="PNG")
+#         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
+        
+#         # OpenCV 이미지로 변환 (PIL → OpenCV)
+#         img_np = np.array(img_pil)
+#         # RGB to BGR (PIL is RGB, OpenCV uses BGR)
+#         img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+#         logger.info("OpenCV 이미지 변환 완료")
+        
+#         # 이미지가 올바르게 로드되었는지 확인
+#         if img_cv is None or img_cv.size == 0:
+#             logger.error("OpenCV 이미지 변환 실패 또는 이미지가 비어 있습니다")
+#             return base64_image, None, file_path if save_image else None
+        
+#         # 신호 분석 수행 (메모리 내 이미지 사용)
+#         signal_analysis = None
+#         if chart_processor is not None:
+#             # 임시 이미지 파일 생성 (analyze_chart_signals가 파일 경로를 필요로 하므로)
+#             temp_path = os.path.join(script_dir, f"temp_{current_time}.png")
+#             cv2.imwrite(temp_path, img_cv)
+            
+#             try:
+#                 logger.info(f"차트 신호 분석 시작 (debug={debug})")
+#                 signal_analysis = chart_processor.process_chart_image(
+#                     image_path=temp_path,
+#                     debug=debug
+#                 )
+                
+#                 if signal_analysis:
+#                     logger.info("차트 신호 분석 완료")
+#                 else:
+#                     logger.warning("차트 신호 분석 결과 없음")
+#             finally:
+#                 # 분석 후 임시 파일 삭제 (저장 옵션이 비활성화된 경우)
+#                 if not save_image and os.path.exists(temp_path):
+#                     os.remove(temp_path)
+#                     logger.info(f"임시 파일 삭제: {temp_path}")
+        
+#         return base64_image, signal_analysis, file_path if save_image else None
+        
+#     except Exception as e:
+#         logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}", exc_info=True)
+#         return None, None, None
+
 def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
     """
     차트 이미지를 캡처하고 신호를 분석하는 함수
@@ -2301,6 +2384,20 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로 또는 None)
     """
     try:
+        # 브라우저 윈도우 크기 및 줌 설정 (개인 모니터 환경과 일치하도록)
+        logger.info("브라우저 창 크기 및 줌 설정 시작")
+        
+        # 창 크기를 2560x1440으로 설정 (개발 환경과 동일하게)
+        driver.set_window_size(2560, 1440)
+        
+        # 줌 레벨 설정 (150% 스케일링과 동일한 1.5 줌)
+        # CSS transform scale을 사용하여 줌 레벨 설정
+        driver.execute_script("document.body.style.transform = 'scale(1.5)';")
+        driver.execute_script("document.body.style.transformOrigin = '0 0';")
+        
+        # 페이지가 완전히 로드되고 줌 설정이 적용될 시간을 줌
+        time.sleep(3)
+        
         # 스크린샷 캡처
         logger.info("스크린샷 캡처 시작")
         png = driver.get_screenshot_as_png()
@@ -2310,8 +2407,12 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         img_pil = Image.open(io.BytesIO(png))
         logger.info("PIL Image 변환 완료")
         
-        # 이미지 리사이즈 (필요시)
-        img_pil.thumbnail((2000, 2000))
+        # 이미지 크기 기록 (디버깅 목적)
+        original_width, original_height = img_pil.size
+        logger.info(f"원본 캡처 이미지 크기: {original_width}x{original_height}")
+        
+        # 이미지 리사이즈 없이 원본 유지 (ROI 위치 유지를 위해)
+        # img_pil.thumbnail((2000, 2000))  # 이 줄 주석 처리
         
         # 파일 경로 설정 (저장 여부와 관계없이 경로 생성)
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2335,6 +2436,10 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         logger.info("OpenCV 이미지 변환 완료")
         
+        # 이미지 크기 재확인
+        h, w = img_cv.shape[:2]
+        logger.info(f"OpenCV 이미지 크기: {w}x{h}")
+        
         # 이미지가 올바르게 로드되었는지 확인
         if img_cv is None or img_cv.size == 0:
             logger.error("OpenCV 이미지 변환 실패 또는 이미지가 비어 있습니다")
@@ -2356,6 +2461,7 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
                 
                 if signal_analysis:
                     logger.info("차트 신호 분석 완료")
+                    logger.info(f"신호 분석 결과: {signal_analysis}")
                 else:
                     logger.warning("차트 신호 분석 결과 없음")
             finally:
@@ -2369,8 +2475,8 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
     except Exception as e:
         logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}", exc_info=True)
         return None, None, None
-
-
+    
+    
 def modify_orderbook(orderbook):
     # Convert timestamp to KST using timezone-aware method
     timestamp_ms = orderbook['timestamp']
