@@ -2384,24 +2384,28 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로 또는 None)
     """
     try:
-        # 브라우저 윈도우 크기 및 줌 설정 (개인 모니터 환경과 일치하도록)
-        logger.info("브라우저 창 크기 및 줌 설정 시작")
+        # 브라우저 창 크기 설정 (최대한 크게, 하지만 타임아웃 방지)
+        try:
+            logger.info("브라우저 창 크기 설정 시작")
+            # 적당한 창 크기로 설정 (너무 크지 않게)
+            driver.set_window_size(1920, 1080)
+            time.sleep(1)
+        except Exception as e:
+            logger.warning(f"브라우저 창 크기 설정 중 오류 (무시됨): {e}")
         
-        # 창 크기를 2560x1440으로 설정 (개발 환경과 동일하게)
-        driver.set_window_size(2560, 1440)
-        
-        # 줌 레벨 설정 (150% 스케일링과 동일한 1.5 줌)
-        # CSS transform scale을 사용하여 줌 레벨 설정
-        driver.execute_script("document.body.style.transform = 'scale(1.5)';")
-        driver.execute_script("document.body.style.transformOrigin = '0 0';")
-        
-        # 페이지가 완전히 로드되고 줌 설정이 적용될 시간을 줌
-        time.sleep(3)
-        
-        # 스크린샷 캡처
-        logger.info("스크린샷 캡처 시작")
-        png = driver.get_screenshot_as_png()
-        logger.info("스크린샷 메모리에 캡처 완료")
+        # 스크린샷 캡처 - 직접 차트 요소만 찾아서 캡처
+        logger.info("차트 요소 탐색 시작")
+        try:
+            # 차트 영역 찾기 (XPath는 TradingView의 실제 구조에 맞게 조정 필요)
+            chart_element = driver.find_element(By.XPATH, "/html/body/div[2]")
+            logger.info("차트 요소 찾음, 스크린샷 캡처 시작")
+            png = chart_element.screenshot_as_png
+            logger.info("차트 요소 스크린샷 캡처 완료")
+        except Exception as e:
+            logger.warning(f"차트 요소 캡처 실패, 전체 화면 캡처로 대체: {e}")
+            # 차트 요소를 찾지 못한 경우 전체 화면 캡처
+            png = driver.get_screenshot_as_png()
+            logger.info("전체 화면 스크린샷 캡처 완료")
         
         # PIL Image로 변환
         img_pil = Image.open(io.BytesIO(png))
@@ -2410,9 +2414,6 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         # 이미지 크기 기록 (디버깅 목적)
         original_width, original_height = img_pil.size
         logger.info(f"원본 캡처 이미지 크기: {original_width}x{original_height}")
-        
-        # 이미지 리사이즈 없이 원본 유지 (ROI 위치 유지를 위해)
-        # img_pil.thumbnail((2000, 2000))  # 이 줄 주석 처리
         
         # 파일 경로 설정 (저장 여부와 관계없이 경로 생성)
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -2475,8 +2476,8 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
     except Exception as e:
         logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}", exc_info=True)
         return None, None, None
-    
-    
+
+
 def modify_orderbook(orderbook):
     # Convert timestamp to KST using timezone-aware method
     timestamp_ms = orderbook['timestamp']
