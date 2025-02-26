@@ -2520,7 +2520,7 @@ def ai_trading():
     
         # 이미지 캡처 및 신호 분석 (수정된 부분)
         chart_image, signals_analysis, saved_file_path = capture_and_analyze_chart(
-    driver, chart_processor, save_image=True, debug=True)   
+    driver, chart_processor, save_image=False, debug=False)   
         
         if chart_image:
             logger.info(f"TradingView 스크린샷 캡처 및 분석 완료.")
