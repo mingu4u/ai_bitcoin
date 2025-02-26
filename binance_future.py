@@ -258,15 +258,15 @@ class SignalTracker:
 
 def analyze_chart_signals(image_path,
                          # BlackFlag FTS parameters (normalized coordinates)
-                         blackflag_cloud_roi=(0.0, 0.0, 0.9, 0.67),
-                         blackflag_xaxis_yrange=(0.85, 0.90),
+                         blackflag_cloud_roi=(0.07, 0.0, 0.92, 0.67),
+                         blackflag_xaxis_yrange=(0.87, 0.91),
                          blackflag_chunk_size=10,
                          blackflag_needed_red_chunks=2,
                          blackflag_needed_green_chunks=2,
                          # UT Bot parameters
-                         utbot_xaxis_yrange=(0.85, 0.90),
+                         utbot_xaxis_yrange=(0.87, 0.91),
                          # Volume Oscillator parameters (normalized ROI)
-                         volume_roi=(0.92, 0.65, 0.97, 0.84),
+                         volume_roi=(0.93, 0.68, 0.97, 0.88),
                          # Debug flag and prefix
                          debug=False,
                          debug_prefix="debug_"):
@@ -391,7 +391,7 @@ def analyze_chart_signals(image_path,
         # Step D: flip_x_global 및 flip time OCR
         flip_x_global = cx1 + flip_x_local
         cv2.line(debug_img, (flip_x_global, cy1), (flip_x_global, cy2), (0,255,255), 2)
-        x_margin = 50
+        x_margin = 35
         x1px = max(0, flip_x_global - x_margin)
         x2px = min(w, flip_x_global + x_margin)
         y1p = int(blackflag_xaxis_yrange[0] * h)
