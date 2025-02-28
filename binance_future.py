@@ -495,7 +495,7 @@ def analyze_chart_signals(image_path,
         contours_buy, _ = cv2.findContours(mask_buy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours_buy:
             area = cv2.contourArea(cnt)
-            if area < 1500:
+            if area < 750:
                 continue
             x, y, w_box, h_box = cv2.boundingRect(cnt)
             cx = x + w_box // 2
@@ -510,7 +510,7 @@ def analyze_chart_signals(image_path,
         contours_sell, _ = cv2.findContours(mask_sell, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         for cnt in contours_sell:
             area = cv2.contourArea(cnt)
-            if area < 1500:
+            if area < 750:
                 continue
             x, y, w_box, h_box = cv2.boundingRect(cnt)
             cx = x + w_box // 2
@@ -1069,20 +1069,34 @@ class BinanceFuturesTrader:
                         # DB 기록
                         c.execute("""
                             INSERT INTO trades 
-                            (timestamp, trade_type, order_id, decision, percentage, reason, 
-                            btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
-                            reflection, tp_order_id, sl_order_id) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
+                                (timestamp, trade_type, order_id, decision, percentage, reason, 
+                                btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                                btc_current_price, reflection, tp_order_id, sl_order_id,
+                                blackflag_signal, blackflag_candles_ago, utbot_signal, 
+                                utbot_candles_ago, volume_osc_current, stop_loss_price) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
+                            (
                             order_timestamp, trade_type, order_id, decision,
                             int(trade_percentage), reason,
                             used_usdt, free_usdt, total_usdt,
                             btc_avg_buy_price, current_btc_price,
                             last_reflection,  # 기존 reflection을 유지
                             order_id if reason == 'AI TP Realized' else None,
-                            order_id if reason == 'AI SL Realized' else None
-                        ))                        
-                                                
+                            order_id if reason == 'AI SL Realized' else None,
+                            None,None,None,None,None,None
+                            ))                        
+            #     c.execute("""INSERT INTO trades 
+            #     (timestamp, trade_type, order_id, decision, percentage, reason, 
+            #     btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+            #     btc_current_price, reflection, tp_order_id, sl_order_id,
+            #     blackflag_signal, blackflag_candles_ago, utbot_signal, 
+            #     utbot_candles_ago, volume_osc_current, stop_loss_price) 
+            #     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            # (timestamp, trade_type, order_id, decision, percentage, reason, 
+            # btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+            # btc_current_price, reflection, tp_order_id, sl_order_id,
+            # blackflag_signal, blackflag_candles_ago, utbot_signal,
+            # utbot_candles_ago, volume_osc_current, stop_loss_price))                       
                         conn.commit()
                         processed_orders.add(order_id)
                         self.logger.info(f"Recorded {trade_type} trade: {order_id}")
@@ -1890,8 +1904,8 @@ def generate_reflection(trades_df, current_market_data):
             {
                 "role": "system",
                 "content": """
-    You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance and current market conditions to generate specific, actionable insights and recommendations that can improve future trading decisions made by the Trading AI. Your analysis should focus on enhancing trading performance by providing clear feedback on past trades, identifying areas of improvement, and suggesting precise adjustments to the trading strategy, based solely on the data provided.
-    """
+                    You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance and current market conditions to generate specific, actionable insights and recommendations that can improve future trading decisions made by the Trading AI. Your analysis should focus on enhancing trading performance by providing clear feedback on past trades, identifying areas of improvement, and suggesting precise adjustments to the trading strategy, based solely on the data provided.
+                    """
             },
             {
                 "role": "user",
