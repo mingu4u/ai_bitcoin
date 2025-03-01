@@ -39,6 +39,58 @@ import cv2
 import numpy as np
 import pytesseract
 import re
+import gc
+import psutil
+
+# WebDriver 관리자 클래스 (싱글톤 패턴)
+class WebDriverManager:
+    _instance = None
+    
+    @classmethod
+    def get_driver(cls):
+        if cls._instance is None or not cls._is_alive(cls._instance):
+            cls._instance = safe_create_driver()
+        return cls._instance
+    
+    @classmethod
+    def _is_alive(cls, driver):
+        try:
+            driver.current_url  # 드라이버가 응답하는지 간단히 확인
+            return True
+        except:
+            return False
+    
+    @classmethod
+    def quit(cls):
+        if cls._instance:
+            try:
+                cls._instance.quit()
+            except:
+                pass
+            cls._instance = None
+            
+# 시스템 리소스 모니터링 및 자가 복구 함수
+def check_resource_usage():
+    # 메모리 사용량 모니터링
+    memory_percent = psutil.virtual_memory().percent
+    if memory_percent > 80:
+        logger.warning(f"High memory usage detected: {memory_percent}%")
+        # 정리 작업 수행
+        WebDriverManager.quit()
+        cleanup_chrome_processes()
+        gc.collect()
+        
+# 모든 크롬 프로세스 종료 후 정리
+def cleanup_chrome_processes():
+    try:
+        if os.getenv("ENVIRONMENT") == "ec2":
+            os.system('sudo pkill -f "chrome|chromium|chromedriver"')
+        elif os.getenv("ENVIRONMENT") == "local":
+            os.system('taskkill /f /im chrome.exe')
+            os.system('taskkill /f /im chromedriver.exe')
+        time.sleep(2)  # 프로세스들이 완전히 종료되기를 기다림
+    except Exception as e:
+        logger.error(f"Chrome processes cleanup failed: {e}")
 
 class SignalTracker:
     def __init__(self, cache_file="trading_signals_cache.json"):
@@ -478,71 +530,71 @@ def analyze_chart_signals(image_path,
                 "flip_x": flip_x_global,
                 "flip_time": time_label,
                 "stop_loss_price": stop_loss_price}
-
+    
     ############### UT Bot Alerts Detection ###############
     def detect_utbot():
-        img_ut = img.copy()
-        img_hsv = cv2.cvtColor(img_ut, cv2.COLOR_BGR2HSV)
-        # HSV 범위: 하늘색 for Buy, 주황색 for Sell
-        lower_cyan   = np.array([80, 100, 100])
-        upper_cyan   = np.array([100, 255, 255])   # Buy
-        lower_orange = np.array([10, 150, 100])
-        upper_orange = np.array([25, 255, 255])    # Sell
+            img_ut = img.copy()
+            img_hsv = cv2.cvtColor(img_ut, cv2.COLOR_BGR2HSV)
+            # HSV 범위: 하늘색 for Buy, 주황색 for Sell
+            lower_cyan   = np.array([80, 100, 100])
+            upper_cyan   = np.array([100, 255, 255])   # Buy
+            lower_orange = np.array([10, 150, 100])
+            upper_orange = np.array([25, 255, 255])    # Sell
 
-        bounding_data = []
-        # Buy 신호 탐색
-        mask_buy = cv2.inRange(img_hsv, lower_cyan, upper_cyan)
-        contours_buy, _ = cv2.findContours(mask_buy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in contours_buy:
-            area = cv2.contourArea(cnt)
-            if area < 750:
-                continue
-            x, y, w_box, h_box = cv2.boundingRect(cnt)
-            cx = x + w_box // 2
-            bounding_data.append({
-                "signal": "Buy",
-                "cx": cx,
-                "box": (x, y, w_box, h_box)
-            })
-            cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (255,255,0), 2)
-        # Sell 신호 탐색
-        mask_sell = cv2.inRange(img_hsv, lower_orange, upper_orange)
-        contours_sell, _ = cv2.findContours(mask_sell, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in contours_sell:
-            area = cv2.contourArea(cnt)
-            if area < 750:
-                continue
-            x, y, w_box, h_box = cv2.boundingRect(cnt)
-            cx = x + w_box // 2
-            bounding_data.append({
-                "signal": "Sell",
-                "cx": cx,
-                "box": (x, y, w_box, h_box)
-            })
-            cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (0,165,255), 2)
-        alert_signal = "None"
-        alert_time = ""
-        center_x = None
-        if len(bounding_data) > 0:
-            best_box = max(bounding_data, key=lambda d: d["cx"])
-            alert_signal = best_box["signal"]
-            center_x = best_box["cx"]
-            (bx, by, bw, bh) = best_box["box"]
-            cv2.rectangle(debug_img, (bx,by), (bx+bw,by+bh), (0,255,255), 3)
-        if alert_signal != "None" and center_x is not None:
-            x_margin = 35
-            x1px = max(0, center_x - x_margin)
-            x2px = min(w, center_x + x_margin)
-            y1p = int(utbot_xaxis_yrange[0] * h)
-            y2p = int(utbot_xaxis_yrange[1] * h)
-            roi_time = img_ut[y1p:y2p, x1px:x2px]
-            cv2.rectangle(debug_img, (x1px,y1p), (x2px,y2p), (0,0,255), 2)
-            ocr_config = "--psm 7 --oem 3"
-            time_ocr_text = pytesseract.image_to_string(roi_time, config=ocr_config)
-            alert_time = time_ocr_text.strip().replace("\n"," ").strip()
-        return {"alert_signal": alert_signal, "alert_time": alert_time}
+            bounding_data = []
+            # Buy 신호 탐색
+            mask_buy = cv2.inRange(img_hsv, lower_cyan, upper_cyan)
+            contours_buy, _ = cv2.findContours(mask_buy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours_buy:
+                area = cv2.contourArea(cnt)
+                if area < 750:
+                    continue
+                x, y, w_box, h_box = cv2.boundingRect(cnt)
+                cx = x + w_box // 2
+                bounding_data.append({
+                    "signal": "Buy",
+                    "cx": cx,
+                    "box": (x, y, w_box, h_box)
+                })
+                cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (255,255,0), 2)
+            # Sell 신호 탐색
+            mask_sell = cv2.inRange(img_hsv, lower_orange, upper_orange)
+            contours_sell, _ = cv2.findContours(mask_sell, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours_sell:
+                area = cv2.contourArea(cnt)
+                if area < 750:
+                    continue
+                x, y, w_box, h_box = cv2.boundingRect(cnt)
+                cx = x + w_box // 2
+                bounding_data.append({
+                    "signal": "Sell",
+                    "cx": cx,
+                    "box": (x, y, w_box, h_box)
+                })
+                cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (0,165,255), 2)
+            alert_signal = "None"
+            alert_time = ""
+            center_x = None
+            if len(bounding_data) > 0:
+                best_box = max(bounding_data, key=lambda d: d["cx"])
+                alert_signal = best_box["signal"]
+                center_x = best_box["cx"]
+                (bx, by, bw, bh) = best_box["box"]
+                cv2.rectangle(debug_img, (bx,by), (bx+bw,by+bh), (0,255,255), 3)
+            if alert_signal != "None" and center_x is not None:
+                x_margin = 35
+                x1px = max(0, center_x - x_margin)
+                x2px = min(w, center_x + x_margin)
+                y1p = int(utbot_xaxis_yrange[0] * h)
+                y2p = int(utbot_xaxis_yrange[1] * h)
+                roi_time = img_ut[y1p:y2p, x1px:x2px]
+                cv2.rectangle(debug_img, (x1px,y1p), (x2px,y2p), (0,0,255), 2)
+                ocr_config = "--psm 7 --oem 3"
+                time_ocr_text = pytesseract.image_to_string(roi_time, config=ocr_config)
+                alert_time = time_ocr_text.strip().replace("\n"," ").strip()
+            return {"alert_signal": alert_signal, "alert_time": alert_time}
     ############ End UT Bot Detection ############
-    
+        
     ############## Volume Oscillator Detection ##############
     def read_volume_osc():
         img_vol = img.copy()
@@ -588,34 +640,34 @@ def analyze_chart_signals(image_path,
         if result_long["flip_x"] is not None and result_short["flip_x"] is not None:
             if result_long["flip_x"] >= result_short["flip_x"]:
                 blackflag_final = {"flip_detected": "long",
-                                   "flip_x": result_long["flip_x"],
-                                   "flip_time": result_long["flip_time"],
-                                   "stop_loss_price": result_long["stop_loss_price"]}
+                                "flip_x": result_long["flip_x"],
+                                "flip_time": result_long["flip_time"],
+                                "stop_loss_price": result_long["stop_loss_price"]}
             else:
                 blackflag_final = {"flip_detected": "short",
-                                   "flip_x": result_short["flip_x"],
-                                   "flip_time": result_short["flip_time"],
-                                   "stop_loss_price": result_short["stop_loss_price"]}
+                                "flip_x": result_short["flip_x"],
+                                "flip_time": result_short["flip_time"],
+                                "stop_loss_price": result_short["stop_loss_price"]}
         elif result_long["flip_x"] is not None:
             blackflag_final = {"flip_detected": "long",
-                               "flip_x": result_long["flip_x"],
-                               "flip_time": result_long["flip_time"],
-                               "stop_loss_price": result_long["stop_loss_price"]}
+                            "flip_x": result_long["flip_x"],
+                            "flip_time": result_long["flip_time"],
+                            "stop_loss_price": result_long["stop_loss_price"]}
         else:
             blackflag_final = {"flip_detected": "short",
-                               "flip_x": result_short["flip_x"],
-                               "flip_time": result_short["flip_time"],
-                               "stop_loss_price": result_short["stop_loss_price"]}
+                            "flip_x": result_short["flip_x"],
+                            "flip_time": result_short["flip_time"],
+                            "stop_loss_price": result_short["stop_loss_price"]}
     elif result_long.get("flip_detected"):
         blackflag_final = {"flip_detected": "long",
-                           "flip_x": result_long["flip_x"],
-                           "flip_time": result_long["flip_time"],
-                           "stop_loss_price": result_long["stop_loss_price"]}
+                        "flip_x": result_long["flip_x"],
+                        "flip_time": result_long["flip_time"],
+                        "stop_loss_price": result_long["stop_loss_price"]}
     elif result_short.get("flip_detected"):
         blackflag_final = {"flip_detected": "short",
-                           "flip_x": result_short["flip_x"],
-                           "flip_time": result_short["flip_time"],
-                           "stop_loss_price": result_short["stop_loss_price"]}
+                        "flip_x": result_short["flip_x"],
+                        "flip_time": result_short["flip_time"],
+                        "stop_loss_price": result_short["stop_loss_price"]}
     else:
         blackflag_final = {"flip_detected": "none", "flip_x": None, "flip_time": "", "stop_loss_price": None}
 
@@ -626,10 +678,16 @@ def analyze_chart_signals(image_path,
     # 최종 debug 이미지 저장(하나로 통합)
     save_debug_final(debug_img, "merged")
 
+    # 큰 이미지 객체 명시적 해제
+    del img
+    del debug_img
+    
+    # GC 강제 수행
+    gc.collect()
+
     return {"BlackFlag": blackflag_final,
             "UTBot": utbot_result,
             "VolumeOsc": volume_result}
-
 
 class ChartSignalProcessor:
     """
@@ -706,15 +764,15 @@ class ChartSignalProcessor:
         
         # BlackFlag 신호 정보
         blackflag_info = "None" if data["BlackFlag_Signal"] is None else \
-                          f"{data['BlackFlag_Signal']} ({data['BlackFlag_CandlesAgo']} 캔들 전)"
+                        f"{data['BlackFlag_Signal']} ({data['BlackFlag_CandlesAgo']} 캔들 전)"
         
         # UTBot 신호 정보
         utbot_info = "None" if data["UTBot_Signal"] is None else \
-                     f"{data['UTBot_Signal']} ({data['UTBot_CandlesAgo']} 캔들 전)"
+                    f"{data['UTBot_Signal']} ({data['UTBot_CandlesAgo']} 캔들 전)"
         
         # Volume Oscillator 정보
         vol_history = ", ".join([str(round(v, 2)) if v is not None else "None" 
-                                 for v in data["VolumeOsc_History"]])
+                                for v in data["VolumeOsc_History"]])
         
         # Stop Loss 가격 정보
         sl_price = "None" if data["StopLoss_Price"] is None else str(data["StopLoss_Price"])
@@ -736,37 +794,6 @@ class ChartSignalProcessor:
         
         return prompt_text
 
-# def main():
-#     """
-#     메인 함수 - 트레이딩 신호 처리 및 AI 프롬프트 생성 예시
-#     """
-#     # 차트 신호 프로세서 초기화
-#     processor = ChartSignalProcessor()
-    
-#     # 예시: 차트 이미지 처리
-#     image_path = "chart_image.png"  # 실제 이미지 경로로 변경 필요
-    
-#     # 이미지가 존재하는지 확인
-#     if os.path.exists(image_path):
-#         # 이미지 분석 및 신호 업데이트
-#         result = processor.process_chart_image(image_path, debug=True)
-        
-#         if result:
-#             print("차트 분석 결과:", result)
-            
-#             # AI 프롬프트 데이터 생성
-#             prompt_data = processor.generate_ai_prompt_data()
-#             print("\nAI 프롬프트 데이터:", json.dumps(prompt_data, indent=2))
-            
-#             # AI 프롬프트 텍스트 생성
-#             prompt_text = processor.create_prompt_text()
-#             print("\nAI 프롬프트 텍스트:")
-#             print(prompt_text)
-#         else:
-#             print("차트 분석 실패")
-#     else:
-#         print(f"이미지 파일을 찾을 수 없습니다: {image_path}")
-
 class BinanceFuturesTrader:
     def __init__(self, api_key: str, api_secret: str, logger):
         self.exchange = ccxt.binance({
@@ -777,7 +804,6 @@ class BinanceFuturesTrader:
                 'defaultType': 'future'
             }
         })
-        # self.setup_logging()
         self.symbol = "BTC/USDT"
         self.leverage = 20  # 기본 레버리지 설정
         self.logger = logger
@@ -816,26 +842,26 @@ class BinanceFuturesTrader:
         return False
 
     def _handle_position_reduction(self, current_position, side, buy_amount, current_price):
-        """포지션 축소/청산을 위한 수량 계산"""
-        position_size = float(current_position['contracts'])
-        position_notional = float(current_position['notional'])
-        
-        # 주문 비율 계산
-        reduction_ratio = buy_amount / position_notional
-        quantity = position_size * reduction_ratio
-        
-        # 남은 포지션 크기 계산
-        remaining_size = position_size - quantity
-        
-        # 최소 주문 수량 (0.001 BTC)
-        MIN_ORDER_SIZE = 0.001
-        
-        # 남은 수량이 최소 주문 수량보다 작으면 전체 청산
-        if remaining_size < MIN_ORDER_SIZE:
-            self.logger.info(f"Remaining position ({remaining_size} BTC) would be below minimum size. Will close entire position.")
-            quantity = position_size
+            """포지션 축소/청산을 위한 수량 계산"""
+            position_size = float(current_position['contracts'])
+            position_notional = float(current_position['notional'])
+            
+            # 주문 비율 계산
+            reduction_ratio = buy_amount / position_notional
+            quantity = position_size * reduction_ratio
+            
+            # 남은 포지션 크기 계산
+            remaining_size = position_size - quantity
+            
+            # 최소 주문 수량 (0.001 BTC)
+            MIN_ORDER_SIZE = 0.001
+            
+            # 남은 수량이 최소 주문 수량보다 작으면 전체 청산
+            if remaining_size < MIN_ORDER_SIZE:
+                self.logger.info(f"Remaining position ({remaining_size} BTC) would be below minimum size. Will close entire position.")
+                quantity = position_size
 
-        return quantity
+            return quantity
 
     def _handle_position_increase(self, current_position, side, buy_amount, current_price,
                                     sl_price, tp_price, pl_ratio, min_order_value):
@@ -892,38 +918,34 @@ class BinanceFuturesTrader:
 
         return tp_price, sl_price  
 
-
     def get_active_ai_positions(self):
         """현재 활성화된 모든 AI 포지션 ID 조회"""
         try:
-            conn = sqlite3.connect('bitcoin_trades.db')
-            c = conn.cursor()
-            c.execute("""
-                SELECT order_id, decision 
-                FROM trades 
-                WHERE trade_type = 'AI' 
-                AND decision != 'hold'
-                AND timestamp >= (
-                    SELECT COALESCE(
-                        (SELECT timestamp 
-                        FROM trades 
-                        WHERE reason LIKE '%Close%' 
-                        ORDER BY timestamp DESC 
-                        LIMIT 1),
-                        '1970-01-01'  -- 청산 기록이 없는 경우 가장 오래된 날짜 사용
+            with sqlite3.connect('bitcoin_trades.db') as conn:
+                c = conn.cursor()
+                c.execute("""
+                    SELECT order_id, decision 
+                    FROM trades 
+                    WHERE trade_type = 'AI' 
+                    AND decision != 'hold'
+                    AND timestamp >= (
+                        SELECT COALESCE(
+                            (SELECT timestamp 
+                            FROM trades 
+                            WHERE reason LIKE '%Close%' 
+                            ORDER BY timestamp DESC 
+                            LIMIT 1),
+                            '1970-01-01'  -- 청산 기록이 없는 경우 가장 오래된 날짜 사용
+                        )
                     )
-                )
-                ORDER BY timestamp DESC
-            """)
-            return c.fetchall()
+                    ORDER BY timestamp DESC
+                """)
+                return c.fetchall()
         except Exception as e:
             self.logger.error(f"Error fetching active AI positions: {e}")
             return []
-        finally:
-            if 'conn' in locals():
-                conn.close()
 
-        # 수동 거래 모니터링
+    # 수동 거래 모니터링
     def monitor_manual_trades(self):
         try:
             since = int((datetime.now() - timedelta(minutes=5)).timestamp() * 1000)
@@ -1007,286 +1029,271 @@ class BinanceFuturesTrader:
             # 처리된 주문 ID 추적을 위한 set
             processed_orders = set()
 
-            conn = sqlite3.connect('bitcoin_trades.db')
-            c = conn.cursor()
-            
-            def get_last_reflection(conn):
-                """DB에서 가장 최근 reflection 값을 가져오는 함수"""
-                try:
-                    c = conn.cursor()
-                    c.execute("""
-                        SELECT reflection FROM trades
-                        WHERE reflection IS NOT NULL AND reflection != ''
-                        ORDER BY timestamp DESC
-                        LIMIT 1
-                    """)
-                    result = c.fetchone()
-                    return result[0] if result else None
-                except Exception as e:
-                    logger.error(f"Error fetching last reflection: {e}")
-                    return None            
-                        
-            
-            try:
-                def process_tp_sl_order(order, is_tp=True):
-                    """TP/SL 주문 처리 함수"""
-                    try:
-                        order_id = str(order['id'])
-                        if order_id in processed_orders:
-                            return
-                            
-                        # 중복 체크
-                        c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
-                        if c.fetchone():
-                            self.logger.info(f"Skipping duplicate order: {order_id}")
-                            return
-
-                        self.logger.info(f"Processing {'TP' if is_tp else 'SL'} order: {order_id}")
-                        
-                        order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
-                        
-                        # AI 주문 여부 확인
-                        client_order_id = order.get('clientOrderId', '')
-                        is_ai_order = False
-                        if client_order_id and client_order_id.startswith(('tp_', 'sl_')):
-                            parent_id = client_order_id.split('_')[-1]
-                            is_ai_order = any(str(pos_id) == parent_id for pos_id, _ in active_ai_positions)
-                            self.logger.info(f"TP/SL order for parent {parent_id}: {'AI' if is_ai_order else 'Manual'} position")
-                        
-                        trade_type = 'AI' if is_ai_order else 'MANUAL'
-                        reason = (f"AI {('TP' if is_tp else 'SL')} Realized" if is_ai_order 
-                                else f"Manual {('TP' if is_tp else 'SL')} Realized")
-                        
-                        decision = 'sell' if order['side'] == 'sell' else 'buy'
-                        
-                        # 거래 비율 계산
-                        actual_trade_amount = abs(order['cost']) / self.leverage
-                        trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
-
-                        # 마지막 reflection 유지
-                        last_reflection = get_last_reflection(conn)
-
-                        # DB 기록
-                        c.execute("""
-                            INSERT INTO trades 
-                                (timestamp, trade_type, order_id, decision, percentage, reason, 
-                                btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                                btc_current_price, reflection, tp_order_id, sl_order_id,
-                                blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                                utbot_candles_ago, volume_osc_current, stop_loss_price) 
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
-                            (
-                            order_timestamp, trade_type, order_id, decision,
-                            int(trade_percentage), reason,
-                            used_usdt, free_usdt, total_usdt,
-                            btc_avg_buy_price, current_btc_price,
-                            last_reflection,  # 기존 reflection을 유지
-                            order_id if reason == 'AI TP Realized' else None,
-                            order_id if reason == 'AI SL Realized' else None,
-                            None,None,None,None,None,None
-                            ))                        
-            #     c.execute("""INSERT INTO trades 
-            #     (timestamp, trade_type, order_id, decision, percentage, reason, 
-            #     btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-            #     btc_current_price, reflection, tp_order_id, sl_order_id,
-            #     blackflag_signal, blackflag_candles_ago, utbot_signal, 
-            #     utbot_candles_ago, volume_osc_current, stop_loss_price) 
-            #     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            # (timestamp, trade_type, order_id, decision, percentage, reason, 
-            # btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-            # btc_current_price, reflection, tp_order_id, sl_order_id,
-            # blackflag_signal, blackflag_candles_ago, utbot_signal,
-            # utbot_candles_ago, volume_osc_current, stop_loss_price))                       
-                        conn.commit()
-                        processed_orders.add(order_id)
-                        self.logger.info(f"Recorded {trade_type} trade: {order_id}")
-                    except Exception as e:
-                        self.logger.error(f"Error processing TP/SL order {order.get('id')}: {e}")
-                        self.logger.error(f"Order details: {json.dumps(order, indent=2)}")
-
-                def process_market_order(order):
-                    """일반 거래 처리 함수"""
-                    try:
-                        order_id = str(order['id'])
-                        if order_id in processed_orders:
-                            return
-                            
-                        # 중복 체크
-                        c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
-                        if c.fetchone():
-                            return
-
-                        order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
-                        
-                        # TP/SL 주문 확인
-                        tp_order = tp_orders_by_parent.get(order_id)
-                        sl_order = sl_orders_by_parent.get(order_id)
-                        is_reduce_only = order.get('info', {}).get('reduceOnly', False)
-
-                        # AI 포지션 체크
-                        is_ai_entry = False
-                        ai_position_decision = None
-                        
-                        # ClientOrderId로 AI 주문 여부 확인
-                        client_order_id = order.get('clientOrderId', '')
-                        parent_id = None
-                        if client_order_id:
-                            if client_order_id.startswith(('tp_', 'sl_')):
-                                parent_id = client_order_id.split('_')[-1]
-                        
-                        if parent_id:
-                            for pos_id, decision in active_ai_positions:
-                                if str(pos_id) == parent_id:
-                                    is_ai_entry = True
-                                    ai_position_decision = decision
-                                    break
-                        else:
-                            for pos_id, decision in active_ai_positions:
-                                if str(pos_id) == order_id:
-                                    is_ai_entry = True
-                                    ai_position_decision = decision
-                                    break
-
-                        # 거래 유형 판별
-                        if is_ai_entry:
-                            if not is_reduce_only:
-                                trade_type = 'AI'
-                                reason = 'AI Entry'
-                            else:
-                                if tp_order:
-                                    trade_type = 'AI'
-                                    reason = 'AI TP Realized'
-                                elif sl_order:
-                                    trade_type = 'AI'
-                                    reason = 'AI SL Realized'
-                                else:
-                                    return
-                        else:
-                            if is_reduce_only:
-                                # 포지션 종료 케이스 분석
-                                trade_type = 'MANUAL'
-                                
-                                # 1. TP/SL 주문인지 먼저 확인
-                                client_order_id = order.get('clientOrderId', '')
-                                if client_order_id and client_order_id.startswith(('tp_', 'sl_')):
-                                    # 2. parent_id를 통해 AI 포지션과 연관되어 있는지 확인
-                                    parent_id = client_order_id.split('_')[-1]
-                                    is_ai_tp_sl = any(str(pos_id) == parent_id for pos_id, _ in active_ai_positions)
-                                    reason = 'Manual Close of AI Position' if is_ai_tp_sl else 'Manual Close of AI Position'
-                                    self.logger.info(f"TP/SL order for parent {parent_id}: {'AI' if is_ai_tp_sl else 'Manual'} position")
-                                else:
-                                    # 3. 일반 청산 주문인 경우
-                                    for pos_id, ai_decision in active_ai_positions:
-                                        is_closing_ai_position = (
-                                            (ai_decision == 'buy' and order['side'] == 'sell') or 
-                                            (ai_decision == 'sell' and order['side'] == 'buy')
-                                        )
-                                        if is_closing_ai_position:
-                                            reason = 'Manual Close of AI Position'
-                                            self.logger.info(f"Manual close of AI position: {pos_id}")
-                                            break
-                                    else:
-                                        reason = 'Manual Close of AI Position'
-                            else:
-                                trade_type = 'MANUAL'
-                                if tp_order:
-                                    reason = 'Manual TP Realized'
-                                elif sl_order:
-                                    reason = 'Manual SL Realized'
-                                else:
-                                    reason = 'Manual Entry'
-
-                        decision = 'buy' if order['side'] == 'buy' else 'sell'
-                        
-                        # 거래 비율 계산
-                        actual_trade_amount = abs(order['cost']) / self.leverage
-                        trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
-
-                        # TP/SL 주문 ID
-                        tp_order_id = tp_order['id'] if tp_order else None
-                        sl_order_id = sl_order['id'] if sl_order else None
-
-                        # 마지막 reflection 유지
-                        last_reflection = get_last_reflection(conn)
-
-                        # DB 기록
-                        c.execute("""
-                            INSERT INTO trades 
-                            (timestamp, trade_type, order_id, decision, percentage, reason, 
-                            btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
-                            reflection, tp_order_id, sl_order_id) 
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            order_timestamp, trade_type, order_id, decision,
-                            int(trade_percentage), reason,
-                            used_usdt, free_usdt, total_usdt,
-                            btc_avg_buy_price, current_btc_price,
-                            last_reflection,  # 기존 reflection을 유지
-                            tp_order_id, sl_order_id
-                        ))
-                        conn.commit()
-                        processed_orders.add(order_id)
-                        self.logger.info(f"{trade_type} trade recorded: {decision.upper()} at {current_btc_price} (Reason: {reason})")
-                        
-                    except Exception as e:
-                        self.logger.error(f"Error processing market order {order.get('id')}: {e}")
-                        self.logger.error(f"Order details: {json.dumps(order, indent=2)}")
-
-                # 메인 처리 로직 실행
-                for tp_order in realized_tp_orders:
-                    process_tp_sl_order(tp_order, True)
-                for sl_order in realized_sl_orders:
-                    process_tp_sl_order(sl_order, False)
+            with sqlite3.connect('bitcoin_trades.db') as conn:
+                c = conn.cursor()
                 
-                # 일반 거래 처리 (TP/SL 제외)
-                for order in orders:
-                    if order['type'] == 'market' and str(order['id']) not in processed_orders:
-                        process_market_order(order)
-                        
-            finally:
-                conn.close()
-                self.logger.info("Database connection closed")
+                def get_last_reflection(conn):
+                    """DB에서 가장 최근 reflection 값을 가져오는 함수"""
+                    try:
+                        c = conn.cursor()
+                        c.execute("""
+                            SELECT reflection FROM trades
+                            WHERE reflection IS NOT NULL AND reflection != ''
+                            ORDER BY timestamp DESC
+                            LIMIT 1
+                        """)
+                        result = c.fetchone()
+                        return result[0] if result else None
+                    except Exception as e:
+                        logger.error(f"Error fetching last reflection: {e}")
+                        return None            
                             
+                
+                try:
+                    def process_tp_sl_order(order, is_tp=True):
+                        """TP/SL 주문 처리 함수"""
+                        try:
+                            order_id = str(order['id'])
+                            if order_id in processed_orders:
+                                return
+                                
+                            # 중복 체크
+                            c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
+                            if c.fetchone():
+                                self.logger.info(f"Skipping duplicate order: {order_id}")
+                                return
+
+                            self.logger.info(f"Processing {'TP' if is_tp else 'SL'} order: {order_id}")
+                            
+                            order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
+                            
+                            # AI 주문 여부 확인
+                            client_order_id = order.get('clientOrderId', '')
+                            is_ai_order = False
+                            if client_order_id and client_order_id.startswith(('tp_', 'sl_')):
+                                parent_id = client_order_id.split('_')[-1]
+                                is_ai_order = any(str(pos_id) == parent_id for pos_id, _ in active_ai_positions)
+                                self.logger.info(f"TP/SL order for parent {parent_id}: {'AI' if is_ai_order else 'Manual'} position")
+                            
+                            trade_type = 'AI' if is_ai_order else 'MANUAL'
+                            reason = (f"AI {('TP' if is_tp else 'SL')} Realized" if is_ai_order 
+                                    else f"Manual {('TP' if is_tp else 'SL')} Realized")
+                            
+                            decision = 'sell' if order['side'] == 'sell' else 'buy'
+                            
+                            # 거래 비율 계산
+                            actual_trade_amount = abs(order['cost']) / self.leverage
+                            trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
+
+                            # 마지막 reflection 유지
+                            last_reflection = get_last_reflection(conn)
+
+                            # DB 기록
+                            c.execute("""
+                                INSERT INTO trades 
+                                    (timestamp, trade_type, order_id, decision, percentage, reason, 
+                                    btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                                    btc_current_price, reflection, tp_order_id, sl_order_id,
+                                    blackflag_signal, blackflag_candles_ago, utbot_signal, 
+                                    utbot_candles_ago, volume_osc_current, stop_loss_price) 
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", 
+                                (
+                                order_timestamp, trade_type, order_id, decision,
+                                int(trade_percentage), reason,
+                                used_usdt, free_usdt, total_usdt,
+                                btc_avg_buy_price, current_btc_price,
+                                last_reflection,  # 기존 reflection을 유지
+                                order_id if reason == 'AI TP Realized' else None,
+                                order_id if reason == 'AI SL Realized' else None,
+                                None,None,None,None,None,None
+                                ))                        
+                            conn.commit()
+                            processed_orders.add(order_id)
+                            self.logger.info(f"Recorded {trade_type} trade: {order_id}")
+                        except Exception as e:
+                            self.logger.error(f"Error processing TP/SL order {order.get('id')}: {e}")
+                            self.logger.error(f"Order details: {json.dumps(order, indent=2)}")
+
+                    def process_market_order(order):
+                        """일반 거래 처리 함수"""
+                        try:
+                            order_id = str(order['id'])
+                            if order_id in processed_orders:
+                                return
+                                
+                            # 중복 체크
+                            c.execute("SELECT id FROM trades WHERE order_id = ?", (order_id,))
+                            if c.fetchone():
+                                return
+
+                            order_timestamp = datetime.fromtimestamp(order['lastUpdateTimestamp']/1000).isoformat()
+                            
+                            # TP/SL 주문 확인
+                            tp_order = tp_orders_by_parent.get(order_id)
+                            sl_order = sl_orders_by_parent.get(order_id)
+                            is_reduce_only = order.get('info', {}).get('reduceOnly', False)
+
+                            # AI 포지션 체크
+                            is_ai_entry = False
+                            ai_position_decision = None
+                            
+                            # ClientOrderId로 AI 주문 여부 확인
+                            client_order_id = order.get('clientOrderId', '')
+                            parent_id = None
+                            if client_order_id:
+                                if client_order_id.startswith(('tp_', 'sl_')):
+                                    parent_id = client_order_id.split('_')[-1]
+                            
+                            if parent_id:
+                                for pos_id, decision in active_ai_positions:
+                                    if str(pos_id) == parent_id:
+                                        is_ai_entry = True
+                                        ai_position_decision = decision
+                                        break
+                            else:
+                                for pos_id, decision in active_ai_positions:
+                                    if str(pos_id) == order_id:
+                                        is_ai_entry = True
+                                        ai_position_decision = decision
+                                        break
+
+                            # 거래 유형 판별
+                            if is_ai_entry:
+                                if not is_reduce_only:
+                                    trade_type = 'AI'
+                                    reason = 'AI Entry'
+                                else:
+                                    if tp_order:
+                                        trade_type = 'AI'
+                                        reason = 'AI TP Realized'
+                                    elif sl_order:
+                                        trade_type = 'AI'
+                                        reason = 'AI SL Realized'
+                                    else:
+                                        return
+                            else:
+                                if is_reduce_only:
+                                    # 포지션 종료 케이스 분석
+                                    trade_type = 'MANUAL'
+                                    
+                                    # 1. TP/SL 주문인지 먼저 확인
+                                    client_order_id = order.get('clientOrderId', '')
+                                    if client_order_id and client_order_id.startswith(('tp_', 'sl_')):
+                                        # 2. parent_id를 통해 AI 포지션과 연관되어 있는지 확인
+                                        parent_id = client_order_id.split('_')[-1]
+                                        is_ai_tp_sl = any(str(pos_id) == parent_id for pos_id, _ in active_ai_positions)
+                                        reason = 'Manual Close of AI Position' if is_ai_tp_sl else 'Manual Close of AI Position'
+                                        self.logger.info(f"TP/SL order for parent {parent_id}: {'AI' if is_ai_tp_sl else 'Manual'} position")
+                                    else:
+                                        # 3. 일반 청산 주문인 경우
+                                        for pos_id, ai_decision in active_ai_positions:
+                                            is_closing_ai_position = (
+                                                (ai_decision == 'buy' and order['side'] == 'sell') or 
+                                                (ai_decision == 'sell' and order['side'] == 'buy')
+                                            )
+                                            if is_closing_ai_position:
+                                                reason = 'Manual Close of AI Position'
+                                                self.logger.info(f"Manual close of AI position: {pos_id}")
+                                                break
+                                        else:
+                                            reason = 'Manual Close of AI Position'
+                                else:
+                                    trade_type = 'MANUAL'
+                                    if tp_order:
+                                        reason = 'Manual TP Realized'
+                                    elif sl_order:
+                                        reason = 'Manual SL Realized'
+                                    else:
+                                        reason = 'Manual Entry'
+
+                            decision = 'buy' if order['side'] == 'buy' else 'sell'
+                            
+                            # 거래 비율 계산
+                            actual_trade_amount = abs(order['cost']) / self.leverage
+                            trade_percentage = (actual_trade_amount / total_usdt) * 100 if total_usdt > 0 else 0
+
+                            # TP/SL 주문 ID
+                            tp_order_id = tp_order['id'] if tp_order else None
+                            sl_order_id = sl_order['id'] if sl_order else None
+
+                            # 마지막 reflection 유지
+                            last_reflection = get_last_reflection(conn)
+
+                            # DB 기록
+                            c.execute("""
+                                INSERT INTO trades 
+                                (timestamp, trade_type, order_id, decision, percentage, reason, 
+                                btc_balance, usdt_balance, total_assets, btc_avg_buy_price, btc_current_price,
+                                reflection, tp_order_id, sl_order_id) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                order_timestamp, trade_type, order_id, decision,
+                                int(trade_percentage), reason,
+                                used_usdt, free_usdt, total_usdt,
+                                btc_avg_buy_price, current_btc_price,
+                                last_reflection,  # 기존 reflection을 유지
+                                tp_order_id, sl_order_id
+                            ))
+                            conn.commit()
+                            processed_orders.add(order_id)
+                            self.logger.info(f"{trade_type} trade recorded: {decision.upper()} at {current_btc_price} (Reason: {reason})")
+                            
+                        except Exception as e:
+                            self.logger.error(f"Error processing market order {order.get('id')}: {e}")
+                            self.logger.error(f"Order details: {json.dumps(order, indent=2)}")
+
+                    # 메인 처리 로직 실행
+                    for tp_order in realized_tp_orders:
+                        process_tp_sl_order(tp_order, True)
+                    for sl_order in realized_sl_orders:
+                        process_tp_sl_order(sl_order, False)
+                    
+                    # 일반 거래 처리 (TP/SL 제외)
+                    for order in orders:
+                        if order['type'] == 'market' and str(order['id']) not in processed_orders:
+                            process_market_order(order)
+                            
+                except Exception as e:
+                    self.logger.error(f"Error processing orders: {e}")
+                    
         except Exception as e:
             self.logger.error(f"Error monitoring trades: {e}")
-            if 'conn' in locals():
-                conn.close()
-                self.logger.info("Database connection closed after error")
+
 
     def setup_leverage_and_margin(self, leverage: int):
-        try:
-            # 현재 포지션 확인
-            positions = self.exchange.fetch_positions([self.symbol])
-            has_open_position = False
-            
-            # 포지션이 있는지 확인
-            if positions:
-                for position in positions:
-                    position_size = float(position.get('contracts', 0) or 0)
-                    if position_size != 0:
-                        has_open_position = True
-                        # leverage 값이 None인 경우 기본값 사용
-                        try:
-                            current_leverage = int(position.get('leverage', leverage))
-                        except (TypeError, ValueError):
-                            current_leverage = leverage
-                            
-                        self.leverage = current_leverage  # 현재 레버리지 유지
-                        self.logger.warning(f"Open position detected. Keeping current leverage at {current_leverage}x")
-                        break
-            
-            # 열린 포지션이 없을 때만 레버리지 설정
-            if not has_open_position:
-                self.exchange.set_leverage(leverage, self.symbol)
-                self.exchange.set_margin_mode('isolated', self.symbol)
-                self.leverage = leverage
-                self.logger.info(f"Leverage set to {leverage}x and margin mode set to isolated")
+            try:
+                # 현재 포지션 확인
+                positions = self.exchange.fetch_positions([self.symbol])
+                has_open_position = False
                 
-        except Exception as e:
-            self.logger.error(f"Error setting up leverage and margin: {e}")
-            # 에러 발생 시 기본 레버리지 설정
-            self.leverage = leverage
-            raise    
+                # 포지션이 있는지 확인
+                if positions:
+                    for position in positions:
+                        position_size = float(position.get('contracts', 0) or 0)
+                        if position_size != 0:
+                            has_open_position = True
+                            # leverage 값이 None인 경우 기본값 사용
+                            try:
+                                current_leverage = int(position.get('leverage', leverage))
+                            except (TypeError, ValueError):
+                                current_leverage = leverage
+                                
+                            self.leverage = current_leverage  # 현재 레버리지 유지
+                            self.logger.warning(f"Open position detected. Keeping current leverage at {current_leverage}x")
+                            break
+                
+                # 열린 포지션이 없을 때만 레버리지 설정
+                if not has_open_position:
+                    self.exchange.set_leverage(leverage, self.symbol)
+                    self.exchange.set_margin_mode('isolated', self.symbol)
+                    self.leverage = leverage
+                    self.logger.info(f"Leverage set to {leverage}x and margin mode set to isolated")
+                    
+            except Exception as e:
+                self.logger.error(f"Error setting up leverage and margin: {e}")
+                # 에러 발생 시 기본 레버리지 설정
+                self.leverage = leverage
+                raise    
 
     async def get_position_size(self, usdt_amount: float) -> float:
         try:
@@ -1299,10 +1306,10 @@ class BinanceFuturesTrader:
             raise
 
     async def open_position(self, 
-                          side: str, 
-                          usdt_amount: float,
-                          tp_percentage: float,
-                          sl_percentage: float) -> Optional[Dict[str, Any]]:
+                        side: str, 
+                        usdt_amount: float,
+                        tp_percentage: float,
+                        sl_percentage: float) -> Optional[Dict[str, Any]]:
         try:
             position_size = await self.get_position_size(usdt_amount)
             entry_price = (await self.exchange.fetch_ticker(self.symbol))['last']
@@ -1349,10 +1356,6 @@ class BinanceFuturesTrader:
         except Exception as e:
             self.logger.error(f"Error opening position: {e}")
             raise
-
-
-
-
 
     def _calculate_weighted_sl_price(self, position_size, position_sl_price, new_size, new_sl_price):
         """가중 평균 스탑로스 가격 계산"""
@@ -1676,9 +1679,6 @@ class BinanceFuturesTrader:
             self.logger.error(f"Error fetching balance: {e}")
             raise
 
-
-
-
 # .env 파일에 저장된 환경 변수를 불러오기 (API 키 등)
 load_dotenv()
 
@@ -1704,443 +1704,8 @@ trader = BinanceFuturesTrader(api_key, secret_key, logger)
 # 레버리지 설정 
 trader.setup_leverage_and_margin(20)  # 20배 레버리지
 
-# OpenAI 구조화된 출력 체크용 클래스
-class TradingDecision(BaseModel):
-    decision: str
-    percentage: int
-    reason: str
-    stop_loss_price: int
-    pl_ratio: float
 
-
-
-# 모든 크롬 프로세스 종료 후 정리
-def cleanup_chrome_processes():
-    try:
-        if env=="ec2":
-            os.system('sudo pkill -f "chrome|chromium|chromedriver"')
-        elif env=="local":
-            os.system('taskkill /f /im chrome.exe')
-            os.system('taskkill /f /im chromedriver.exe')
-            time.sleep(2)  # 프로세스들이 완전히 종료되기를 기다림
-    except Exception as e:
-        logger.error(f"Chrome processes cleanup failed: {e}")
-
-# 종료 시 정리 작업을 수행하는 함수
-def cleanup_handler():
-    logger.info("Cleaning up chrome processes before exit...")
-    cleanup_chrome_processes()
-
-# 시그널 핸들러 함수
-def signal_handler(signum, frame):
-    logger.info(f"Signal {signum} received. Performing cleanup...")
-    cleanup_handler()
-    sys.exit(0)
-
-
-# SQLite 데이터베이스 초기화 함수 - 거래 내역을 저장할 테이블을 생성
-# SQLite 데이터베이스 초기화 함수 - 거래 내역을 저장할 테이블을 생성 (수정됨)
-def init_db():
-    conn = sqlite3.connect('bitcoin_trades.db')
-    c = conn.cursor()
-    
-    # 기존 테이블 구조 확인
-    c.execute("PRAGMA table_info(trades)")
-    columns = [column[1] for column in c.fetchall()]
-    
-    # 테이블이 존재하지 않으면 새로 생성
-    if not columns:
-        c.execute('''CREATE TABLE IF NOT EXISTS trades
-                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp TEXT,
-                    trade_type TEXT,
-                    order_id TEXT,
-                    decision TEXT,
-                    percentage INTEGER,
-                    reason TEXT,
-                    btc_balance REAL,
-                    usdt_balance REAL,
-                    total_assets REAL,
-                    btc_avg_buy_price REAL,
-                    btc_current_price REAL,
-                    reflection TEXT,
-                    tp_order_id TEXT,
-                    sl_order_id TEXT,
-                    blackflag_signal TEXT,
-                    blackflag_candles_ago INTEGER,
-                    utbot_signal TEXT,
-                    utbot_candles_ago INTEGER,
-                    volume_osc_current REAL,
-                    stop_loss_price REAL)''')
-    else:
-        # 필요한 새 컬럼 추가
-        new_columns = {
-            'blackflag_signal': 'TEXT',
-            'blackflag_candles_ago': 'INTEGER',
-            'utbot_signal': 'TEXT',
-            'utbot_candles_ago': 'INTEGER',
-            'volume_osc_current': 'REAL',
-            'stop_loss_price': 'REAL'
-        }
-        
-        # 존재하지 않는 컬럼만 추가
-        for col_name, col_type in new_columns.items():
-            if col_name not in columns:
-                c.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
-                print(f"Added new column: {col_name}")
-    
-    conn.commit()
-    return conn
-
-# 거래 기록을 DB에 저장하는 함수
-
-# 거래 기록 함수 수정 - 신호 데이터 포함
-def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, 
-              usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, 
-              reflection='', tp_order_id=None, sl_order_id=None, signals_data=None):
-    """
-    거래 기록을 DB에 저장하는 함수
-    
-    Args:
-        ... (기존 매개변수) ...
-        signals_data (dict, optional): 트레이딩 신호 데이터. 기본값은 None.
-    """
-    c = conn.cursor()
-    timestamp = datetime.now().isoformat()
-    
-    # 신호 데이터가 있는 경우 이를 추출
-    blackflag_signal = None
-    blackflag_candles_ago = None
-    utbot_signal = None
-    utbot_candles_ago = None
-    volume_osc_current = None
-    stop_loss_price = None
-    
-    if signals_data:
-        blackflag_signal = signals_data.get("BlackFlag", {}).get("signal")
-        blackflag_candles_ago = signals_data.get("BlackFlag", {}).get("candles_ago")
-        utbot_signal = signals_data.get("UTBot", {}).get("signal")
-        utbot_candles_ago = signals_data.get("UTBot", {}).get("candles_ago")
-        volume_osc_current = signals_data.get("VolumeOsc", {}).get("current")
-        stop_loss_price = signals_data.get("BlackFlag", {}).get("stop_loss_price")
-    
-    c.execute("""INSERT INTO trades 
-                (timestamp, trade_type, order_id, decision, percentage, reason, 
-                btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                btc_current_price, reflection, tp_order_id, sl_order_id,
-                blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                utbot_candles_ago, volume_osc_current, stop_loss_price) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (timestamp, trade_type, order_id, decision, percentage, reason, 
-            btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-            btc_current_price, reflection, tp_order_id, sl_order_id,
-            blackflag_signal, blackflag_candles_ago, utbot_signal,
-            utbot_candles_ago, volume_osc_current, stop_loss_price))
-    conn.commit()
-    
-# 최근 투자 기록 조회
-# def get_recent_trades(conn, days=1):
-#     c = conn.cursor()
-#     some_days_ago = (datetime.now() - timedelta(days=days)).isoformat()
-#     c.execute("SELECT * FROM trades WHERE timestamp > ? ORDER BY timestamp DESC", (some_days_ago,))
-#     columns = [column[0] for column in c.description]
-#     return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
-
-def get_recent_trades(conn, num_trades=20):
-    f"""
-    최근 n개의 거래 내역을 시간 역순으로 가져오는 함수
-    
-    Args:
-        conn: SQLite 데이터베이스 연결 객체
-        num_trades: 가져올 거래 내역의 수 (기본값: 20)
-    
-    Returns:
-        DataFrame: 최근 {num_trades}개의 거래 내역이 시간 역순으로 정렬된 데이터프레임
-    """
-    try:
-        c = conn.cursor()
-        c.execute("""
-            SELECT * FROM trades 
-            ORDER BY timestamp DESC
-            LIMIT ?
-        """, (num_trades,))
-        
-        columns = [column[0] for column in c.description]
-        return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
-    
-    except Exception as e:
-        logging.error(f"Error fetching recent trades: {e}")
-        return pd.DataFrame()
-    finally:
-        if 'c' in locals():
-            c.close()
-
-
-# 최근 투자 기록을 기반으로 퍼포먼스 계산 (초기 잔고 대비 최종 잔고)
-def calculate_performance(trades_df):
-    if trades_df.empty or trades_df.iloc[-1]['usdt_balance'] == 0:
-        return 0
-    
-    initial_balance = trades_df.iloc[-1]['usdt_balance'] + trades_df.iloc[-1]['btc_balance'] * trades_df.iloc[-1]['btc_current_price']
-    final_balance = trades_df.iloc[0]['usdt_balance'] + trades_df.iloc[0]['btc_balance'] * trades_df.iloc[0]['btc_current_price']
-    
-    return (final_balance - initial_balance) / initial_balance * 100
-
-
-
-# AI 모델을 사용하여 최근 투자 기록과 시장 데이터를 기반으로 분석 및 반성을 생성하는 함수
-def generate_reflection(trades_df, current_market_data):
-    performance = calculate_performance(trades_df) # 투자 퍼포먼스 계산
-    
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    if not client.api_key:
-        logger.error("OpenAI API key is missing or invalid.")
-        return None        
-    
-    # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {
-                "role": "system",
-                "content": """
-                    You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance and current market conditions to generate specific, actionable insights and recommendations that can improve future trading decisions made by the Trading AI. Your analysis should focus on enhancing trading performance by providing clear feedback on past trades, identifying areas of improvement, and suggesting precise adjustments to the trading strategy, based solely on the data provided.
-                    """
-            },
-            {
-                "role": "user",
-                "content": f"""
-                    Please analyze the following trading performance data and provide a structured analysis to improve future trading decisions.
-
-                    **Input Data:**
-                    - **Recent 20 Trades:**
-                    {trades_df.to_json(orient='records')}
-                    [Contains: Timestamp, Trade Type (AI/Manual), Decision (buy/sell/hold), Position Size %, Reason, Balance Information, Price Data]
-
-                    - **Current Market Data:**
-                    {current_market_data}
-                    [Contains: Current Price, Fear/Greed Index, News Headlines, Orderbook Depth, Multi-timeframe OHLCV Data (5min/1h/4h)]
-
-                    - **Overall Performance:** {performance:.2f}%
-
-                    **Analysis Requirements:**
-
-                    1. **Trade Performance Analysis:**
-                    - Analyze AI trade decisions:
-                        * Success rate by trade direction (buy/sell)
-                        * Profit/loss distribution by position size
-                        * Average duration of profitable vs unprofitable trades
-                        * Market conditions during successful trades
-                    - Position sizing effectiveness:
-                        * Performance by position size category
-                        * Correlation between size and outcome
-                        * Risk-adjusted returns by size
-
-                    2. **Market Condition Impact:**
-                    - Analyze success rates during:
-                        * Different Fear/Greed Index ranges
-                        * Various volatility conditions
-                        * News-heavy vs quiet periods
-                    - Compare performance across timeframes
-                    - Identify optimal trading conditions
-                    - Analyze market structure during successful trades
-
-                    3. **Strategy Execution Review:**
-                    - Evaluate entry quality:
-                        * Success rate by entry reason
-                        * Market condition at entry
-                        * Multi-timeframe alignment quality
-                        * Entry price levels relative to key S/R
-                    - Analyze trade management:
-                        * Effectiveness of position scaling
-                        * Market reversals impact
-                        * Capital utilization efficiency
-
-                    4. **Risk Management Effectiveness:**
-                    - Calculate:
-                        * Risk-Reward ratio achievement rate
-                        * Capital preservation efficiency
-                        * Maximum drawdown periods
-                    - Identify:
-                        * Most effective position sizing
-                        * Best performing setup types
-                        * Riskiest market conditions
-                        * Optimal market volatility ranges
-
-                    5. **Actionable Improvements:**
-                    - Provide specific recommendations for:
-                        * Entry timing optimization
-                        * Position size adjustments
-                        * Risk management refinements
-                        * Market condition filters
-                    - List top 3 most critical adjustments needed
-                    - Suggest specific parameter adjustments
-                    - Identify patterns to avoid
-
-                    **Output Format:**
-                    - Maximum 550 words
-                    - Prioritize data-driven insights
-                    - Include specific success patterns
-                    - Provide quantifiable recommendations
-                    - Address both success and failure patterns
-                    - Focus on actionable strategy adjustments
-
-                    Your analysis should provide comprehensive, data-driven insights that the trading AI can directly incorporate into its decision-making process, with emphasis on pattern recognition and risk management optimization based on historical performance data.
-                """
-            }
-        ]
-    )  
-
-
-    try:
-        response_content = response.choices[0].message.content
-        return response_content
-    except (IndexError, AttributeError) as e:
-        logger.error(f"Error extracting response content: {e}")
-        return None
-
-def get_db_connection():
-    return sqlite3.connect('bitcoin_trades.db')
-
-
-
-# 데이터프레임에 보조 지표를 추가하는 함수
-def add_indicators(df):
-    # 볼린저 밴드 추가
-    indicator_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
-    df['bb_bbm'] = indicator_bb.bollinger_mavg()
-    df['bb_bbh'] = indicator_bb.bollinger_hband()
-    df['bb_bbl'] = indicator_bb.bollinger_lband()
-    
-    # RSI (Relative Strength Index) 추가
-    df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
-    
-    # MACD (Moving Average Convergence Divergence) 추가
-    macd = ta.trend.MACD(close=df['close'])
-    df['macd'] = macd.macd()
-    df['macd_signal'] = macd.macd_signal()
-    df['macd_diff'] = macd.macd_diff()
-    
-    # 이동평균선 (단기, 장기)
-    df['sma_20'] = ta.trend.SMAIndicator(close=df['close'], window=20).sma_indicator()
-    df['ema_12'] = ta.trend.EMAIndicator(close=df['close'], window=12).ema_indicator()
-    
-    # Stochastic Oscillator 추가
-    stoch = ta.momentum.StochasticOscillator(
-        high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3)
-    df['stoch_k'] = stoch.stoch()
-    df['stoch_d'] = stoch.stoch_signal()
-
-    # Average True Range (ATR) 추가
-    df['atr'] = ta.volatility.AverageTrueRange(
-        high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
-
-    # On-Balance Volume (OBV) 추가
-    df['obv'] = ta.volume.OnBalanceVolumeIndicator(
-        close=df['close'], volume=df['volume']).on_balance_volume()    
-    
-    # Momentum과 고점/저점 판단을 위한 새로운 지표들 추가
-    
-    # CMF (Chaikin Money Flow) - 자금 흐름 측정
-    df['cmf'] = ta.volume.ChaikinMoneyFlowIndicator(
-        high=df['high'], low=df['low'], close=df['close'], volume=df['volume'], window=20).chaikin_money_flow()
-    
-    # ADX (Average Directional Index) - 트렌드 강도 측정
-    adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'])
-    df['adx'] = adx.adx()
-    df['di_plus'] = adx.adx_pos()
-    df['di_minus'] = adx.adx_neg()
-    
-    # Williams %R - 과매수/과매도 판단
-    df['williams_r'] = ta.momentum.WilliamsRIndicator(
-        high=df['high'], low=df['low'], close=df['close'], lbp=14).williams_r()
-    
-    # PPO (Percentage Price Oscillator) - 모멘텀과 추세 전환 감지
-    df['ppo'] = ta.momentum.PercentagePriceOscillator(close=df['close']).ppo()
-
-    
-    return df
-
-# UTC에서 한국 표준시 (KST) 로 변환
-def convert_utc_to_kst(utc_date_str):
-    if not utc_date_str:
-        return ''
-    
-    try:
-        # Parse the UTC date string
-        utc_datetime = datetime.strptime(utc_date_str, '%m/%d/%Y, %I:%M %p, %z')
-        
-        # Convert to KST (UTC+9)
-        kst_datetime = utc_datetime + timedelta(hours=9)
-        
-        # Format the date in the desired KST format
-        return kst_datetime.strftime('%Y/%m/%d/%H:%M (KST)')
-    except ValueError:
-        return ''
-
-# 공포 탐욕 지수 조회
-def get_fear_and_greed_index():
-    url = "https://api.alternative.me/fng/"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        result = data['data'][0]
-        
-        # timestamp를 초 단위에서 KST datetime 문자열로 변환
-        timestamp = pd.to_datetime(int(result['timestamp']), unit='s')
-        kst_time = timestamp.tz_localize('UTC').tz_convert('Asia/Seoul')
-        result['timestamp'] = kst_time.strftime('%Y/%m/%d %H:%M (KST)')
-        
-        return result
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching Fear and Greed Index: {e}")
-        return None
-
-# 뉴스 데이터 가져오기
-def get_bitcoin_news():
-    serpapi_key = os.getenv("SERPAPI_API_KEY")
-    if not serpapi_key:
-        print("SERPAPI API key is missing.")
-        return None  # 또는 함수 종료
-    url = "https://serpapi.com/search.json"
-    params = {
-        "engine": "google_news",
-        "q": "bitcoin OR btc",
-        "api_key": serpapi_key
-    }
-    
-    try:
-        response = requests.get(url, params=params)
-        response.raise_for_status()
-        data = response.json()
-        
-        news_results = data.get("news_results", [])
-        headlines = []
-        for item in news_results:
-            headlines.append({
-                "title": item.get("title", ""),
-                "date": convert_utc_to_kst(item.get("date", ""))
-            })
-        
-        return headlines[:5]
-    except requests.RequestException as e:
-        print(f"Error fetching news: {e}")
-        return []
-
-
-# 유튜브 자막 데이터 가져오기
-def get_combined_transcript(video_id):
-    try:
-        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko'])
-        combined_text = ' '.join(entry['text'] for entry in transcript)
-        return combined_text
-    except Exception as e:
-        logger.error(f"Error fetching YouTube transcript: {e}")
-        return ""
-
-
-#### Selenium 관련 함수
+# Selenium 관련 함수
 def create_driver():
     env = os.getenv("ENVIRONMENT")
     logger.info("ChromeDriver 설정 중...")
@@ -2173,6 +1738,18 @@ def create_driver():
         logger.error(f"ChromeDriver 생성 중 오류 발생: {e}")
         raise
 
+# 안전하게 WebDriver 생성 (싱글톤 패턴 활용)
+def safe_create_driver():
+    """안전하게 WebDriver 인스턴스 생성"""
+    retries = 3
+    for attempt in range(retries):
+        try:
+            driver = create_driver()
+            return driver
+        except WebDriverException as e:
+            logger.error(f"WebDriver 생성 실패 (시도 {attempt + 1}/{retries}): {e}")
+            time.sleep(2)  # 재시도 전 대기
+    raise WebDriverException("WebDriver 생성 실패. 크롬 드라이버를 확인하세요.")
 
 # XPath로 Element 찾기
 def click_element_by_xpath(driver, xpath, element_name, wait_time=10):
@@ -2197,20 +1774,6 @@ def click_element_by_xpath(driver, xpath, element_name, wait_time=10):
         logger.error(f"{element_name} 요소를 찾을 수 없습니다.")
     except Exception as e:
         logger.error(f"{element_name} 클릭 중 오류 발생: {e}")
-
-
-def safe_create_driver():
-    retries = 3
-    for attempt in range(retries):
-        try:
-            driver = create_driver()
-            return driver
-        except WebDriverException as e:
-            logger.error(f"WebDriver 생성 실패 (시도 {attempt + 1}/{retries}): {e}")
-            time.sleep(2)  # 재시도 전 대기
-    raise WebDriverException("WebDriver 생성 실패. 크롬 드라이버를 확인하세요.")
-
-
 
 def check_login_status(driver):
     """로그인 상태 확인"""
@@ -2238,7 +1801,7 @@ def load_cookies(driver, filename="tradingview_cookies.pkl"):
 
 def login_with_cookies():
     try:
-        driver = safe_create_driver()
+        driver = WebDriverManager.get_driver()
         cookies_path = "my_cookies.pkl"
         
         # 먼저 도메인에 접속 (쿠키 설정을 위해 필요)
@@ -2258,131 +1821,9 @@ def login_with_cookies():
         
     except Exception as e:
         logger.info(f"로그인 중 예외 발생: {e}")
+        # 드라이버 정리 - 메모리 누수 방지
+        WebDriverManager.quit()
         return None
-
-
-
-# # 스크린샷 캡쳐 및 base64 이미지 인코딩        
-# def capture_and_encode_screenshot(driver, type, save="no"):
-#     try:
-#         # 스크린샷 캡처
-#         png = driver.get_screenshot_as_png()
-        
-#         # PIL Image로 변환
-#         img = Image.open(io.BytesIO(png))
-        
-#         # 이미지 리사이즈 (OpenAI API 제한에 맞춤)
-#         img.thumbnail((2000, 2000))
-        
-#         # 현재 시간을 파일명에 포함
-#         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-#         filename = f"{type}_chart_{current_time}.png"
-        
-#         # 현재 스크립트의 경로를 가져옴
-#         script_dir = os.path.dirname(os.path.abspath(__file__))
-        
-#         # 파일 저장 경로 설정
-#         file_path = os.path.join(script_dir, filename)
-        
-#         # 이미지 파일로 저장
-#         if save == "yes":
-#             img.save(file_path)
-#             logger.info(f"스크린샷이 저장되었습니다: {file_path}")
-        
-#         # 이미지를 바이트로 변환
-#         buffered = io.BytesIO()
-#         img.save(buffered, format="PNG")
-        
-#         # base64로 인코딩
-#         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-        
-#         return base64_image, file_path
-#     except Exception as e:
-#         logger.error(f"스크린샷 캡처 및 인코딩 중 오류 발생: {e}")
-#         return None, None
-
-# def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
-#     """
-#     차트 이미지를 캡처하고 신호를 분석하는 함수
-    
-#     Args:
-#         driver: Selenium 웹드라이버
-#         chart_processor: 차트 신호 프로세서 인스턴스
-#         save_image: 이미지 저장 여부 (기본값: False)
-#         debug: 디버그 모드 활성화 여부 (기본값: False)
-        
-#     Returns:
-#         tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로 또는 None)
-#     """
-#     try:
-#         # 스크린샷 캡처
-#         logger.info("스크린샷 캡처 시작")
-#         png = driver.get_screenshot_as_png()
-#         logger.info("스크린샷 메모리에 캡처 완료")
-        
-#         # PIL Image로 변환
-#         img_pil = Image.open(io.BytesIO(png))
-#         logger.info("PIL Image 변환 완료")
-        
-#         # 이미지 리사이즈 (필요시)
-#         img_pil.thumbnail((2000, 2000))
-        
-#         # 파일 경로 설정 (저장 여부와 관계없이 경로 생성)
-#         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
-#         filename = f"chart_{current_time}.png"
-#         script_dir = os.path.dirname(os.path.abspath(__file__))
-#         file_path = os.path.join(script_dir, filename)
-        
-#         # 저장 옵션이 활성화된 경우에만 파일로 저장
-#         if save_image:
-#             img_pil.save(file_path)
-#             logger.info(f"스크린샷 저장 완료: {file_path}")
-        
-#         # Base64 인코딩 (UI 표시용)
-#         buffered = io.BytesIO()
-#         img_pil.save(buffered, format="PNG")
-#         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
-        
-#         # OpenCV 이미지로 변환 (PIL → OpenCV)
-#         img_np = np.array(img_pil)
-#         # RGB to BGR (PIL is RGB, OpenCV uses BGR)
-#         img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-#         logger.info("OpenCV 이미지 변환 완료")
-        
-#         # 이미지가 올바르게 로드되었는지 확인
-#         if img_cv is None or img_cv.size == 0:
-#             logger.error("OpenCV 이미지 변환 실패 또는 이미지가 비어 있습니다")
-#             return base64_image, None, file_path if save_image else None
-        
-#         # 신호 분석 수행 (메모리 내 이미지 사용)
-#         signal_analysis = None
-#         if chart_processor is not None:
-#             # 임시 이미지 파일 생성 (analyze_chart_signals가 파일 경로를 필요로 하므로)
-#             temp_path = os.path.join(script_dir, f"temp_{current_time}.png")
-#             cv2.imwrite(temp_path, img_cv)
-            
-#             try:
-#                 logger.info(f"차트 신호 분석 시작 (debug={debug})")
-#                 signal_analysis = chart_processor.process_chart_image(
-#                     image_path=temp_path,
-#                     debug=debug
-#                 )
-                
-#                 if signal_analysis:
-#                     logger.info("차트 신호 분석 완료")
-#                 else:
-#                     logger.warning("차트 신호 분석 결과 없음")
-#             finally:
-#                 # 분석 후 임시 파일 삭제 (저장 옵션이 비활성화된 경우)
-#                 if not save_image and os.path.exists(temp_path):
-#                     os.remove(temp_path)
-#                     logger.info(f"임시 파일 삭제: {temp_path}")
-        
-#         return base64_image, signal_analysis, file_path if save_image else None
-        
-#     except Exception as e:
-#         logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}", exc_info=True)
-#         return None, None, None
 
 def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
     """
@@ -2418,7 +1859,7 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         except Exception as e:
             logger.warning(f"차트 요소 캡처 실패, 전체 화면 캡처로 대체: {e}")
             # 차트 요소를 찾지 못한 경우 전체 화면 캡처
-            png = driver.get_screenshot_as_png()
+            png = driver.screenshot_as_png
             logger.info("전체 화면 스크린샷 캡처 완료")
         
         # PIL Image로 변환
@@ -2484,6 +1925,14 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
                 if not save_image and os.path.exists(temp_path):
                     os.remove(temp_path)
                     logger.info(f"임시 파일 삭제: {temp_path}")
+                
+                # 명시적으로 큰 객체 제거
+                del img_pil
+                del img_np
+                del img_cv
+                
+                # 가비지 컬렉션 강제 수행
+                gc.collect()
         
         return base64_image, signal_analysis, file_path if save_image else None
         
@@ -2491,8 +1940,16 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}", exc_info=True)
         return None, None, None
 
-
 def modify_orderbook(orderbook):
+    """
+    오더북 데이터의 타임스탬프를 KST로 변환
+    
+    Args:
+        orderbook: 오더북 데이터
+        
+    Returns:
+        dict: 수정된 오더북 데이터
+    """
     # Convert timestamp to KST using timezone-aware method
     timestamp_ms = orderbook['timestamp']
     original_datetime = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
@@ -2509,15 +1966,480 @@ def modify_orderbook(orderbook):
     
     return modified_orderbook
 
+# 종료 시 정리 작업을 수행하는 함수
+def cleanup_handler():
+    logger.info("Cleaning up chrome processes before exit...")
+    cleanup_chrome_processes()
+
+# 시그널 핸들러 함수
+def signal_handler(signum, frame):
+    logger.info(f"Signal {signum} received. Performing cleanup...")
+    cleanup_handler()
+    sys.exit(0)
+
+# SQLite 데이터베이스 초기화 함수 - 거래 내역을 저장할 테이블을 생성
+def init_db():
+    """데이터베이스 초기화 및 필요한 테이블 생성"""
+    try:
+        with sqlite3.connect('bitcoin_trades.db') as conn:
+            c = conn.cursor()
+            
+            # 기존 테이블 구조 확인
+            c.execute("PRAGMA table_info(trades)")
+            columns = [column[1] for column in c.fetchall()]
+            
+            # 테이블이 존재하지 않으면 새로 생성
+            if not columns:
+                c.execute('''CREATE TABLE IF NOT EXISTS trades
+                            (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            timestamp TEXT,
+                            trade_type TEXT,
+                            order_id TEXT,
+                            decision TEXT,
+                            percentage INTEGER,
+                            reason TEXT,
+                            btc_balance REAL,
+                            usdt_balance REAL,
+                            total_assets REAL,
+                            btc_avg_buy_price REAL,
+                            btc_current_price REAL,
+                            reflection TEXT,
+                            tp_order_id TEXT,
+                            sl_order_id TEXT,
+                            blackflag_signal TEXT,
+                            blackflag_candles_ago INTEGER,
+                            utbot_signal TEXT,
+                            utbot_candles_ago INTEGER,
+                            volume_osc_current REAL,
+                            stop_loss_price REAL)''')
+            else:
+                # 필요한 새 컬럼 추가
+                new_columns = {
+                    'blackflag_signal': 'TEXT',
+                    'blackflag_candles_ago': 'INTEGER',
+                    'utbot_signal': 'TEXT',
+                    'utbot_candles_ago': 'INTEGER',
+                    'volume_osc_current': 'REAL',
+                    'stop_loss_price': 'REAL'
+                }
+                
+                # 존재하지 않는 컬럼만 추가
+                for col_name, col_type in new_columns.items():
+                    if col_name not in columns:
+                        c.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
+                        print(f"Added new column: {col_name}")
+            
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"데이터베이스 초기화 오류: {e}")
+        return False
+
+# 거래 기록 함수 수정 - 신호 데이터 포함
+def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, 
+              usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, 
+              reflection='', tp_order_id=None, sl_order_id=None, signals_data=None):
+    """
+    거래 기록을 DB에 저장하는 함수
+    
+    Args:
+        ... (기존 매개변수) ...
+        signals_data (dict, optional): 트레이딩 신호 데이터. 기본값은 None.
+    """
+    try:
+        with conn:  # context manager 사용하여 자동 커밋/롤백
+            c = conn.cursor()
+            timestamp = datetime.now().isoformat()
+            
+            # 신호 데이터가 있는 경우 이를 추출
+            blackflag_signal = None
+            blackflag_candles_ago = None
+            utbot_signal = None
+            utbot_candles_ago = None
+            volume_osc_current = None
+            stop_loss_price = None
+            
+            if signals_data:
+                blackflag_signal = signals_data.get("BlackFlag", {}).get("signal")
+                blackflag_candles_ago = signals_data.get("BlackFlag", {}).get("candles_ago")
+                utbot_signal = signals_data.get("UTBot", {}).get("signal")
+                utbot_candles_ago = signals_data.get("UTBot", {}).get("candles_ago")
+                volume_osc_current = signals_data.get("VolumeOsc", {}).get("current")
+                stop_loss_price = signals_data.get("BlackFlag", {}).get("stop_loss_price")
+            
+            c.execute("""INSERT INTO trades 
+                        (timestamp, trade_type, order_id, decision, percentage, reason, 
+                        btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                        btc_current_price, reflection, tp_order_id, sl_order_id,
+                        blackflag_signal, blackflag_candles_ago, utbot_signal, 
+                        utbot_candles_ago, volume_osc_current, stop_loss_price) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (timestamp, trade_type, order_id, decision, percentage, reason, 
+                    btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                    btc_current_price, reflection, tp_order_id, sl_order_id,
+                    blackflag_signal, blackflag_candles_ago, utbot_signal,
+                    utbot_candles_ago, volume_osc_current, stop_loss_price))
+            return True
+    except Exception as e:
+        logger.error(f"거래 기록 오류: {e}")
+        return False
+
+def get_recent_trades(conn, num_trades=20):
+    """
+    최근 n개의 거래 내역을 시간 역순으로 가져오는 함수
+    
+    Args:
+        conn: SQLite 데이터베이스 연결 객체
+        num_trades: 가져올 거래 내역의 수 (기본값: 20)
+    
+    Returns:
+        DataFrame: 최근 거래 내역이 시간 역순으로 정렬된 데이터프레임
+    """
+    try:
+        with conn:  # context manager 사용
+            c = conn.cursor()
+            c.execute("""
+                SELECT * FROM trades 
+                ORDER BY timestamp DESC
+                LIMIT ?
+            """, (num_trades,))
+            
+            columns = [column[0] for column in c.description]
+            return pd.DataFrame.from_records(data=c.fetchall(), columns=columns)
+    
+    except Exception as e:
+        logging.error(f"Error fetching recent trades: {e}")
+        return pd.DataFrame()
+
+def get_db_connection():
+    """SQLite 데이터베이스 연결 객체 반환"""
+    try:
+        return sqlite3.connect('bitcoin_trades.db')
+    except Exception as e:
+        logger.error(f"데이터베이스 연결 오류: {e}")
+        return None
+
+def calculate_performance(trades_df):
+    """최근 투자 기록을 기반으로 퍼포먼스 계산 (초기 잔고 대비 최종 잔고)"""
+    if trades_df.empty or trades_df.iloc[-1]['usdt_balance'] == 0:
+        return 0
+    
+    initial_balance = trades_df.iloc[-1]['usdt_balance'] + trades_df.iloc[-1]['btc_balance'] * trades_df.iloc[-1]['btc_current_price']
+    final_balance = trades_df.iloc[0]['usdt_balance'] + trades_df.iloc[0]['btc_balance'] * trades_df.iloc[0]['btc_current_price']
+    
+    return (final_balance - initial_balance) / initial_balance * 100
+
+def generate_reflection(trades_df, current_market_data):
+    """
+    AI 모델을 사용하여 최근 투자 기록과 시장 데이터를 기반으로 분석 및 반성을 생성하는 함수
+    
+    Args:
+        trades_df: 최근 거래 내역 데이터프레임
+        current_market_data: 현재 시장 데이터 (딕셔너리)
+        
+    Returns:
+        str: 생성된 반성 텍스트
+    """
+    performance = calculate_performance(trades_df) # 투자 퍼포먼스 계산
+    
+    try:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        if not client.api_key:
+            logger.error("OpenAI API key is missing or invalid.")
+            return None        
+        
+        # OpenAI API 호출로 AI의 반성 일기 및 개선 사항 생성 요청    
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """
+                        You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance and current market conditions to generate specific, actionable insights and recommendations that can improve future trading decisions made by the Trading AI. Your analysis should focus on enhancing trading performance by providing clear feedback on past trades, identifying areas of improvement, and suggesting precise adjustments to the trading strategy, based solely on the data provided.
+                        """
+                },
+                {
+                    "role": "user",
+                    "content": f"""
+                        Please analyze the following trading performance data and provide a structured analysis to improve future trading decisions.
+
+                        **Input Data:**
+                        - **Recent 20 Trades:**
+                        {trades_df.to_json(orient='records')}
+                        [Contains: Timestamp, Trade Type (AI/Manual), Decision (buy/sell/hold), Position Size %, Reason, Balance Information, Price Data]
+
+                        - **Current Market Data:**
+                        {current_market_data}
+                        [Contains: Current Price, Fear/Greed Index, News Headlines, Orderbook Depth, Multi-timeframe OHLCV Data (5min/1h/4h)]
+
+                        - **Overall Performance:** {performance:.2f}%
+
+                        **Analysis Requirements:**
+
+                        1. **Trade Performance Analysis:**
+                        - Analyze AI trade decisions:
+                            * Success rate by trade direction (buy/sell)
+                            * Profit/loss distribution by position size
+                            * Average duration of profitable vs unprofitable trades
+                            * Market conditions during successful trades
+                        - Position sizing effectiveness:
+                            * Performance by position size category
+                            * Correlation between size and outcome
+                            * Risk-adjusted returns by size
+
+                        2. **Market Condition Impact:**
+                        - Analyze success rates during:
+                            * Different Fear/Greed Index ranges
+                            * Various volatility conditions
+                            * News-heavy vs quiet periods
+                        - Compare performance across timeframes
+                        - Identify optimal trading conditions
+                        - Analyze market structure during successful trades
+
+                        3. **Strategy Execution Review:**
+                        - Evaluate entry quality:
+                            * Success rate by entry reason
+                            * Market condition at entry
+                            * Multi-timeframe alignment quality
+                            * Entry price levels relative to key S/R
+                        - Analyze trade management:
+                            * Effectiveness of position scaling
+                            * Market reversals impact
+                            * Capital utilization efficiency
+
+                        4. **Risk Management Effectiveness:**
+                        - Calculate:
+                            * Risk-Reward ratio achievement rate
+                            * Capital preservation efficiency
+                            * Maximum drawdown periods
+                        - Identify:
+                            * Most effective position sizing
+                            * Best performing setup types
+                            * Riskiest market conditions
+                            * Optimal market volatility ranges
+
+                        5. **Actionable Improvements:**
+                        - Provide specific recommendations for:
+                            * Entry timing optimization
+                            * Position size adjustments
+                            * Risk management refinements
+                            * Market condition filters
+                        - List top 3 most critical adjustments needed
+                        - Suggest specific parameter adjustments
+                        - Identify patterns to avoid
+
+                        **Output Format:**
+                        - Maximum 550 words
+                        - Prioritize data-driven insights
+                        - Include specific success patterns
+                        - Provide quantifiable recommendations
+                        - Address both success and failure patterns
+                        - Focus on actionable strategy adjustments
+
+                        Your analysis should provide comprehensive, data-driven insights that the trading AI can directly incorporate into its decision-making process, with emphasis on pattern recognition and risk management optimization based on historical performance data.
+                    """
+                }
+            ]
+        )  
 
 
+        try:
+            response_content = response.choices[0].message.content
+            return response_content
+        except (IndexError, AttributeError) as e:
+            logger.error(f"Error extracting response content: {e}")
+            return None
+    except Exception as e:
+        logger.error(f"Error generating reflection: {e}")
+        return None
 
+def add_indicators(df):
+    """
+    데이터프레임에 보조 지표를 추가하는 함수
+    
+    Args:
+        df: OHLCV 데이터가 포함된 데이터프레임
+        
+    Returns:
+        DataFrame: 보조 지표가 추가된 데이터프레임
+    """
+    # 볼린저 밴드 추가
+    indicator_bb = ta.volatility.BollingerBands(close=df['close'], window=20, window_dev=2)
+    df['bb_bbm'] = indicator_bb.bollinger_mavg()
+    df['bb_bbh'] = indicator_bb.bollinger_hband()
+    df['bb_bbl'] = indicator_bb.bollinger_lband()
+    
+    # RSI (Relative Strength Index) 추가
+    df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
+    
+    # MACD (Moving Average Convergence Divergence) 추가
+    macd = ta.trend.MACD(close=df['close'])
+    df['macd'] = macd.macd()
+    df['macd_signal'] = macd.macd_signal()
+    df['macd_diff'] = macd.macd_diff()
+    
+    # 이동평균선 (단기, 장기)
+    df['sma_20'] = ta.trend.SMAIndicator(close=df['close'], window=20).sma_indicator()
+    df['ema_12'] = ta.trend.EMAIndicator(close=df['close'], window=12).ema_indicator()
+    
+    # Stochastic Oscillator 추가
+    stoch = ta.momentum.StochasticOscillator(
+        high=df['high'], low=df['low'], close=df['close'], window=14, smooth_window=3)
+    df['stoch_k'] = stoch.stoch()
+    df['stoch_d'] = stoch.stoch_signal()
+
+    # Average True Range (ATR) 추가
+    df['atr'] = ta.volatility.AverageTrueRange(
+        high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
+
+    # On-Balance Volume (OBV) 추가
+    df['obv'] = ta.volume.OnBalanceVolumeIndicator(
+        close=df['close'], volume=df['volume']).on_balance_volume()    
+    
+    # Momentum과 고점/저점 판단을 위한 새로운 지표들 추가
+    
+    # CMF (Chaikin Money Flow) - 자금 흐름 측정
+    df['cmf'] = ta.volume.ChaikinMoneyFlowIndicator(
+        high=df['high'], low=df['low'], close=df['close'], volume=df['volume'], window=20).chaikin_money_flow()
+    
+    # ADX (Average Directional Index) - 트렌드 강도 측정
+    adx = ta.trend.ADXIndicator(high=df['high'], low=df['low'], close=df['close'])
+    df['adx'] = adx.adx()
+    df['di_plus'] = adx.adx_pos()
+    df['di_minus'] = adx.adx_neg()
+    
+    # Williams %R - 과매수/과매도 판단
+    df['williams_r'] = ta.momentum.WilliamsRIndicator(
+        high=df['high'], low=df['low'], close=df['close'], lbp=14).williams_r()
+    
+    # PPO (Percentage Price Oscillator) - 모멘텀과 추세 전환 감지
+    df['ppo'] = ta.momentum.PercentagePriceOscillator(close=df['close']).ppo()
+    
+    return df
+
+# UTC에서 한국 표준시 (KST) 로 변환
+def convert_utc_to_kst(utc_date_str):
+    """
+    UTC 시간을 한국 표준시(KST)로 변환
+    
+    Args:
+        utc_date_str: UTC 시간 문자열
+    
+    Returns:
+        str: KST 형식의 시간 문자열
+    """
+    if not utc_date_str:
+        return ''
+    
+    try:
+        # Parse the UTC date string
+        utc_datetime = datetime.strptime(utc_date_str, '%m/%d/%Y, %I:%M %p, %z')
+        
+        # Convert to KST (UTC+9)
+        kst_datetime = utc_datetime + timedelta(hours=9)
+        
+        # Format the date in the desired KST format
+        return kst_datetime.strftime('%Y/%m/%d/%H:%M (KST)')
+    except ValueError:
+        return ''
+
+# 공포 탐욕 지수 조회
+def get_fear_and_greed_index():
+    """
+    암호화폐 시장의 공포 탐욕 지수 조회
+    
+    Returns:
+        dict: 공포 탐욕 지수 데이터
+    """
+    url = "https://api.alternative.me/fng/"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        result = data['data'][0]
+        
+        # timestamp를 초 단위에서 KST datetime 문자열로 변환
+        timestamp = pd.to_datetime(int(result['timestamp']), unit='s')
+        kst_time = timestamp.tz_localize('UTC').tz_convert('Asia/Seoul')
+        result['timestamp'] = kst_time.strftime('%Y/%m/%d %H:%M (KST)')
+        
+        return result
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching Fear and Greed Index: {e}")
+        return None
+
+# 뉴스 데이터 가져오기
+def get_bitcoin_news():
+    """
+    비트코인 관련 뉴스 헤드라인 가져오기
+    
+    Returns:
+        list: 뉴스 헤드라인 목록
+    """
+    serpapi_key = os.getenv("SERPAPI_API_KEY")
+    if not serpapi_key:
+        print("SERPAPI API key is missing.")
+        return []  # 빈 목록 반환
+        
+    url = "https://serpapi.com/search.json"
+    params = {
+        "engine": "google_news",
+        "q": "bitcoin OR btc",
+        "api_key": serpapi_key
+    }
+    
+    try:
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        data = response.json()
+        
+        news_results = data.get("news_results", [])
+        headlines = []
+        for item in news_results:
+            headlines.append({
+                "title": item.get("title", ""),
+                "date": convert_utc_to_kst(item.get("date", ""))
+            })
+        
+        return headlines[:5]
+    except requests.RequestException as e:
+        print(f"Error fetching news: {e}")
+        return []
+
+# 유튜브 자막 데이터 가져오기
+def get_combined_transcript(video_id):
+    """
+    YouTube 비디오의 자막 데이터 가져오기
+    
+    Args:
+        video_id: YouTube 비디오 ID
+        
+    Returns:
+        str: 결합된 자막 텍스트
+    """
+    try:
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['ko'])
+        combined_text = ' '.join(entry['text'] for entry in transcript)
+        return combined_text
+    except Exception as e:
+        logger.error(f"Error fetching YouTube transcript: {e}")
+        return ""
+
+# OpenAI를 이용한 TradingDecision 모델
+class TradingDecision(BaseModel):
+    decision: str
+    percentage: int
+    reason: str
+    stop_loss_price: int
+    pl_ratio: float
 
 ### 메인 AI 트레이딩 로직
 def ai_trading():
+    """메인 AI 트레이딩 함수 - 시장 데이터 수집, 분석, 거래 결정 및 실행"""
     
-    # 차트 신호 프로세서 초기화 (새로 추가)
+    # 차트 신호 프로세서 초기화
     chart_processor = ChartSignalProcessor()
+    
     ### 데이터 가져오기
     # 7. Selenium으로 차트 캡처
     driver = None
@@ -2525,21 +2447,19 @@ def ai_trading():
     try:
         # TradingView 차트 캡처
         driver = login_with_cookies()
-        driver.get("https://kr.tradingview.com/chart/zcDfxQQ8/?symbol=BINANCE%3ABTCUSDT.P")
-        logger.info("TradingView 페이지 로드 완료")
-        time.sleep(3)
-    
-        # chart_image, saved_file_path2 = capture_and_encode_screenshot(driver, "tradingview", save="no")
-        # logger.info(f"TradingView 스크린샷 캡처 완료.")
-    
-        # 이미지 캡처 및 신호 분석 (수정된 부분)
-        chart_image, signals_analysis, saved_file_path = capture_and_analyze_chart(
-    driver, chart_processor, save_image=False, debug=False)   
+        if driver:
+            driver.get("https://kr.tradingview.com/chart/zcDfxQQ8/?symbol=BINANCE%3ABTCUSDT.P")
+            logger.info("TradingView 페이지 로드 완료")
+            time.sleep(3)
         
-        if chart_image:
-            logger.info(f"TradingView 스크린샷 캡처 및 분석 완료.")
-        else:
-            logger.error("스크린샷 캡처 실패")
+            # 이미지 캡처 및 신호 분석
+            chart_image, signals_analysis, saved_file_path = capture_and_analyze_chart(
+                driver, chart_processor, save_image=False, debug=False)   
+            
+            if chart_image:
+                logger.info(f"TradingView 스크린샷 캡처 및 분석 완료.")
+            else:
+                logger.error("스크린샷 캡처 실패")
                     
     except WebDriverException as e:
         logger.error(f"캡쳐시 WebDriver 오류 발생: {e}")
@@ -2548,9 +2468,9 @@ def ai_trading():
         logger.error(f"차트 캡처 중 오류 발생: {e}")
         chart_image = None        
     finally:
+        # 사용이 끝난 WebDriver 정리
         if driver:
-            driver.quit()
-            # cleanup_chrome_processes()
+            WebDriverManager.quit()
 
     # 1. 현재 투자 상태 조회
     # USDT 잔고 조회
@@ -2575,7 +2495,6 @@ def ai_trading():
             position_size = float(position['notional']) # contracts * entryPrice = USDT 단위
             unrealized_pnl = float(position.get('percentage', 0))  # 수익률(%)
             break
-
 
     # 2. 오더북(호가 데이터) 조회
     orderbook = trader.exchange.fetch_order_book('BTC/USDT')
@@ -2644,18 +2563,28 @@ def ai_trading():
     news_headlines = get_bitcoin_news()
 
     # 6. YouTube 자막 데이터 가져오기
-    f2 = open("strategy2.txt", "r", encoding="utf-8")
-    youtube_transcript2 = f2.read()
-    f2.close()    
-
-    ### AI에게 데이터 제공하고 판단 받기
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    if not client.api_key:
-        logger.error("OpenAI API key is missing or invalid.")
-        return None
     try:
+        f2 = open("strategy2.txt", "r", encoding="utf-8")
+        youtube_transcript2 = f2.read()
+        f2.close()
+    except Exception as e:
+        logger.error(f"전략 파일 읽기 실패: {e}")
+        youtube_transcript2 = ""
+
+### AI에게 데이터 제공하고 판단 받기
+    try:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        if not client.api_key:
+            logger.error("OpenAI API key is missing or invalid.")
+            return None
+            
         # 데이터베이스 연결
-        with sqlite3.connect('bitcoin_trades.db') as conn:
+        conn = get_db_connection()
+        if not conn:
+            logger.error("Database connection failed.")
+            return None
+            
+        try:
             # 최근 거래 내역 가져오기
             recent_trades = get_recent_trades(conn)
             
@@ -2756,137 +2685,11 @@ def ai_trading():
                         • Free USDT Balance: {free_usdt:.1f}  
                         • Used USDT Holdings: {used_usdt:.1f}  
                         • BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT  
-                        • Current Position Side: {position_side}  ← “long”, “short”, or “none”  
+                        • Current Position Side: {position_side}  ← "long", "short", or "none"  
                         • Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
 
                         You must first check the Portfolio information before making any trading decision. If Current Position Side is "none", then no exit orders should be executed; if a close signal is generated, it must be treated as a new entry (reversal) rather than closing a non-existing position.
-
-                        ───────────────────────────────────────────────────────────────
-                        ## 3. Core Strategy Overview
-
-                        ### A. Critical Timing
-
-                        **For Long Entry:**  
-                        - **BlackFlag FTS:** Must show a red-to-green transition (indicating a change from bearish to bullish) within the last 3 candles. Refer to the "BlackFlag FTS Signal" data in the trading signals section to confirm the signal and its freshness.
-                        - **UT Bot Alerts:** Must display a BUY alert within the last 3 candles. Refer to the "UT Bot Alert" data in the trading signals section to confirm the signal and its freshness.
-                        - **Volume Oscillator:** Must be positive on the current candle, confirming rising volume momentum supportive of a long move. Refer to the "Volume Oscillator" data in the trading signals section to check current value and recent history.
-
-                        **For Short Entry:**  
-                        - **BlackFlag FTS:** Must show a green-to-red transition (indicating a change from bullish to bearish) within the last 3 candles. Refer to the "BlackFlag FTS Signal" data in the trading signals section to confirm the signal and its freshness.
-                        - **UT Bot Alerts:** Must display a SELL alert within the last 3 candles. Refer to the "UT Bot Alert" data in the trading signals section to confirm the signal and its freshness.
-                        - **Volume Oscillator:** Must be positive on the current candle, confirming sufficient momentum for a short move. Refer to the "Volume Oscillator" data in the trading signals section to check current value and recent history.
-
-                        Any stale signals or misalignment → "hold" (no entry).  
-                        **This is mandatory: prioritize the "Trading Signals Data" section from the user input, which provides exact information about each indicator signal and its freshness (candles ago). If any core indicator signal is older than 3 candles, you must not enter. Always "hold" unless all three primary indicators are fresh (≤3 candles).**
-                                                
-                        ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)
-                        Use these solely for extra confirmation or for rejecting the primary signal.  
-                        **Do not open a position based only on Additional Indicators if the primary indicators do not show a valid fresh entry signal.**  
-                        While additional indicators may override or cancel a primary entry (resulting in a “hold”), they cannot independently generate an entry.  
-                        Adjust stops and position size using ATR; monitor momentum (MACD, ADX) and money flow (CMF).
-
-                        ### C. Signal Classification: Strong, Moderate, Weak
-
-                        • **Strong Signal**  
-                        - Primary indicators are in perfect alignment with very high volume (≥250% avg) and low, stable ATR.  
-                        - Position Size: 100% of calculated size.  
-                        - Stop Loss: ±0.7% from entry (refined with Cloud/ATR).  
-                        - P/L Ratio: ~2.0.
-
-                        • **Moderate Signal**  
-                        - Adequate volume and volatility with clean and well-aligned primary indicators.  
-                        - Position Size: ~60%.  
-                        - Stop Loss: ±0.5% from entry or Cloud.  
-                        - P/L Ratio: ~1.75 (within a range of 1.5 to 2.0).
-
-                        • **Weak Signal**  
-                        - Primary indicators appear borderline (possibly slightly delayed or with lower volume), or only partially supportive.  
-                        - Position Size: ~30%.  
-                        - Stop Loss: ±0.4% from entry (with Cloud + ATR checks).  
-                        - P/L Ratio: ~1.5 (within a range of 1.5 to 2.0).
-
-                        ### D. Price Action & Key Levels (Support/Resistance)
-                        Identify notable swing highs and lows on the 5-minute, 1-hour, and 4-hour charts to locate potential support (previous lows) or resistance (previous highs).  
-                        • A primary signal occurring just below a strong resistance should be treated with caution—consider waiting for confirmation (such as a breakout or a clear rejection).  
-                        • Conversely, if a primary BUY signal coincides with a well-established support level on a higher timeframe, it further strengthens your entry case.  
-                        • Use these levels only as confluence or rejection criteria; do not base your entry solely on price action if the primary indicators are not validating a fresh signal.  
-                        • When prices approach or move beyond these key levels, watch for divergences or volume spikes for further confirmation or rejection.
-
-                        ───────────────────────────────────────────────────────────────
-                        ## 4. Stop Loss & Take Profit
-
-                        1) **Stop Loss Price**
-                        - **Use the provided Stop Loss Price:** When available in the "Trading Signals Data" section, use the "Stop Loss Price" value that was directly extracted from the chart.
-                        - **Fallback method:** If Stop Loss Price is "None" in the Trading Signals Data, then use Cloud-Based Stop Loss:
-                        - **LONG:** Place near the deepest green portion of the latest Green Cloud.
-                        - **SHORT:** Place near the deepest red portion of the latest Red Cloud.
-                        - If this level is unreasonably far, refer to ATR guidelines (±0.4-0.7% from entry).
-                        
-                        2) **P/L Ratio (1.5-2.0)**  
-                        - Strong Signal: Approximately 2.0 baseline.  
-                        - Moderate Signal: Approximately 1.75 baseline.  
-                        - Weak Signal: Approximately 1.5 baseline.
-
-                        Adjust within this range based on current market volatility.
-
-                        ───────────────────────────────────────────────────────────────
-                        ## 5. Exit & Risk Management
-
-                        • Exit if any core signal reverses or becomes invalid.  
-                        • If the Volume Oscillator falls below 0%, that is an immediate red flag.  
-                        • If secondary indicators exhibit significant contradictions (e.g., strong RSI or MACD divergence), exit early.  
-                        • Employ partial exits when appropriate (for example, scaling out in increments of +0.1% gains).  
-                        **• If the 5-minute MACD shows a clear trend reversal for 2 consecutive candles in the opposite direction, execute an immediate “Full Exit” of the position.**
-
-                        ───────────────────────────────────────────────────────────────
-                        ## 6. Response Format
-
-                        Output a JSON object:
-
-                        ```json
-                        {{
-                        "decision": "buy" or "sell" or "hold",
-                        "percentage": integer (0-100),
-                        "stop_loss_price": float,
-                        "pl_ratio": float (1.5-2.0),
-                        "reason": "Concise rationale referencing signals & data"
-                        }}
-                        ```
-
-                        - **decision:** Determine whether to open or close a position. “buy” is used to close shorts or open a new long; “sell” is used to close longs or open a new short; “hold” means take no action. Additionally, make sure to check your current position: if the Current Position Side shows “none”, then no exit order should be issued.
-                        - **stop_loss_price:** Set based on Cloud levels or ATR guidelines (±0.4-0.7% from entry).  
-                        - **pl_ratio:** Choose a value between 1.5 and 2.0 according to the signal strength.  
-                        - **reason:** Provide a detailed explanation that includes:
-                        - A clear statement of the current portfolio status (e.g., whether you have an active position and its side—long, short, or none).
-                        - An explanation of the state of the primary indicators:
-                            - **BlackFlag FTS:** Describe whether it shows a red-to-green transition for a long entry or a green-to-red transition for a short entry, and comment on its freshness.
-                            - **UT Bot Alerts:** Specify if a BUY or SELL alert has been issued within the last 3 candles.
-                            - **Volume Oscillator:** Confirm that it is positive, indicating sufficient momentum.
-                        - Mention any other relevant details regarding volume or volatility that affect the decision.
-                        
-                        **Position Sizing Rules:**  
-                        - The "percentage" field is an integer between 0 and 100 representing the fraction of a full allocation.
-                        - For entry orders, 100 indicates using 100% of the available balance for entry.
-                        - For exit orders, 100 indicates closing 100% of the current position quantity.
-                        - In practice, you may choose any value from 0 to 100 (except when the decision is “hold”) based on signal strength and risk considerations.
-                        - Use the following full-allocation benchmarks as your baseline:
-                        - For entries: If Current Position Side is "long" or "none" and the decision is "buy", or if Current Position Side is "short" or "none" and the decision is "sell", 100% represents the entirety of the available balance.
-                        - For exits: If Current Position Side is "short" and the decision is "buy", or if Current Position Side is "long" and the decision is "sell", 100% represents closing the entire current position.
-
-                        ───────────────────────────────────────────────────────────────
-                        ### Final Notes
-
-                        1) Always check the Portfolio information before deciding: if Current Position Side is "none", then only new entry orders should be considered; exit orders are valid only when an active position exists.
-                        2) **Prioritize the extracted signal data in the "Trading Signals Data" section**, which provides accurate information about signal freshness. Only consider signals within 3 candles old for entry decisions.
-                        3) Use the correct exit commands: "buy" to exit a short and "sell" to exit a long.
-                        4) Incorporate dynamically updated values from the [Market Data], [Portfolio], and [Trading Signals Data] sections.
-                        5) Preserve capital by exiting immediately on conflicting or invalid signals.
-                        
-                        ───────────────────────────────────────────────────────────────
-                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤3 candles old) for any entry—even though slight delays of 3–4 candles may be acceptable if the price remains within ±0.2% of the trigger level and volume momentum persists (otherwise, treat it as stale if more than 4 candles have passed or if the price moves more than 0.5% away). Additionally, always check the Portfolio first to determine if you already have an active position; only execute exit orders if a position exists. Additional Indicators can only confirm or reject a fresh (or slightly delayed) primary signal—never generate an entry on their own. For position sizing, apply the Position Sizing Rules above when computing the percentage (0–100) for entries and exits. Also, incorporate local highs/lows across the 5-minute, 1-hour, and 4-hour charts to identify potential support/resistance zones and further refine or reject your primary signals.
-                        ───────────────────────────────────────────────────────────────
-  
-                        """   
+                        """
                     },
                     {
                         "role": "user",
@@ -2904,12 +2707,6 @@ def ai_trading():
                                 {trading_signals_text}
                                 """
                             }
-                            # {
-                            #     "type": "image_url",
-                            #     "image_url": {
-                            #         "url": f"data:image/png;base64,{chart_image}"
-                            #     }
-                            # }
                         ]
                     }
                 ],
@@ -2947,149 +2744,147 @@ def ai_trading():
 
             order_executed = False
             order_info = None  # 변수 초기화 추가
-        try:
-            # 현재가 조회
+
+            try:
+                # 현재가 조회
+                ticker = trader.exchange.fetch_ticker('BTC/USDT')
+                current_btc_price = ticker['last']
+                
+                # 계좌 잔고 조회
+                balance = trader.exchange.fetch_balance()
+                total_balance = float(balance['USDT']['free'])
+                
+                # 주문 금액 계산 (수수료 고려)
+                # 포지션 보유 중일 때
+                if position_side:
+                    # 보유 포지션과 반대 방향 주문이면 포지션 크기 기준으로 계산
+                    if ((position_side == 'long' and result.decision == 'sell') or 
+                        (position_side == 'short' and result.decision == 'buy')):
+                            order_amount = position_size * (result.percentage / 100)
+                    # 같은 방향 추가 주문이면 잔고 기준으로 계산
+                    else:
+                        order_amount = total_balance * (result.percentage / 100) * 0.9996
+                else:  # 신규 진입일 때도 잔고 기준으로 계산
+                    order_amount = total_balance * (result.percentage / 100) * 0.9996
+                
+                if result.decision == "buy" and result.percentage > 0:
+                    # 롱 포지션 진입
+                    order_info = trader.market_order_with_tp_sl(
+                        side='buy',
+                        buy_amount=order_amount,
+                        pl_ratio=result.pl_ratio,
+                        sl_price=result.stop_loss_price
+                    )
+                    
+                    if order_info != None:
+                        logger.info(f"롱 포지션 진입: 금액={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
+                        order_executed = True
+                        
+                elif result.decision == "sell" and result.percentage > 0:
+                    # 숏 포지션 진입
+                    order_info = trader.market_order_with_tp_sl(
+                        side='sell',
+                        buy_amount=order_amount,
+                        pl_ratio=result.pl_ratio,
+                        sl_price=result.stop_loss_price
+                    )
+                    
+                    if order_info != None:
+                        logger.info(f"숏 포지션 진입: 금액={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
+                        order_executed = True
+                        
+            except Exception as e:
+                logger.error(f"주문 실행 중 오류 발생: {str(e)}")
+                
+            # 거래 실행 여부와 관계없이 현재 잔고 조회
+            time.sleep(1)  # API 호출 제한을 고려하여 잠시 대기
+            balance = trader.exchange.fetch_balance()
+            usdt_balance = balance['USDT']
+            free_usdt = usdt_balance['free']    # 사용 가능한 잔고
+            used_usdt = usdt_balance['used']    # 주문에 묶인 잔고
+            total_usdt = usdt_balance['total']  # 전체 잔고
+            
+            # 현재 포지션 정보 조회
+            try:
+                positions = trader.exchange.fetch_positions([trader.symbol])
+                if positions and len(positions) > 0:
+                    position = positions[0]  # BTC/USDT 포지션
+                    btc_avg_buy_price = float(position['entryPrice']) 
+                    position_size = float(position['contracts'])
+                else:
+                    btc_avg_buy_price = 0
+                    position_size = 0
+            except Exception as e:
+                logger.error(f"Error fetching position: {e}")
+                btc_avg_buy_price = 0 
+                position_size = 0
+                
+            # BTC/USDT 현재가 조회
             ticker = trader.exchange.fetch_ticker('BTC/USDT')
             current_btc_price = ticker['last']
-            
-            # 계좌 잔고 조회
-            balance = trader.exchange.fetch_balance()
-            total_balance = float(balance['USDT']['free'])
-            
-            # 주문 금액 계산 (수수료 고려)
-            # 포지션 보유 중일 때
-            if position_side:
-                # 보유 포지션과 반대 방향 주문이면 포지션 크기 기준으로 계산
-                if ((position_side == 'long' and result.decision == 'sell') or 
-                    (position_side == 'short' and result.decision == 'buy')):
-                        order_amount = position_size * (result.percentage / 100)
-                # 같은 방향 추가 주문이면 잔고 기준으로 계산
-                else:
-                    order_amount = total_balance * (result.percentage / 100) * 0.9996
-            else:  # 신규 진입일 때도 잔고 기준으로 계산
-                order_amount = total_balance * (result.percentage / 100) * 0.9996
 
-            
-            if result.decision == "buy":
-                # 롱 포지션 진입
-                order_info = trader.market_order_with_tp_sl(
-                    side='buy',
-                    buy_amount=order_amount,
-                    pl_ratio=result.pl_ratio,
-                    sl_price=result.stop_loss_price
-                )
+            # 신호 데이터 추출
+            signals_data = chart_processor.generate_ai_prompt_data()
+
+            # 거래 기록을 DB에 저장하기
+            if order_executed and order_info != None:
+                order_id = order_info['entry']['id']
+                tp_order_id = order_info['tp']['id'] if order_info.get('tp') else None
+                sl_order_id = order_info['sl']['id'] if order_info.get('sl') else None
                 
-                if order_info != None:
-                    logger.info(f"롱 포지션 진입: 금액={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
-                    order_executed = True
-                    
-            elif result.decision == "sell":
-                # 숏 포지션 진입
-                order_info = trader.market_order_with_tp_sl(
-                    side='sell',
-                    buy_amount=order_amount,
-                    pl_ratio=result.pl_ratio,
-                    sl_price=result.stop_loss_price
-                )
+                log_trade(conn, 'AI', order_id, result.decision, result.percentage, result.reason, 
+                used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
+                reflection, tp_order_id, sl_order_id, signals_data)
                 
-                if order_info != None:
-                    logger.info(f"숏 포지션 진입: 금액={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
-                    order_executed = True
+                # 트레일링 스탑로스 모니터링 추가
+                if 'monitor_sl' in order_info:
+                    # 함수를 변수에 저장
+                    monitor_sl_func = order_info['monitor_sl']
                     
-        except Exception as e:
-            logger.error(f"주문 실행 중 오류 발생: {str(e)}")
-            raise
-            
-        # 거래 실행 여부와 관계없이 현재 잔고 조회
-        time.sleep(1)  # API 호출 제한을 고려하여 잠시 대기
-        balance = trader.exchange.fetch_balance()
-        usdt_balance = balance['USDT']
-        free_usdt = usdt_balance['free']    # 사용 가능한 잔고
-        used_usdt = usdt_balance['used']    # 주문에 묶인 잔고
-        total_usdt = usdt_balance['total']  # 전체 잔고
-        # 현재 포지션 정보 조회
-        try:
-            positions = trader.exchange.fetch_positions([trader.symbol])
-            if positions and len(positions) > 0:
-                position = positions[0]  # BTC/USDT 포지션
-                btc_avg_buy_price = float(position['entryPrice']) 
-                position_size = float(position['contracts'])
+                    # 각 작업에 고유 ID 할당
+                    job_id = f"sl_monitor_{order_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    
+                    def periodic_sl_monitoring(monitor_func, job_id=job_id):
+                        try:
+                            new_sl_order = monitor_func()
+                            if new_sl_order:
+                                logger.info(f"Trailing SL order updated: {new_sl_order}")
+                        except Exception as e:
+                            # 오류 발생 시 해당 작업을 스케줄에서 제거
+                            logger.error(f"Error in SL monitoring: {e}")
+                            global sl_monitor_jobs
+                            for job in sl_monitor_jobs:
+                                if job.job_id == job_id:
+                                    schedule.cancel_job(job)
+                                    sl_monitor_jobs.remove(job)
+                                    break
+                    
+                    # 5분마다 SL 모니터링 작업 예약
+                    job = schedule.every(5).minutes.do(periodic_sl_monitoring, monitor_sl_func)
+                    job.job_id = job_id  # ID 할당
+                    
+                    # 글로벌 작업 목록에 추가
+                    global sl_monitor_jobs
+                    sl_monitor_jobs.append(job)
+                    logger.info(f"Created trailing SL monitoring job: {job_id}")
+                
             else:
-                btc_avg_buy_price = 0
-                position_size = 0
-        except Exception as e:
-            logger.error(f"Error fetching position: {e}")
-            btc_avg_buy_price = 0 
-            position_size = 0
-        # BTC/USDT 현재가 조회
-        ticker = trader.exchange.fetch_ticker('BTC/USDT')
-        current_btc_price = ticker['last']
-
-        # 신호 데이터 추출
-        signals_data = chart_processor.generate_ai_prompt_data()
-
-        # 거래 기록을 DB에 저장하기
-        if order_executed and order_info != None:
-            order_id = order_info['entry']['id']
-            tp_order_id = order_info['tp']['id'] if order_info.get('tp') else None
-            sl_order_id = order_info['sl']['id'] if order_info.get('sl') else None
-            
-            log_trade(conn, 'AI', order_id, result.decision, result.percentage, result.reason, 
-            used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
-            reflection, tp_order_id, sl_order_id, signals_data)
-            
-            # 트레일링 스탑로스 모니터링 추가
-            if 'monitor_sl' in order_info:
-                # 함수를 변수에 저장
-                monitor_sl_func = order_info['monitor_sl']
-                
-                def periodic_sl_monitoring():
-                    try:
-                        new_sl_order = monitor_sl_func()
-                        if new_sl_order:
-                            logger.info(f"Trailing SL order updated: {new_sl_order}")
-                    except Exception as e:
-                        logger.error(f"Error in SL monitoring: {e}")
-                        
-                # 5분마다 SL 모니터링
-                schedule.every(5).minutes.do(periodic_sl_monitoring)
-                
-        else:
-            # 거래가 실행되지 않은 경우 (hold 또는 실패)
-            log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
-                    used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
-                    reflection, None, None, signals_data)
+                # 거래가 실행되지 않은 경우 (hold 또는 실패)
+                log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
+                        used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
+                        reflection, None, None, signals_data)
+        
+        finally:
+            if conn:
+                conn.close()
     
-    
-    except sqlite3.Error as e:
-        logger.error(f"Database connection error: {e}")
-        return
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    except Exception as e:
+        logger.error(f"AI 트레이딩 함수 오류: {e}")
+        # 메모리 정리
+        gc.collect()
 
 if __name__ == "__main__":
-    logger.info("Hello, Mingu !!")
-    logger.info("Starting trading bot ...")
+    logger.info("Starting trading bot...")
     try:
         # 시작할 때도 크롬 프로세스 한번 정리
         cleanup_chrome_processes()
@@ -3102,7 +2897,11 @@ if __name__ == "__main__":
         # 데이터베이스 초기화
         init_db()
 
-        # 중복 실행 방지를 위한 변수들
+        # 리소스 모니터링 작업 추가
+        schedule.every(5).minutes.do(check_resource_usage)
+
+        # 글로벌 변수 초기화
+        sl_monitor_jobs = []
         trading_in_progress = False
         monitoring_in_progress = False
         
@@ -3119,6 +2918,8 @@ if __name__ == "__main__":
                 logger.error(f"An error occurred in trading job: {e}")
             finally:
                 trading_in_progress = False
+                # 메모리 정리
+                gc.collect()
 
         # 수동 거래 모니터링 작업을 수행하는 함수
         def monitoring_job():
@@ -3133,30 +2934,15 @@ if __name__ == "__main__":
                 logger.error(f"An error occurred in monitoring job: {e}")
             finally:
                 monitoring_in_progress = False
+                # 메모리 정리
+                gc.collect()
 
         # 초기 실행
         trading_job()
         monitoring_job()
 
-        # AI 트레이딩 스케줄 설정
-        # for hour in [21, 22, 23, 0, 1]:
-        #     for minute in range(0, 60, 15):
-        #         schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
-        # schedule.every().day.at("02:00").do(trading_job)
-
-        # for hour in [4, 5, 6]:
-        #     for minute in range(0, 60, 15):
-        #         schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
-        # schedule.every().day.at("07:00").do(trading_job)
-
-        # for hour in [15, 16, 17]:
-        #     for minute in range(0, 60, 15):
-        #         schedule.every().day.at(f"{hour:02d}:{minute:02d}").do(trading_job)
-        # schedule.every().day.at("18:00").do(trading_job)
-        
         # AI 트레이딩 스케줄 설정 (5분마다 실행)
         schedule.every(5).minutes.do(trading_job) # GPT-4o-mini를 사용하여 비용 절감, 더 자주 트레이딩 수행
-
 
         # 수동 거래 모니터링 스케줄 설정 (1분마다 실행)
         schedule.every(1).minutes.do(monitoring_job)
@@ -3169,5 +2955,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Critical error occurred: {e}")
         cleanup_chrome_processes()
+        WebDriverManager.quit()
     finally:
         cleanup_chrome_processes()
+        WebDriverManager.quit()
