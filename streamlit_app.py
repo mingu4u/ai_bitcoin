@@ -108,28 +108,30 @@ def main():
            
            with col1:
                st.subheader("BlackFlag FTS")
-               if pd.notna(latest_trade.get('blackflag_signal')):
+               if 'blackflag_signal' in latest_trade and pd.notna(latest_trade['blackflag_signal']):
                    st.write(f"Signal: {latest_trade['blackflag_signal']}")
-                   st.write(f"Candles Ago: {latest_trade['blackflag_candles_ago']}")
+                   if 'blackflag_candles_ago' in latest_trade and pd.notna(latest_trade['blackflag_candles_ago']):
+                       st.write(f"Candles Ago: {latest_trade['blackflag_candles_ago']}")
                else:
                    st.write("No BlackFlag signal data available")
                
                st.subheader("UT Bot Alert")
-               if pd.notna(latest_trade.get('utbot_signal')):
+               if 'utbot_signal' in latest_trade and pd.notna(latest_trade['utbot_signal']):
                    st.write(f"Signal: {latest_trade['utbot_signal']}")
-                   st.write(f"Candles Ago: {latest_trade['utbot_candles_ago']}")
+                   if 'utbot_candles_ago' in latest_trade and pd.notna(latest_trade['utbot_candles_ago']):
+                       st.write(f"Candles Ago: {latest_trade['utbot_candles_ago']}")
                else:
                    st.write("No UT Bot signal data available")
            
            with col2:
                st.subheader("Volume Oscillator")
-               if pd.notna(latest_trade.get('volume_osc_current')):
-                   st.write(f"Current Value: {latest_trade['volume_osc_current']:.2f}%")
+               if 'volume_osc_current' in latest_trade and pd.notna(latest_trade['volume_osc_current']):
+                   st.write(f"Current Value: {latest_trade['volume_osc_current']:.2f}")
                else:
                    st.write("No Volume Oscillator data available")
                
                st.subheader("Stop Loss Price")
-               if pd.notna(latest_trade.get('stop_loss_price')):
+               if 'stop_loss_price' in latest_trade and pd.notna(latest_trade['stop_loss_price']):
                    st.write(f"Price: {latest_trade['stop_loss_price']:.2f} USDT")
                else:
                    st.write("No Stop Loss price data available")
@@ -153,10 +155,27 @@ def main():
        start_idx = (page_number - 1) * page_size
        end_idx = min(start_idx + page_size, len(filtered_df))
        
-       # 표시할 컬럼 선택
+       # 표시할 컬럼 선택 - reason과 세 지표 정보 추가
        display_columns = ['timestamp', 'trade_type', 'decision', 'percentage', 'reason', 
-                          'btc_balance', 'usdt_balance', 'total_assets', 'btc_current_price']
-       st.dataframe(filtered_df.iloc[start_idx:end_idx][display_columns])
+                          'btc_balance', 'usdt_balance', 'total_assets', 'btc_current_price',
+                          'blackflag_signal', 'blackflag_candles_ago', 'utbot_signal', 
+                          'utbot_candles_ago', 'volume_osc_current', 'stop_loss_price']
+       
+       # 컬럼 폭 조정을 위해 display_df 생성
+       display_df = filtered_df.iloc[start_idx:end_idx][display_columns].copy()
+       
+       # 필요한 경우 일부 컬럼 이름을 더 짧게 표시
+       display_df = display_df.rename(columns={
+           'blackflag_signal': 'BF_Signal',
+           'blackflag_candles_ago': 'BF_Age',
+           'utbot_signal': 'UTBot_Signal',
+           'utbot_candles_ago': 'UTBot_Age',
+           'volume_osc_current': 'Vol_Osc',
+           'stop_loss_price': 'SL_Price'
+       })
+       
+       # 스크롤 가능한 테이블로 표시
+       st.dataframe(display_df, height=500, use_container_width=True)
    else:
        st.info("No trade history available for the selected type.")
 
@@ -223,7 +242,7 @@ def main():
            
            with tabs[0]:
                # BlackFlag 신호별 성공률
-               if pd.notna(filtered_df['blackflag_signal']).any():
+               if filtered_df['blackflag_signal'].notna().any():
                    st.subheader('BlackFlag FTS Signal Success Rate')
                    
                    # 신호별 거래 분류
@@ -248,7 +267,7 @@ def main():
            
            with tabs[1]:
                # UT Bot 신호별 성공률
-               if pd.notna(filtered_df['utbot_signal']).any():
+               if filtered_df['utbot_signal'].notna().any():
                    st.subheader('UT Bot Alert Success Rate')
                    
                    utbot_success = filtered_df.groupby('utbot_signal')['trade_success'].agg(['count', 'sum'])
@@ -271,11 +290,11 @@ def main():
            
            with tabs[2]:
                # 신호 조합별 성공률
-               if pd.notna(filtered_df['blackflag_signal']).any() and pd.notna(filtered_df['utbot_signal']).any():
+               if filtered_df['blackflag_signal'].notna().any() and filtered_df['utbot_signal'].notna().any():
                    st.subheader('Signal Combination Analysis')
                    
                    # 신호 조합 생성
-                   filtered_df['signal_combo'] = filtered_df['blackflag_signal'] + ' + ' + filtered_df['utbot_signal']
+                   filtered_df['signal_combo'] = filtered_df['blackflag_signal'].fillna('None') + ' + ' + filtered_df['utbot_signal'].fillna('None')
                    
                    combo_success = filtered_df.groupby('signal_combo')['trade_success'].agg(['count', 'sum'])
                    combo_success['success_rate'] = (combo_success['sum'] / combo_success['count']) * 100
