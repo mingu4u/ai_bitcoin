@@ -320,7 +320,7 @@ def analyze_chart_signals(image_path,
                          # Volume Oscillator parameters (normalized ROI)
                          volume_roi=(0.93, 0.68, 0.97, 0.88),
                          # Debug flag and prefix
-                         debug=False,
+                         debug=True,
                          debug_prefix="debug_"):
     """
     하나의 이미지에서 아래 3개 신호/값을 감지하여 반환합니다.
@@ -473,23 +473,28 @@ def analyze_chart_signals(image_path,
                 candidate_points = points[points[:,:,0] == max_x]
                 candidate_points = candidate_points.reshape(-1,2)
                 candidate_center_y = int(np.mean(candidate_points[:,1]))
+        
         stop_loss_price = None
+        # 변수 초기화 위치 수정 - new_s_y1, new_s_y2 변수를 먼저 정의
+        s_x1 = int(w * 0.92)
+        s_x2 = int(w * 0.97)
+        
         if candidate_center_y is not None:
             global_center_y = cy1 + candidate_center_y
             band_half = 20
             new_s_y1 = max(0, global_center_y - band_half)
             new_s_y2 = min(h, global_center_y + band_half)
-            s_x1 = int(w * 0.92)
-            s_x2 = int(w * 0.97)
             roi_stoploss = img_bf[new_s_y1:new_s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, new_s_y1), (s_x2, new_s_y2), (0,255,0), 2)
         else:
-            s_x1 = int(w * 0.92)
             s_y1 = int(h * 0.05)
-            s_x2 = int(w * 0.97)
             s_y2 = int(h * 0.68)
             roi_stoploss = img_bf[s_y1:s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, s_y1), (s_x2, s_y2), (255,0,255), 2)
+            # candidate_center_y가 None일 때의 new_s_y1, new_s_y2 설정
+            new_s_y1 = s_y1
+            new_s_y2 = s_y2
+            
         roi_stoploss_hsv = cv2.cvtColor(roi_stoploss, cv2.COLOR_BGR2HSV)
         if direction == "long":
             mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_green, upper_green)
@@ -529,8 +534,8 @@ def analyze_chart_signals(image_path,
         return {"flip_detected": True,
                 "flip_x": flip_x_global,
                 "flip_time": time_label,
-                "stop_loss_price": stop_loss_price}
-    
+                "stop_loss_price": stop_loss_price}    
+        
     ############### UT Bot Alerts Detection ###############
     def detect_utbot():
             img_ut = img.copy()
