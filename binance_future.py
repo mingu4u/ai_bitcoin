@@ -42,32 +42,84 @@ import re
 import gc
 import psutil
 
-# WebDriver 관리자 클래스 (싱글톤 패턴)
+# WebDriver 관리자 클래스 개선 (재시작 기능 추가)
 class WebDriverManager:
     _instance = None
+    _last_created = None
+    _max_lifetime = 900  # 15분 (초 단위) - 드라이버 최대 수명
     
     @classmethod
-    def get_driver(cls):
-        if cls._instance is None or not cls._is_alive(cls._instance):
+    def get_driver(cls, force_new=False):
+        """
+        WebDriver 인스턴스 가져오기 - 필요시 새로 생성
+        
+        Args:
+            force_new (bool): 강제로 새 드라이버 생성 여부
+            
+        Returns:
+            WebDriver: 생성된 WebDriver 인스턴스
+        """
+        current_time = time.time()
+        
+        # 1. 강제 재생성 또는 인스턴스가 없는 경우
+        if force_new or cls._instance is None:
+            if cls._instance:
+                cls.quit()  # 기존 드라이버 정리
             cls._instance = safe_create_driver()
+            cls._last_created = current_time
+            return cls._instance
+            
+        # 2. 드라이버 수명 초과 확인
+        if cls._last_created and (current_time - cls._last_created) > cls._max_lifetime:
+            logger.info(f"드라이버 최대 수명({cls._max_lifetime}초) 초과, 재생성")
+            cls.quit()  # 기존 드라이버 정리
+            cls._instance = safe_create_driver()
+            cls._last_created = current_time
+            return cls._instance
+            
+        # 3. 드라이버 건강상태 확인
+        if not cls._is_alive(cls._instance):
+            logger.warning("드라이버가 응답하지 않음, 재생성")
+            cls.quit()  # 기존 드라이버 정리
+            cls._instance = safe_create_driver()
+            cls._last_created = current_time
+        
         return cls._instance
     
     @classmethod
     def _is_alive(cls, driver):
+        """
+        드라이버 건강상태 확인
+        
+        Args:
+            driver: WebDriver 인스턴스
+            
+        Returns:
+            bool: 드라이버 정상 여부
+        """
         try:
-            driver.current_url  # 드라이버가 응답하는지 간단히 확인
+            # 간단한 JavaScript 실행으로 드라이버 상태 확인
+            driver.execute_script("return 1")
+            # 현재 URL 확인 (추가 검증)
+            _ = driver.current_url
             return True
-        except:
+        except Exception as e:
+            logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
             return False
     
     @classmethod
     def quit(cls):
+        """드라이버 안전하게 종료"""
         if cls._instance:
             try:
                 cls._instance.quit()
-            except:
-                pass
-            cls._instance = None
+            except Exception as e:
+                logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
+            finally:
+                cls._instance = None
+                cls._last_created = None
+            # 크롬 프로세스 정리 추가
+            cleanup_chrome_processes()
             
 # 시스템 리소스 모니터링 및 자가 복구 함수
 def check_resource_usage():
@@ -320,7 +372,7 @@ def analyze_chart_signals(image_path,
                          # Volume Oscillator parameters (normalized ROI)
                          volume_roi=(0.93, 0.68, 0.97, 0.88),
                          # Debug flag and prefix
-                         debug=True,
+                         debug=False,
                          debug_prefix="debug_"):
     """
     하나의 이미지에서 아래 3개 신호/값을 감지하여 반환합니다.
@@ -1830,6 +1882,77 @@ def login_with_cookies():
         WebDriverManager.quit()
         return None
 
+# 재시도 로직이 포함된 TradingView 차트 캡처 함수
+def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False, debug=False, 
+                                        max_retries=3, page_load_timeout=30):
+    """
+    TradingView 차트를 캡처하고 분석하는 함수 (재시도 로직 포함)
+    
+    Args:
+        chart_processor: 차트 신호 프로세서 인스턴스
+        save_image: 이미지 저장 여부
+        debug: 디버그 모드 활성화 여부
+        max_retries: 최대 재시도 횟수
+        page_load_timeout: 페이지 로드 타임아웃 (초)
+        
+    Returns:
+        tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로 또는 None)
+    """
+    driver = None
+    
+    for attempt in range(max_retries):
+        try:
+            # 1. 드라이버 획득 (필요시 재생성)
+            if attempt > 0:
+                logger.info(f"차트 캡처 재시도 ({attempt+1}/{max_retries})")
+                driver = WebDriverManager.get_driver(force_new=True)  # 강제 재생성
+            else:
+                driver = WebDriverManager.get_driver()
+            
+            if not driver:
+                logger.error("유효한 WebDriver를 얻을 수 없음")
+                time.sleep(2)
+                continue
+                
+            # 2. 페이지 로드
+            try:
+                driver.set_page_load_timeout(page_load_timeout)
+                # 첫 시도에만 페이지 로드, 재시도 시에는 새로고침
+                if attempt == 0:
+                    # 로그인 상태로 TradingView 차트 페이지 열기
+                    driver.get("https://kr.tradingview.com/chart/zcDfxQQ8/?symbol=BINANCE%3ABTCUSDT.P")
+                else:
+                    driver.refresh()
+                
+                # 페이지 로드 대기
+                WebDriverWait(driver, page_load_timeout).until(
+                    EC.presence_of_element_located((By.XPATH, "/html/body/div[2]"))
+                )
+                logger.info("TradingView 페이지 로드 완료")
+                # 차트 로딩을 위한 추가 대기
+                time.sleep(3)
+            except Exception as e:
+                logger.error(f"페이지 로드 중 오류: {str(e)}")
+                time.sleep(2)
+                continue
+                
+            # 3. 이미지 캡처 및 신호 분석
+            result = capture_and_analyze_chart(driver, chart_processor, save_image, debug)
+            
+            # 결과가 유효하면 반환
+            if result[0]:  # base64 이미지가 있으면 성공
+                return result
+            else:
+                logger.warning(f"캡처 실패 또는 빈 응답 (시도 {attempt+1}/{max_retries})")
+                time.sleep(2)
+        
+        except Exception as e:
+            logger.error(f"차트 캡처 중 오류 (시도 {attempt+1}/{max_retries}): {str(e)}")
+            time.sleep(2)
+    
+    logger.error(f"최대 재시도 횟수({max_retries}) 초과, 차트 캡처 실패")
+    return None, None, None
+
 def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
     """
     차트 이미지를 캡처하고 신호를 분석하는 함수
@@ -2447,35 +2570,31 @@ def ai_trading():
     
     ### 데이터 가져오기
     # 7. Selenium으로 차트 캡처
-    driver = None
     chart_image = None
+    signals_analysis = None
     try:
-        # TradingView 차트 캡처
-        driver = login_with_cookies()
-        if driver:
-            driver.get("https://kr.tradingview.com/chart/zcDfxQQ8/?symbol=BINANCE%3ABTCUSDT.P")
-            logger.info("TradingView 페이지 로드 완료")
-            time.sleep(3)
+        # 로그인 후 재시도 로직이 포함된 캡처 함수 호출
+        login_with_cookies()  # 쿠키로 로그인만 먼저 시도
         
-            # 이미지 캡처 및 신호 분석
-            chart_image, signals_analysis, saved_file_path = capture_and_analyze_chart(
-                driver, chart_processor, save_image=False, debug=False)   
+        # 재시도 로직이 포함된 캡처 함수 호출
+        chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
+            chart_processor=chart_processor, 
+            save_image=False, 
+            debug=False,
+            max_retries=3,  # 최대 3번 재시도
+            page_load_timeout=40  # 페이지 로드 타임아웃 40초
+        )
+        
+        if chart_image:
+            logger.info("TradingView 스크린샷 캡처 및 분석 완료")
+        else:
+            logger.error("최대 재시도 후에도 스크린샷 캡처 실패")
             
-            if chart_image:
-                logger.info(f"TradingView 스크린샷 캡처 및 분석 완료.")
-            else:
-                logger.error("스크린샷 캡처 실패")
-                    
-    except WebDriverException as e:
-        logger.error(f"캡쳐시 WebDriver 오류 발생: {e}")
-        chart_image = None
     except Exception as e:
-        logger.error(f"차트 캡처 중 오류 발생: {e}")
-        chart_image = None        
+        logger.error(f"차트 캡처 프로세스 중 심각한 오류 발생: {e}", exc_info=True)
     finally:
-        # 사용이 끝난 WebDriver 정리
-        if driver:
-            WebDriverManager.quit()
+        # 항상 드라이버 정리 (현재 실행 여부와 관계없이)
+        WebDriverManager.quit()
 
     # 1. 현재 투자 상태 조회
     # USDT 잔고 조회
