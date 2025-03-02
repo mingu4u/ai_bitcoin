@@ -562,7 +562,7 @@ def analyze_chart_signals(image_path,
         mask_stoploss_sl = cv2.morphologyEx(mask_stoploss_sl, cv2.MORPH_OPEN, kernel)
         contours_sl, _ = cv2.findContours(mask_stoploss_sl, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours_sl:
-            candidate_contours = [cnt for cnt in contours_sl if cv2.contourArea(cnt) > 500]
+            candidate_contours = [cnt for cnt in contours_sl if 500 < cv2.contourArea(cnt) < 1000]
             if candidate_contours:
                 candidate = max(candidate_contours, key=cv2.contourArea)
                 x_box, y_box, w_box, h_box = cv2.boundingRect(candidate)
