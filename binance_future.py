@@ -2221,6 +2221,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
             stop_loss_price = None
             
             if signals_data:
+                # 수정이 필요한 부분
                 blackflag_signal = signals_data.get("BlackFlag", {}).get("signal")
                 blackflag_candles_ago = signals_data.get("BlackFlag", {}).get("candles_ago")
                 utbot_signal = signals_data.get("UTBot", {}).get("signal")
@@ -2244,6 +2245,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
     except Exception as e:
         logger.error(f"거래 기록 오류: {e}")
         return False
+    
 
 def get_recent_trades(conn, num_trades=20):
     """
@@ -2612,8 +2614,8 @@ def ai_trading():
         # 재시도 로직이 포함된 캡처 함수 호출
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=False, 
-            debug=False,
+            save_image=True, 
+            debug=True,
             max_retries=3,  # 최대 3번 재시도
             page_load_timeout=40  # 페이지 로드 타임아웃 40초
         )
