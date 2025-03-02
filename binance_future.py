@@ -362,7 +362,7 @@ class SignalTracker:
 
 def analyze_chart_signals(image_path,
                          # BlackFlag FTS parameters (normalized coordinates)
-                         blackflag_cloud_roi=(0.0, 0.05, 0.92, 0.67),
+                         blackflag_cloud_roi=(0.0, 0.05, 0.92, 0.68),
                          blackflag_xaxis_yrange=(0.87, 0.91),
                          blackflag_chunk_size=10,
                          blackflag_needed_red_chunks=2,
@@ -370,7 +370,7 @@ def analyze_chart_signals(image_path,
                          # UT Bot parameters
                          utbot_xaxis_yrange=(0.87, 0.91),
                          # Volume Oscillator parameters (normalized ROI)
-                         volume_roi=(0.93, 0.68, 0.97, 0.88),
+                         volume_roi=(0.93, 0.69, 0.97, 0.88),
                          # Debug flag and prefix
                          debug=False,
                          debug_prefix="debug_"):
