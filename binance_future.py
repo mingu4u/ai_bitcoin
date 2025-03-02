@@ -534,18 +534,24 @@ def analyze_chart_signals(image_path,
         if candidate_center_y is not None:
             global_center_y = cy1 + candidate_center_y
             band_half = 20
-            new_s_y1 = max(0, global_center_y - band_half)
-            new_s_y2 = min(h, global_center_y + band_half)
+            # 클라우드 내부로 제한하는 로직 추가
+            new_s_y1 = max(cy1, global_center_y - band_half)
+            new_s_y2 = min(cy2, global_center_y + band_half)
+            # 수평 위치도 클라우드 범위 내로 제한
+            s_x1 = int(cx2 + 5)  # 클라우드 오른쪽 경계에서 약간만 떨어진 위치
+            s_x2 = min(int(s_x1 + w * 0.05), w)  # 필요한 만큼만 너비 확보
             roi_stoploss = img_bf[new_s_y1:new_s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, new_s_y1), (s_x2, new_s_y2), (0,255,0), 2)
         else:
-            s_y1 = int(h * 0.05)
-            s_y2 = int(h * 0.68)
+            # 클라우드 영역 내부로만 제한
+            s_x1 = int(cx2 + 5)  # 클라우드 오른쪽 경계에서 약간만 떨어진 위치
+            s_x2 = min(int(s_x1 + w * 0.05), w)
+            s_y1 = cy1
+            s_y2 = cy2
             roi_stoploss = img_bf[s_y1:s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, s_y1), (s_x2, s_y2), (255,0,255), 2)
-            # candidate_center_y가 None일 때의 new_s_y1, new_s_y2 설정
             new_s_y1 = s_y1
-            new_s_y2 = s_y2
+            new_s_y2 = s_y2     
             
         roi_stoploss_hsv = cv2.cvtColor(roi_stoploss, cv2.COLOR_BGR2HSV)
         if direction == "long":
