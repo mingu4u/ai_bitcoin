@@ -515,7 +515,11 @@ def analyze_chart_signals(image_path,
             rgb_color = np.uint8([[[82,82,255]]])
             hsv_ref = cv2.cvtColor(rgb_color, cv2.COLOR_BGR2HSV)
             mask_candidate = cv2.inRange(roi_cloud_hsv, hsv_ref*0.9, hsv_ref*1.1)
+        
+        # 수정된 부분: 클라우드 영역 바운더리(상단/하단) 근처 후보만 고려
         candidate_center_y = None
+        valid_candidates = []
+        
         if flip_x_local < roi_w:
             right_side_mask = mask_candidate[:, flip_x_local:]
             points = cv2.findNonZero(right_side_mask)
@@ -523,35 +527,58 @@ def analyze_chart_signals(image_path,
                 points[:,:,0] += flip_x_local
                 max_x = np.max(points[:,:,0])
                 candidate_points = points[points[:,:,0] == max_x]
-                candidate_points = candidate_points.reshape(-1,2)
-                candidate_center_y = int(np.mean(candidate_points[:,1]))
+                candidate_points = candidate_points.reshape(-1, 2)
+                
+                # 후보 포인트들을 y좌표 기준으로 정렬
+                candidate_points = sorted(candidate_points, key=lambda p: p[1])
+                
+                # 여러 개의 후보점이 존재할 경우
+                if len(candidate_points) > 0:
+                    if direction == "long":
+                        # long 방향(Green Cloud)인 경우 가장 아래쪽 점 사용 (Cloud의 경계) - 첫번째 점 무시
+                        if len(candidate_points) > 1:
+                            candidate_center_y = int(candidate_points[-1][1])
+                        else:
+                            candidate_center_y = int(candidate_points[0][1])
+                    else:
+                        # short 방향(Red Cloud)인 경우 가장 위쪽 점 사용 (Cloud의 경계) - 마지막 점 무시
+                        if len(candidate_points) > 1:
+                            candidate_center_y = int(candidate_points[0][1])
+                        else:
+                            candidate_center_y = int(candidate_points[0][1])
         
         stop_loss_price = None
         # 변수 초기화 위치 수정 - new_s_y1, new_s_y2 변수를 먼저 정의
-        s_x1 = int(w * 0.93)
+        s_x1 = int(w * 0.92)
         s_x2 = int(w * 0.97)
         
         if candidate_center_y is not None:
             global_center_y = cy1 + candidate_center_y
             band_half = 20
-            # 클라우드 내부로 제한하는 로직 추가
-            new_s_y1 = max(cy1, global_center_y - band_half)
-            new_s_y2 = min(cy2, global_center_y + band_half)
-            # 수평 위치도 클라우드 범위 내로 제한
-            s_x1 = int(cx2 + 5)  # 클라우드 오른쪽 경계에서 약간만 떨어진 위치
-            s_x2 = min(int(s_x1 + w * 0.05), w)  # 필요한 만큼만 너비 확보
+            new_s_y1 = max(0, global_center_y - band_half)
+            new_s_y2 = min(h, global_center_y + band_half)
+            
+            # 클라우드 영역 내부로 제한하는 추가 로직
+            if direction == "long":
+                # Long(Green Cloud)인 경우 하단 경계 근처로 제한
+                new_s_y1 = max(new_s_y1, cy1)
+                new_s_y2 = min(new_s_y2, cy2)
+            else:
+                # Short(Red Cloud)인 경우 상단 경계 근처로 제한
+                new_s_y1 = max(new_s_y1, cy1)
+                new_s_y2 = min(new_s_y2, cy2)
+                
             roi_stoploss = img_bf[new_s_y1:new_s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, new_s_y1), (s_x2, new_s_y2), (0,255,0), 2)
         else:
-            # 클라우드 영역 내부로만 제한
-            s_x1 = int(cx2 + 5)  # 클라우드 오른쪽 경계에서 약간만 떨어진 위치
-            s_x2 = min(int(s_x1 + w * 0.05), w)
+            # 후보 포인트가 없는 경우 클라우드 영역으로 제한
             s_y1 = cy1
             s_y2 = cy2
             roi_stoploss = img_bf[s_y1:s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, s_y1), (s_x2, s_y2), (255,0,255), 2)
+            # candidate_center_y가 None일 때의 new_s_y1, new_s_y2 설정
             new_s_y1 = s_y1
-            new_s_y2 = s_y2     
+            new_s_y2 = s_y2
             
         roi_stoploss_hsv = cv2.cvtColor(roi_stoploss, cv2.COLOR_BGR2HSV)
         if direction == "long":
@@ -562,7 +589,7 @@ def analyze_chart_signals(image_path,
         mask_stoploss_sl = cv2.morphologyEx(mask_stoploss_sl, cv2.MORPH_OPEN, kernel)
         contours_sl, _ = cv2.findContours(mask_stoploss_sl, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if contours_sl:
-            candidate_contours = [cnt for cnt in contours_sl if 500 < cv2.contourArea(cnt) < 1000]
+            candidate_contours = [cnt for cnt in contours_sl if cv2.contourArea(cnt) > 500]
             if candidate_contours:
                 candidate = max(candidate_contours, key=cv2.contourArea)
                 x_box, y_box, w_box, h_box = cv2.boundingRect(candidate)
@@ -592,7 +619,7 @@ def analyze_chart_signals(image_path,
         return {"flip_detected": True,
                 "flip_x": flip_x_global,
                 "flip_time": time_label,
-                "stop_loss_price": stop_loss_price}    
+                "stop_loss_price": stop_loss_price}  
         
     ############### UT Bot Alerts Detection ###############
     def detect_utbot():
