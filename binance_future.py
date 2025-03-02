@@ -2612,8 +2612,8 @@ def ai_trading():
         # 재시도 로직이 포함된 캡처 함수 호출
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=True, 
-            debug=True,
+            save_image=False, 
+            debug=False,
             max_retries=3,  # 최대 3번 재시도
             page_load_timeout=40  # 페이지 로드 타임아웃 40초
         )
