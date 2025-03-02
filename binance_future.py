@@ -2221,13 +2221,12 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
             stop_loss_price = None
             
             if signals_data:
-                # 수정이 필요한 부분
-                blackflag_signal = signals_data.get("BlackFlag", {}).get("signal")
-                blackflag_candles_ago = signals_data.get("BlackFlag", {}).get("candles_ago")
-                utbot_signal = signals_data.get("UTBot", {}).get("signal")
-                utbot_candles_ago = signals_data.get("UTBot", {}).get("candles_ago")
-                volume_osc_current = signals_data.get("VolumeOsc", {}).get("current")
-                stop_loss_price = signals_data.get("BlackFlag", {}).get("stop_loss_price")
+                blackflag_signal = signals_data.get("BlackFlag_Signal")
+                blackflag_candles_ago = signals_data.get("BlackFlag_CandlesAgo")
+                utbot_signal = signals_data.get("UTBot_Signal")
+                utbot_candles_ago = signals_data.get("UTBot_CandlesAgo")
+                volume_osc_current = signals_data.get("VolumeOsc_Current")
+                stop_loss_price = signals_data.get("StopLoss_Price")            
             
             c.execute("""INSERT INTO trades 
                         (timestamp, trade_type, order_id, decision, percentage, reason, 
