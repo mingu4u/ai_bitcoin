@@ -528,7 +528,7 @@ def analyze_chart_signals(image_path,
         
         stop_loss_price = None
         # 변수 초기화 위치 수정 - new_s_y1, new_s_y2 변수를 먼저 정의
-        s_x1 = int(w * 0.92)
+        s_x1 = int(w * 0.93)
         s_x2 = int(w * 0.97)
         
         if candidate_center_y is not None:
