@@ -59,7 +59,10 @@ class WebDriverManager:
             # 1. 강제 재생성 또는 인스턴스가 없는 경우
             if force_new or cls._instance is None:
                 if cls._instance:
-                    cls.quit()  # 기존 드라이버 정리
+                    # ======== 여기 부분이 문제의 원인 ========
+                    # 기존 드라이버 정리 - quit 대신 기존에 사용하던 메서드 이름 사용
+                    if hasattr(cls._instance, 'quit'):
+                        cls._instance.quit()
                 cls._instance = safe_create_driver()
                 cls._last_created = current_time
                 return cls._instance
@@ -67,17 +70,21 @@ class WebDriverManager:
             # 2. 드라이버 수명 초과 확인
             if cls._last_created and (current_time - cls._last_created) > cls._max_lifetime:
                 logger.info(f"드라이버 최대 수명({cls._max_lifetime}초) 초과, 재생성")
-                cls.quit()  # 기존 드라이버 정리
+                # 기존 드라이버 정리
+                if hasattr(cls._instance, 'quit'):
+                    cls._instance.quit()
                 cls._instance = safe_create_driver()
                 cls._last_created = current_time
                 return cls._instance
                 
-            # 3. 드라이버 건강상태 확인 - 여기를 수정
+            # 3. 드라이버 건강상태 확인
             if not cls._is_alive(cls._instance):
                 logger.warning("드라이버가 응답하지 않음, 재생성")
-                cls.quit()  # 기존 드라이버 정리
+                # 기존 드라이버 정리
+                if hasattr(cls._instance, 'quit'):
+                    cls._instance.quit()
                 # 잠시 대기 추가 (포트 해제를 위한 시간)
-                time.sleep(3)
+                time.sleep(5)
                 cls._instance = safe_create_driver()
                 cls._last_created = current_time
             
@@ -95,7 +102,7 @@ class WebDriverManager:
     @classmethod
     def _is_alive(cls, driver):
         """
-        드라이버 건강상태 확인 - 수정된 버전
+        드라이버 건강상태 확인 - 개선된 버전
         
         Args:
             driver: WebDriver 인스턴스
@@ -104,9 +111,14 @@ class WebDriverManager:
             bool: 드라이버 정상 여부
         """
         try:
-            # timeout 설정을 짧게 하여 응답 지연 최소화
-            driver.set_page_load_timeout(5)
-            driver.set_script_timeout(5)
+            # 충분한 대기 시간 추가
+            time.sleep(3)  # 건강 상태 확인 전 3초 대기
+            
+            # 타임아웃 설정을 짧게 하여 응답 지연 최소화
+            if hasattr(driver, 'set_page_load_timeout'):
+                driver.set_page_load_timeout(10)
+            if hasattr(driver, 'set_script_timeout'):
+                driver.set_script_timeout(10)
             
             # 간단한 JavaScript 실행으로 드라이버 상태 확인
             driver.execute_script("return 1")
@@ -122,31 +134,6 @@ class WebDriverManager:
             else:
                 logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
                 return False
-
-    @classmethod
-    def _is_alive(cls, driver):
-        """
-        드라이버 건강상태 확인
-        
-        Args:
-            driver: WebDriver 인스턴스
-            
-        Returns:
-            bool: 드라이버 정상 여부
-        """
-        try:
-            # 쿠키 로드 및 페이지 새로고침 후에는 충분한 시간이 필요
-            # 너무 빨리 건강 상태를 확인하면 "Connection refused" 오류 발생
-            time.sleep(3)  # 건강 상태 확인 전 3초 대기 추가
-            
-            # 간단한 JavaScript 실행으로 드라이버 상태 확인
-            driver.execute_script("return 1")
-            # 현재 URL 확인 (추가 검증)
-            _ = driver.current_url
-            return True
-        except Exception as e:
-            logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
-            return False
 
 def cleanup_chrome_processes():
     """
@@ -2038,14 +2025,13 @@ def login_with_cookies():
         
         # 먼저 도메인에 접속 (쿠키 설정을 위해 필요)
         driver.get("https://www.tradingview.com/accounts/signin/")
-        time.sleep(2)
+        time.sleep(5)  # 더 긴 대기 시간 추가
         
         # 저장된 쿠키가 있다면 로드
         if load_cookies(driver, cookies_path):
             driver.refresh()  # 쿠키 적용을 위한 새로고침
-            
-            # 중요: 충분한 시간 대기 추가 - 페이지 로드 완료 및 쿠키 적용을 위한 대기
-            time.sleep(10)  # 10초로 증가
+            # 페이지 새로고침 후 충분한 대기 시간 추가
+            # time.sleep(10)  # 10초 대기
             
             # 로그인 상태 확인
             if check_login_status(driver):
@@ -2056,8 +2042,11 @@ def login_with_cookies():
     except Exception as e:
         logger.info(f"로그인 중 예외 발생: {e}")
         # 드라이버 정리 - 메모리 누수 방지
-        WebDriverManager.quit()
+        if WebDriverManager._instance:
+            WebDriverManager._instance.quit()
+        WebDriverManager._instance = None
         return None
+
 
 # 재시도 로직이 포함된 TradingView 차트 캡처 함수
 def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False, debug=False, 
@@ -2143,7 +2132,15 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
     logger.error(f"최대 재시도 횟수({max_retries}) 초과, 차트 캡처 실패")
     
     # 마지막 정리 작업
-    WebDriverManager.quit()  # WebDriverManager에서 관리하는 드라이버 인스턴스 종료
+    try:
+        # WebDriverManager.quit() 대신 인스턴스 메서드 사용
+        if WebDriverManager._instance:
+            WebDriverManager._instance.quit()
+        WebDriverManager._instance = None
+        WebDriverManager._last_created = None
+    except Exception as cleanup_error:
+        logger.warning(f"WebDriver 정리 중 오류: {cleanup_error}")
+
     gc.collect()  # 가비지 컬렉션 명시적 호출
     
     return None, None, None
