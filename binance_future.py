@@ -135,6 +135,25 @@ class WebDriverManager:
                 logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
                 return False
 
+    # 기존 코드와의 호환성을 위해 quit 클래스 메서드 추가
+    @classmethod
+    def quit(cls):
+        """드라이버 안전하게 종료"""
+        driver_instance = cls._instance  # 로컬 변수에 현재 인스턴스 저장
+        cls._instance = None  # 먼저 클래스 변수를 None으로 설정하여 재시도 방지
+        cls._last_created = None
+        
+        if driver_instance:
+            try:
+                # 드라이버 종료 시도
+                driver_instance.quit()
+            except Exception as e:
+                logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
+            finally:
+                # 크롬 프로세스 정리
+                cleanup_chrome_processes()
+                gc.collect()
+
 def cleanup_chrome_processes():
     """
     개선된 크롬 프로세스 정리 함수
