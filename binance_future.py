@@ -50,45 +50,41 @@ class WebDriverManager:
     
     @classmethod
     def get_driver(cls, force_new=False):
+        """
+        WebDriver 인스턴스 가져오기 - 필요시 새로 생성
+        
+        Args:
+            force_new (bool): 강제로 새 드라이버 생성 여부
+            
+        Returns:
+            WebDriver: 생성된 WebDriver 인스턴스
+        """
         current_time = time.time()
         
-        # 먼저 크롬 프로세스 정리 - 항상 새로운 환경에서 시작
-        cleanup_chrome_processes()
-        
-        try:
-            # 1. 강제 재생성 또는 인스턴스가 없는 경우
-            if force_new or cls._instance is None:
-                if cls._instance:
-                    cls.quit()  # 기존 드라이버 정리
-                cls._instance = safe_create_driver()
-                cls._last_created = current_time
-                return cls._instance
-                
-            # 2. 드라이버 수명 초과 확인
-            if cls._last_created and (current_time - cls._last_created) > cls._max_lifetime:
-                logger.info(f"드라이버 최대 수명({cls._max_lifetime}초) 초과, 재생성")
+        # 1. 강제 재생성 또는 인스턴스가 없는 경우
+        if force_new or cls._instance is None:
+            if cls._instance:
                 cls.quit()  # 기존 드라이버 정리
-                cls._instance = safe_create_driver()
-                cls._last_created = current_time
-                return cls._instance
-                
-            # 3. 드라이버 건강상태 확인
-            if not cls._is_alive(cls._instance):
-                logger.warning("드라이버가 응답하지 않음, 재생성")
-                cls.quit()  # 기존 드라이버 정리
-                cls._instance = safe_create_driver()
-                cls._last_created = current_time
-            
+            cls._instance = safe_create_driver()
+            cls._last_created = current_time
             return cls._instance
-        except Exception as e:
-            logger.error(f"드라이버 생성 중 예외 발생: {e}")
-            cls._instance = None
-            cls._last_created = None
-            # 예외 발생시 마지막 정리
-            cleanup_chrome_processes()
-            # 메모리 정리
-            gc.collect()
-            raise e
+            
+        # 2. 드라이버 수명 초과 확인
+        if cls._last_created and (current_time - cls._last_created) > cls._max_lifetime:
+            logger.info(f"드라이버 최대 수명({cls._max_lifetime}초) 초과, 재생성")
+            cls.quit()  # 기존 드라이버 정리
+            cls._instance = safe_create_driver()
+            cls._last_created = current_time
+            return cls._instance
+            
+        # 3. 드라이버 건강상태 확인
+        if not cls._is_alive(cls._instance):
+            logger.warning("드라이버가 응답하지 않음, 재생성")
+            cls.quit()  # 기존 드라이버 정리
+            cls._instance = safe_create_driver()
+            cls._last_created = current_time
+        
+        return cls._instance
     
     @classmethod
     def _is_alive(cls, driver):
@@ -114,49 +110,51 @@ class WebDriverManager:
     @classmethod
     def quit(cls):
         """드라이버 안전하게 종료"""
-        driver_instance = cls._instance  # 로컬 변수에 현재 인스턴스 저장
-        cls._instance = None  # 먼저 클래스 변수를 None으로 설정하여 재시도 방지
-        cls._last_created = None
-        
-        if driver_instance:
+        if cls._instance:
             try:
-                # 세션 ID를 먼저 저장
-                session_id = None
-                try:
-                    session_id = driver_instance.session_id
-                except:
-                    pass
-                
-                # 드라이버 종료 시도
-                driver_instance.quit()
-                
-                # 세션이 존재했다면 세션 정보 삭제 시도
-                if session_id:
-                    try:
-                        # 세션 직접 삭제 시도 (저수준 접근)
-                        driver_instance.command_executor._commands["quit"] = ("DELETE", f"/session/{session_id}")
-                        driver_instance.command_executor.execute({"name": "quit"})
-                    except:
-                        pass
+                cls._instance.quit()
             except Exception as e:
                 logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
             finally:
-                # 크롬 프로세스 정리
-                cleanup_chrome_processes()
-                gc.collect()
+                cls._instance = None
+                cls._last_created = None
+            # 크롬 프로세스 정리 추가
+            cleanup_chrome_processes()
+            gc.collect()
          
+# 시스템 리소스 모니터링 및 자가 복구 함수
+def check_resource_usage():
+    # 메모리 사용량 모니터링
+    memory_percent = psutil.virtual_memory().percent
+    if memory_percent > 80:
+        logger.warning(f"High memory usage detected: {memory_percent}%")
+        # 정리 작업 수행
+        WebDriverManager.quit()
+        cleanup_chrome_processes()
+        gc.collect()
+        
+# 모든 크롬 프로세스 종료 후 정리
 def cleanup_chrome_processes():
     try:
-        # 운영체제 확인 기능 강화
-        if platform.system() == "Linux" or os.getenv("ENVIRONMENT") == "ec2":
-            os.system('pkill -9 -f "chrome|chromium|chromedriver" || true')
-        elif platform.system() == "Windows" or os.getenv("ENVIRONMENT") == "local":
-            os.system('taskkill /f /im chrome.exe > nul 2>&1')
-            os.system('taskkill /f /im chromedriver.exe > nul 2>&1')
-        else:
-            logger.warning(f"Unsupported OS: {platform.system()}")
+        if os.getenv("ENVIRONMENT") == "ec2":
+            # 강제 종료 옵션과 함께 모든 크롬/크롬드라이버 프로세스 종료
+            os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
+            # 확실한 정리를 위한 추가 명령
+            os.system('sudo killall -9 chrome chromium-browser chromedriver')
+        elif os.getenv("ENVIRONMENT") == "local":
+            os.system('taskkill /f /im chrome.exe')
+            os.system('taskkill /f /im chromedriver.exe')
         
-        time.sleep(2)  # 프로세스들이 완전히 종료되기를 기다림
+        # 프로세스가 완전히 종료될 때까지 충분히 대기
+        time.sleep(3)
+        
+        # 프로세스가 확실히 종료되었는지 확인 (EC2의 경우)
+        if os.getenv("ENVIRONMENT") == "ec2":
+            chrome_processes = os.popen('ps aux | grep -E "chrome|chromedriver" | grep -v grep').read()
+            if chrome_processes.strip():
+                logger.warning(f"Some Chrome processes still running: {chrome_processes}")
+                # 다시 시도
+                os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
     except Exception as e:
         logger.error(f"Chrome processes cleanup failed: {e}")
 
@@ -1858,29 +1856,11 @@ def safe_create_driver():
     retries = 3
     for attempt in range(retries):
         try:
-            # 시도마다 프로세스 정리
-            cleanup_chrome_processes()
-            # 메모리 사용량 확인
-            memory_percent = psutil.virtual_memory().percent
-            if memory_percent > 90:
-                logger.warning(f"메모리 사용량이 매우 높습니다: {memory_percent}%. 메모리 정리 중...")
-                gc.collect()
-                time.sleep(2)  # 메모리 정리를 위한 대기
-            
             driver = create_driver()
-            # 드라이버가 실제로 작동하는지 간단한 테스트
-            driver.execute_script("return 1")
             return driver
         except WebDriverException as e:
             logger.error(f"WebDriver 생성 실패 (시도 {attempt + 1}/{retries}): {e}")
-            time.sleep(5)  # 재시도 전 더 오래 대기 (5초)
-            # 명시적으로 남아있는 드라이버 종료 시도
-            try:
-                if 'driver' in locals() and driver:
-                    driver.quit()
-            except:
-                pass
-    
+            time.sleep(2)  # 재시도 전 대기
     raise WebDriverException("WebDriver 생성 실패. 크롬 드라이버를 확인하세요.")
 
 # XPath로 Element 찾기
@@ -2025,18 +2005,14 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
             logger.error(f"차트 캡처 중 오류 (시도 {attempt+1}/{max_retries}): {str(e)}")
             time.sleep(2)
         finally:
-                try:
-                    if driver:
-                        driver.quit()
-                        logger.info("WebDriver 명시적으로 종료됨")
-                        # 세션 종료 후 충분한 대기 시간 추가
-                        time.sleep(1)  
-                except Exception as e:
-                    logger.warning(f"WebDriver 종료 중 오류: {str(e)}")
-                
-                # WebDriverManager에서도 명시적으로 None 설정
-                WebDriverManager._instance = None
-                WebDriverManager._last_created = None
+            # 명시적인 드라이버 종료 추가
+            # (이 부분은 try-except문 바깥에 있어서 항상 실행됨)
+            try:
+                if driver:
+                    driver.quit()
+                    logger.info("WebDriver 명시적으로 종료됨")
+            except Exception as e:
+                logger.warning(f"WebDriver 종료 중 오류: {str(e)}")
     
     logger.error(f"최대 재시도 횟수({max_retries}) 초과, 차트 캡처 실패")
     
@@ -2189,49 +2165,25 @@ def modify_orderbook(orderbook):
     return modified_orderbook
 
 def check_resource_usage():
-    """시스템 리소스 모니터링 및 필요시 정리 작업 수행"""
     # 메모리 사용량 모니터링
     memory_percent = psutil.virtual_memory().percent
-    # CPU 사용량 모니터링
-    cpu_percent = psutil.cpu_percent(interval=1)
-    # 디스크 사용량 모니터링
-    disk_usage = psutil.disk_usage('/').percent
-    
-    logger.info(f"시스템 리소스 모니터링: 메모리 {memory_percent}%, CPU {cpu_percent}%, 디스크 {disk_usage}%")
-    
-    # 경고 수준 (80%)에 도달했을 때 가벼운 정리 수행
-    if memory_percent > 80 or cpu_percent > 80:
-        logger.warning(f"시스템 리소스 부족: 메모리 {memory_percent}%, CPU {cpu_percent}%")
-        # 크롬 프로세스 정리
+    if memory_percent > 80:
+        logger.warning(f"High memory usage detected: {memory_percent}%")
+        # 정리 작업 수행
         WebDriverManager.quit()
         cleanup_chrome_processes()
         gc.collect()
-    
-    # 심각 수준 (95%)에 도달했을 때 더 강력한 조치 수행
-    if memory_percent > 95 or cpu_percent > 95:
-        logger.critical(f"심각한 리소스 부족: 메모리 {memory_percent}%, CPU {cpu_percent}%")
         
-        # 모든 작업 일시 중지
-        global trading_in_progress, monitoring_in_progress
-        trading_in_progress = True  # 일시적으로 작업 중단
-        monitoring_in_progress = True
+    # CPU 사용량 모니터링 추가
+    cpu_percent = psutil.cpu_percent(interval=1)
+    if cpu_percent > 90:
+        logger.warning(f"High CPU usage detected: {cpu_percent}%")
         
-        # 강력한 정리 작업 수행
-        cleanup_chrome_processes()
-        for job in sl_monitor_jobs[:]:
-            schedule.cancel_job(job)
-            sl_monitor_jobs.remove(job)
-            
-        # 메모리 정리
-        gc.collect()
-        time.sleep(5)  # 시스템이 복구될 시간 제공
-        
-        # 작업 재개 허용
-        trading_in_progress = False
-        monitoring_in_progress = False
-        
-        logger.info("리소스 정리 완료, 작업 재개 가능")
-
+    # 디스크 사용량 모니터링 추가
+    disk_usage = psutil.disk_usage('/')
+    if disk_usage.percent > 85:
+        logger.warning(f"High disk usage detected: {disk_usage.percent}%")
+        # 로그 및 임시 파일 정리 작업 추가
 
 # 로그 관리 설정 추가
 def setup_logging():
@@ -2760,8 +2712,8 @@ def ai_trading():
         # 재시도 로직이 포함된 캡처 함수 호출
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=True, 
-            debug=True,
+            save_image=False, 
+            debug=False,
             max_retries=3,  # 최대 3번 재시도
             page_load_timeout=40  # 페이지 로드 타임아웃 40초
         )
@@ -2776,13 +2728,7 @@ def ai_trading():
     finally:
         # 항상 드라이버 정리 (현재 실행 여부와 관계없이)
         WebDriverManager.quit()
-        # 웹드라이버 연결 관련 변수를 명시적으로 None으로 설정
-        driver = None
-        chart_image = None
-        # 메모리에서 큰 객체 제거 유도
-        gc.collect()
-        # 연결 관련 객체 정리를 위한 추가 대기
-        time.sleep(0.5)
+
     # 1. 현재 투자 상태 조회
     # USDT 잔고 조회
     balance = trader.exchange.fetch_balance()
@@ -3361,7 +3307,7 @@ if __name__ == "__main__":
         init_db()
 
         # 리소스 모니터링 작업 추가
-        schedule.every(10).minutes.do(check_resource_usage)
+        schedule.every(5).minutes.do(check_resource_usage)
 
         # 글로벌 변수 초기화
         sl_monitor_jobs = []
