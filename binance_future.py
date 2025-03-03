@@ -114,51 +114,49 @@ class WebDriverManager:
     @classmethod
     def quit(cls):
         """드라이버 안전하게 종료"""
-        if cls._instance:
+        driver_instance = cls._instance  # 로컬 변수에 현재 인스턴스 저장
+        cls._instance = None  # 먼저 클래스 변수를 None으로 설정하여 재시도 방지
+        cls._last_created = None
+        
+        if driver_instance:
             try:
-                cls._instance.quit()
+                # 세션 ID를 먼저 저장
+                session_id = None
+                try:
+                    session_id = driver_instance.session_id
+                except:
+                    pass
+                
+                # 드라이버 종료 시도
+                driver_instance.quit()
+                
+                # 세션이 존재했다면 세션 정보 삭제 시도
+                if session_id:
+                    try:
+                        # 세션 직접 삭제 시도 (저수준 접근)
+                        driver_instance.command_executor._commands["quit"] = ("DELETE", f"/session/{session_id}")
+                        driver_instance.command_executor.execute({"name": "quit"})
+                    except:
+                        pass
             except Exception as e:
                 logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
             finally:
-                cls._instance = None
-                cls._last_created = None
-            # 크롬 프로세스 정리 추가
-            cleanup_chrome_processes()
-            gc.collect()
+                # 크롬 프로세스 정리
+                cleanup_chrome_processes()
+                gc.collect()
          
-# 시스템 리소스 모니터링 및 자가 복구 함수
-def check_resource_usage():
-    # 메모리 사용량 모니터링
-    memory_percent = psutil.virtual_memory().percent
-    if memory_percent > 80:
-        logger.warning(f"High memory usage detected: {memory_percent}%")
-        # 정리 작업 수행
-        WebDriverManager.quit()
-        cleanup_chrome_processes()
-        gc.collect()
-        
-# 모든 크롬 프로세스 종료 후 정리
 def cleanup_chrome_processes():
     try:
-        if os.getenv("ENVIRONMENT") == "ec2":
-            # 강제 종료 옵션과 함께 모든 크롬/크롬드라이버 프로세스 종료
-            os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
-            # 확실한 정리를 위한 추가 명령
-            os.system('sudo killall -9 chrome chromium-browser chromedriver')
-        elif os.getenv("ENVIRONMENT") == "local":
-            os.system('taskkill /f /im chrome.exe')
-            os.system('taskkill /f /im chromedriver.exe')
+        # 운영체제 확인 기능 강화
+        if platform.system() == "Linux" or os.getenv("ENVIRONMENT") == "ec2":
+            os.system('pkill -9 -f "chrome|chromium|chromedriver" || true')
+        elif platform.system() == "Windows" or os.getenv("ENVIRONMENT") == "local":
+            os.system('taskkill /f /im chrome.exe > nul 2>&1')
+            os.system('taskkill /f /im chromedriver.exe > nul 2>&1')
+        else:
+            logger.warning(f"Unsupported OS: {platform.system()}")
         
-        # 프로세스가 완전히 종료될 때까지 충분히 대기
-        time.sleep(3)
-        
-        # 프로세스가 확실히 종료되었는지 확인 (EC2의 경우)
-        if os.getenv("ENVIRONMENT") == "ec2":
-            chrome_processes = os.popen('ps aux | grep -E "chrome|chromedriver" | grep -v grep').read()
-            if chrome_processes.strip():
-                logger.warning(f"Some Chrome processes still running: {chrome_processes}")
-                # 다시 시도
-                os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
+        time.sleep(2)  # 프로세스들이 완전히 종료되기를 기다림
     except Exception as e:
         logger.error(f"Chrome processes cleanup failed: {e}")
 
@@ -2027,14 +2025,18 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
             logger.error(f"차트 캡처 중 오류 (시도 {attempt+1}/{max_retries}): {str(e)}")
             time.sleep(2)
         finally:
-            # 명시적인 드라이버 종료 추가
-            # (이 부분은 try-except문 바깥에 있어서 항상 실행됨)
-            try:
-                if driver:
-                    driver.quit()
-                    logger.info("WebDriver 명시적으로 종료됨")
-            except Exception as e:
-                logger.warning(f"WebDriver 종료 중 오류: {str(e)}")
+                try:
+                    if driver:
+                        driver.quit()
+                        logger.info("WebDriver 명시적으로 종료됨")
+                        # 세션 종료 후 충분한 대기 시간 추가
+                        time.sleep(1)  
+                except Exception as e:
+                    logger.warning(f"WebDriver 종료 중 오류: {str(e)}")
+                
+                # WebDriverManager에서도 명시적으로 None 설정
+                WebDriverManager._instance = None
+                WebDriverManager._last_created = None
     
     logger.error(f"최대 재시도 횟수({max_retries}) 초과, 차트 캡처 실패")
     
@@ -2774,7 +2776,13 @@ def ai_trading():
     finally:
         # 항상 드라이버 정리 (현재 실행 여부와 관계없이)
         WebDriverManager.quit()
-
+        # 웹드라이버 연결 관련 변수를 명시적으로 None으로 설정
+        driver = None
+        chart_image = None
+        # 메모리에서 큰 객체 제거 유도
+        gc.collect()
+        # 연결 관련 객체 정리를 위한 추가 대기
+        time.sleep(0.5)
     # 1. 현재 투자 상태 조회
     # USDT 잔고 조회
     balance = trader.exchange.fetch_balance()
