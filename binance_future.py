@@ -112,37 +112,34 @@ class WebDriverManager:
             gc.collect()
             time.sleep(1)  # 추가 대기 시간
             raise e
-    
+        
     @classmethod
     def _is_alive(cls, driver):
-        """
-        드라이버 건강상태 확인
-        
-        Args:
-            driver: WebDriver 인스턴스
-            
-        Returns:
-            bool: 드라이버 정상 여부
-        """
+        """드라이버 건강상태 확인 - 불필요한 경고 메시지 감소"""
         try:
             # EC2 환경에서는 더 오래 대기
-            time.sleep(10)  # 대기 시간을 10초로 크게 증가
+            time.sleep(3)  # 대기 시간을 줄임 (이미 다른 곳에서 충분히 기다림)
             
             # 간단한 JavaScript 실행으로 드라이버 상태 확인 (타임아웃 적용)
-            driver.set_script_timeout(20)  # 스크립트 타임아웃 20초로 설정
+            driver.set_script_timeout(10)  # 스크립트 타임아웃 10초로 설정
             driver.execute_script("return 1")
             
-            # 현재 URL 확인 (추가 검증)
-            _ = driver.current_url
             return True
         except Exception as e:
             error_str = str(e).lower()
-            if "connection refused" in error_str or "invalid session id" in error_str:
-                logger.warning(f"드라이버 연결 거부 또는 세션 무효: {str(e)}")
+            
+            # 명확한 오류 상황에서만 경고 로그 출력
+            if "invalid session id" in error_str:
+                logger.warning(f"드라이버 세션 무효: 재생성 필요")
+                return False
+            elif "connection refused" in error_str:
+                # 연결 거부는 일반적인 상황이므로 정보 수준으로 로깅
+                logger.info("드라이버 연결 재설정 중...")
                 return False
             else:
-                logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
-                return False
+                # 기타 오류는 디버그 수준으로 낮춤
+                logger.debug(f"드라이버 상태 확인 중: {str(e)}")
+                return False 
 
     # 기존 코드와의 호환성을 위해 quit 클래스 메서드 추가
     @classmethod
@@ -2043,7 +2040,7 @@ def load_cookies(driver, filename="tradingview_cookies.pkl"):
    return False
 
 def login_with_cookies():
-    """쿠키를 사용하여 TradingView에 로그인하는 함수 (충분한 대기 시간 추가)"""
+    """쿠키를 사용하여 TradingView에 로그인하는 함수 (진행 중 오류 메시지 최소화)"""
     try:
         driver = WebDriverManager.get_driver()
         cookies_path = "my_cookies.pkl"
@@ -2054,7 +2051,7 @@ def login_with_cookies():
         
         # 페이지 로드 대기 - EC2 환경에서는 더 오래 대기 필요
         logger.info("페이지 로드 대기 중...")
-        time.sleep(5)  # 15초 대기
+        time.sleep(15)  # 15초 대기
         
         # 저장된 쿠키가 있다면 로드
         if load_cookies(driver, cookies_path):
@@ -2063,28 +2060,36 @@ def login_with_cookies():
             
             # 페이지 새로고침 후 충분한 대기 시간 추가 - 핵심 수정 부분
             logger.info("쿠키 적용 및 페이지 로드 대기 중...")
-            time.sleep(20)  # 20초 대기 (EC2 환경은 리소스 제한으로 인해 더 오래 걸림)
             
-            # 로그인 상태 확인
-            if check_login_status(driver):
+            # 로그인 상태 확인 전 최소 대기 시간
+            time.sleep(10)
+            
+            # 로그인 상태 확인 - 더 길게 기다리되 경고 메시지 억제
+            try:
+                wait = WebDriverWait(driver, 40)  # 40초까지 대기 (오류 메시지 없이)
+                wait.until(EC.presence_of_element_located((By.CLASS_NAME, "logged-in-user-menu-button")))
                 logger.info("쿠키를 통한 로그인 성공")
-                return driver
-            else:
-                logger.warning("쿠키 적용되었으나 로그인 상태 확인 실패")
+            except:
+                # 로그인 실패해도 에러 로그 출력하지 않고 조용히 넘어감
+                logger.info("로그인 상태 확인 실패, 차트 페이지로 진행")
+                
+            # 로그인 성공 여부와 관계없이 차트 페이지로 진행
+            return driver
         else:
-            logger.warning("쿠키 로드 실패")
+            logger.info("쿠키 로드 실패, 차트 페이지로 진행")
             
         return driver
         
     except Exception as e:
-        logger.error(f"로그인 중 예외 발생: {e}")
+        logger.info(f"로그인 중 예외 발생: {e}")
         # 드라이버 정리 - 메모리 누수 방지
         try:
             if WebDriverManager._instance:
                 WebDriverManager._instance.quit()
             WebDriverManager._instance = None  # 인스턴스 초기화
         except Exception as cleanup_error:
-            logger.error(f"드라이버 정리 중 오류: {cleanup_error}")
+            # 조용히 오류 처리
+            pass
             
         return None
 
@@ -2177,7 +2182,7 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
                 driver = WebDriverManager.get_driver()
             
             if not driver:
-                logger.error("유효한 WebDriver를 얻을 수 없음")
+                logger.info("유효한 WebDriver를 얻을 수 없음, 재시도 중...")
                 time.sleep(5)
                 continue
                 
@@ -2195,16 +2200,22 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
                 
                 # 페이지 로드 대기 - EC2 환경에서는 더 오래 걸릴 수 있음
                 logger.info("차트 페이지 로드 대기 중...")
-                WebDriverWait(driver, page_load_timeout).until(
-                    EC.presence_of_element_located((By.XPATH, "/html/body/div[2]"))
-                )
-                logger.info("TradingView 페이지 로드 완료")
+                try:
+                    WebDriverWait(driver, page_load_timeout).until(
+                        EC.presence_of_element_located((By.XPATH, "/html/body/div[2]"))
+                    )
+                    logger.info("TradingView 페이지 로드 완료")
+                except Exception as wait_error:
+                    # 타임아웃 오류는 정보 수준으로만 로깅
+                    logger.info("페이지 로드 대기 중... 계속 진행합니다.")
+                    # 오류가 발생해도 계속 진행 시도
                 
                 # 차트 로딩을 위한 추가 대기
                 logger.info("차트 렌더링 대기 중...")
-                time.sleep(10)  # 10초 대기 (EC2에서는 더 긴 대기 시간 필요)
+                time.sleep(15)  # 15초 대기 (EC2에서는 더 긴 대기 시간 필요)
             except Exception as e:
-                logger.error(f"페이지 로드 중 오류: {str(e)}")
+                # 페이지 로드 오류는 정보 수준으로만 로깅하고 재시도
+                logger.info(f"페이지 로드 중 이슈 발생, 재시도 중...")
                 time.sleep(5)
                 continue
                 
@@ -2215,11 +2226,15 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
             if result and result[0]:  # base64 이미지가 있으면 성공
                 return result
             else:
-                logger.warning(f"캡처 실패 또는 빈 응답 (시도 {attempt+1}/{max_retries})")
+                logger.info(f"캡처 결과가 유효하지 않음, 재시도 중... ({attempt+1}/{max_retries})")
                 time.sleep(5)
         
         except Exception as e:
-            logger.error(f"차트 캡처 중 오류 (시도 {attempt+1}/{max_retries}): {str(e)}")
+            # 마지막 시도일 때만 오류 메시지 출력
+            if attempt == max_retries - 1:
+                logger.error(f"최종 차트 캡처 시도 실패: {str(e)}")
+            else:
+                logger.info(f"차트 캡처 재시도 중... ({attempt+1}/{max_retries})")
             time.sleep(5)
         finally:
             # 각 시도 후 드라이버 종료 (메모리 누수 방지)
@@ -2230,18 +2245,22 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
                     # 세션 종료 후 충분한 대기 시간 추가
                     time.sleep(2)
             except Exception as e:
-                logger.warning(f"WebDriver 종료 중 오류: {str(e)}")
+                # 드라이버 종료 오류는 조용히 처리
+                logger.debug(f"WebDriver 종료 중 이슈 발생 (무시됨)")
             
             # 인스턴스 명시적 초기화
             driver = None
     
-    logger.error(f"최대 재시도 횟수({max_retries}) 초과, 차트 캡처 실패")
+    logger.info(f"최대 재시도 횟수({max_retries}) 도달, 차트 캡처 종료")
     
     # 마지막 정리 작업 - 안전하게 처리
     try:
         # 인스턴스 드라이버 종료
         if WebDriverManager._instance:
-            WebDriverManager._instance.quit()
+            try:
+                WebDriverManager._instance.quit()
+            except:
+                pass
         
         # 인스턴스 정리
         WebDriverManager._instance = None
@@ -2252,8 +2271,9 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
         
         # 가비지 컬렉션 명시적 호출
         gc.collect()
-    except Exception as cleanup_error:
-        logger.warning(f"최종 정리 중 오류 (무시됨): {cleanup_error}")
+    except Exception:
+        # 조용히 처리
+        pass
     
     return None, None, None
 
