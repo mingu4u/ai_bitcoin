@@ -124,40 +124,29 @@ class WebDriverManager:
                 return False
 
     @classmethod
-    def quit(cls):
-        """드라이버 안전하게 종료 - 개선된 버전"""
-        driver_instance = cls._instance  # 로컬 변수에 현재 인스턴스 저장
-        cls._instance = None  # 먼저 클래스 변수를 None으로 설정하여 재시도 방지
-        cls._last_created = None
+    def _is_alive(cls, driver):
+        """
+        드라이버 건강상태 확인
         
-        if driver_instance:
-            try:
-                # 세션 ID를 먼저 저장
-                session_id = None
-                try:
-                    session_id = driver_instance.session_id
-                except:
-                    pass
-                
-                # 드라이버 종료 시도
-                driver_instance.quit()
-                
-                # 세션이 존재했다면 세션 정보 삭제 시도
-                if session_id:
-                    try:
-                        # 세션 직접 삭제 시도 (저수준 접근)
-                        driver_instance.command_executor._commands["quit"] = ("DELETE", f"/session/{session_id}")
-                        driver_instance.command_executor.execute({"name": "quit"})
-                    except:
-                        pass
-            except Exception as e:
-                logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
-            finally:
-                # 크롬 프로세스 정리
-                cleanup_chrome_processes()
-                # 안정적인 종료를 위한 추가 대기 시간
-                time.sleep(2)
-                gc.collect()
+        Args:
+            driver: WebDriver 인스턴스
+            
+        Returns:
+            bool: 드라이버 정상 여부
+        """
+        try:
+            # 쿠키 로드 및 페이지 새로고침 후에는 충분한 시간이 필요
+            # 너무 빨리 건강 상태를 확인하면 "Connection refused" 오류 발생
+            time.sleep(3)  # 건강 상태 확인 전 3초 대기 추가
+            
+            # 간단한 JavaScript 실행으로 드라이버 상태 확인
+            driver.execute_script("return 1")
+            # 현재 URL 확인 (추가 검증)
+            _ = driver.current_url
+            return True
+        except Exception as e:
+            logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
+            return False
 
 def cleanup_chrome_processes():
     """
@@ -2054,7 +2043,9 @@ def login_with_cookies():
         # 저장된 쿠키가 있다면 로드
         if load_cookies(driver, cookies_path):
             driver.refresh()  # 쿠키 적용을 위한 새로고침
-            time.sleep(3)
+            
+            # 중요: 충분한 시간 대기 추가 - 페이지 로드 완료 및 쿠키 적용을 위한 대기
+            time.sleep(10)  # 10초로 증가
             
             # 로그인 상태 확인
             if check_login_status(driver):
