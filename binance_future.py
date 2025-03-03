@@ -59,10 +59,7 @@ class WebDriverManager:
             # 1. 강제 재생성 또는 인스턴스가 없는 경우
             if force_new or cls._instance is None:
                 if cls._instance:
-                    # ======== 여기 부분이 문제의 원인 ========
-                    # 기존 드라이버 정리 - quit 대신 기존에 사용하던 메서드 이름 사용
-                    if hasattr(cls._instance, 'quit'):
-                        cls._instance.quit()
+                    cls.quit()  # 기존 드라이버 정리
                 cls._instance = safe_create_driver()
                 cls._last_created = current_time
                 return cls._instance
@@ -70,9 +67,7 @@ class WebDriverManager:
             # 2. 드라이버 수명 초과 확인
             if cls._last_created and (current_time - cls._last_created) > cls._max_lifetime:
                 logger.info(f"드라이버 최대 수명({cls._max_lifetime}초) 초과, 재생성")
-                # 기존 드라이버 정리
-                if hasattr(cls._instance, 'quit'):
-                    cls._instance.quit()
+                cls.quit()  # 기존 드라이버 정리
                 cls._instance = safe_create_driver()
                 cls._last_created = current_time
                 return cls._instance
@@ -80,11 +75,7 @@ class WebDriverManager:
             # 3. 드라이버 건강상태 확인
             if not cls._is_alive(cls._instance):
                 logger.warning("드라이버가 응답하지 않음, 재생성")
-                # 기존 드라이버 정리
-                if hasattr(cls._instance, 'quit'):
-                    cls._instance.quit()
-                # 잠시 대기 추가 (포트 해제를 위한 시간)
-                time.sleep(5)
+                cls.quit()  # 기존 드라이버 정리
                 cls._instance = safe_create_driver()
                 cls._last_created = current_time
             
@@ -102,7 +93,7 @@ class WebDriverManager:
     @classmethod
     def _is_alive(cls, driver):
         """
-        드라이버 건강상태 확인 - 개선된 버전
+        드라이버 건강상태 확인
         
         Args:
             driver: WebDriver 인스턴스
@@ -111,31 +102,15 @@ class WebDriverManager:
             bool: 드라이버 정상 여부
         """
         try:
-            # 충분한 대기 시간 추가
-            time.sleep(3)  # 건강 상태 확인 전 3초 대기
-            
-            # 타임아웃 설정을 짧게 하여 응답 지연 최소화
-            if hasattr(driver, 'set_page_load_timeout'):
-                driver.set_page_load_timeout(10)
-            if hasattr(driver, 'set_script_timeout'):
-                driver.set_script_timeout(10)
-            
             # 간단한 JavaScript 실행으로 드라이버 상태 확인
             driver.execute_script("return 1")
             # 현재 URL 확인 (추가 검증)
             _ = driver.current_url
             return True
         except Exception as e:
-            # 오류 메시지에서 Connection refused인 경우 즉시 False 반환
-            error_str = str(e).lower()
-            if "connection refused" in error_str or "invalid session id" in error_str:
-                logger.warning(f"드라이버 연결 거부 또는 세션 무효: {str(e)}")
-                return False
-            else:
-                logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
-                return False
+            logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
+            return False
 
-    # 기존 코드와의 호환성을 위해 quit 클래스 메서드 추가
     @classmethod
     def quit(cls):
         """드라이버 안전하게 종료"""
@@ -145,111 +120,30 @@ class WebDriverManager:
         
         if driver_instance:
             try:
+                # 세션 ID를 먼저 저장
+                session_id = None
+                try:
+                    session_id = driver_instance.session_id
+                except:
+                    pass
+                
                 # 드라이버 종료 시도
                 driver_instance.quit()
+                
+                # 세션이 존재했다면 세션 정보 삭제 시도
+                if session_id:
+                    try:
+                        # 세션 직접 삭제 시도 (저수준 접근)
+                        driver_instance.command_executor._commands["quit"] = ("DELETE", f"/session/{session_id}")
+                        driver_instance.command_executor.execute({"name": "quit"})
+                    except:
+                        pass
             except Exception as e:
                 logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
             finally:
                 # 크롬 프로세스 정리
                 cleanup_chrome_processes()
                 gc.collect()
-
-def cleanup_chrome_processes():
-    """
-    개선된 크롬 프로세스 정리 함수
-    """
-    try:
-        # 운영체제 확인 기능 강화
-        if platform.system() == "Linux" or os.getenv("ENVIRONMENT") == "ec2":
-            # 프로세스 상태 확인
-            os.system('ps aux | grep -i chrome')
-            os.system('ps aux | grep -i chromedriver')
-            # 크롬 관련 프로세스 종료
-            os.system('pkill -9 -f "chrome|chromium" || true')
-            os.system('pkill -9 -f "chromedriver" || true')
-        elif platform.system() == "Windows" or os.getenv("ENVIRONMENT") == "local":
-            os.system('taskkill /f /im chrome.exe > nul 2>&1')
-            os.system('taskkill /f /im chromedriver.exe > nul 2>&1')
-        else:
-            logger.warning(f"Unsupported OS: {platform.system()}")
-        
-        time.sleep(2)  # 프로세스들이 완전히 종료되기를 기다림
-        
-        # Linux에서 추가 프로세스 정리 확인
-        if platform.system() == "Linux" or os.getenv("ENVIRONMENT") == "ec2":
-            os.system('ps aux | grep -i chrome')
-            os.system('ps aux | grep -i chromedriver')
-            
-    except Exception as e:
-        logger.error(f"Chrome processes cleanup failed: {e}")
-
-def safe_create_driver():
-    """안전하게 WebDriver 인스턴스 생성 - 개선된 버전"""
-    retries = 3
-    for attempt in range(retries):
-        try:
-            # 시도마다 프로세스 정리
-            cleanup_chrome_processes()
-            # 메모리 사용량 확인
-            memory_percent = psutil.virtual_memory().percent
-            if memory_percent > 90:
-                logger.warning(f"메모리 사용량이 매우 높습니다: {memory_percent}%. 메모리 정리 중...")
-                gc.collect()
-                time.sleep(2)  # 메모리 정리를 위한 대기
-            
-            # 포트 충돌 방지를 위해 임의의 포트 사용
-            chrome_options = Options()
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-gpu")
-            # WebGL 경고 메시지 제거를 위한 추가 옵션들
-            chrome_options.add_argument("--enable-unsafe-webgl")
-            chrome_options.add_argument("--enable-unsafe-swiftshader")
-            chrome_options.add_argument('--disable-web-security')
-            chrome_options.add_argument('--allow-running-insecure-content')
-            chrome_options.add_argument('--disable-software-rasterizer')
-            # 연결 타임아웃 설정
-            chrome_options.add_argument('--dns-prefetch-disable')
-            
-            # 새로운 추가 - 특정 랜덤 포트 사용
-            import random
-            port = random.randint(9000, 9999)
-            chrome_options.add_argument(f'--remote-debugging-port={port}')
-            
-            # 로깅 레벨 조정
-            chrome_options.add_argument('--log-level=3')
-            
-            env = os.getenv("ENVIRONMENT")
-            if env == "local":
-                chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-                from webdriver_manager.chrome import ChromeDriverManager
-                service = Service(ChromeDriverManager().install())
-            elif env == "ec2":
-                service = Service('/usr/bin/chromedriver')
-            else:
-                raise ValueError(f"Unsupported environment. Only local or ec2: {env}")
-                
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            
-            # 타임아웃 설정
-            driver.set_page_load_timeout(30)
-            driver.set_script_timeout(30)
-            
-            # 드라이버가 실제로 작동하는지 간단한 테스트
-            driver.execute_script("return 1")
-            return driver
-        except WebDriverException as e:
-            logger.error(f"WebDriver 생성 실패 (시도 {attempt + 1}/{retries}): {e}")
-            time.sleep(5)  # 재시도 전 더 오래 대기 (5초)
-            # 명시적으로 남아있는 드라이버 종료 시도
-            try:
-                if 'driver' in locals() and driver:
-                    driver.quit()
-            except:
-                pass
-    
-    raise WebDriverException("WebDriver 생성 실패. 크롬 드라이버를 확인하세요.") 
          
 def cleanup_chrome_processes():
     try:
@@ -2044,13 +1938,12 @@ def login_with_cookies():
         
         # 먼저 도메인에 접속 (쿠키 설정을 위해 필요)
         driver.get("https://www.tradingview.com/accounts/signin/")
-        time.sleep(5)  # 더 긴 대기 시간 추가
+        time.sleep(2)
         
         # 저장된 쿠키가 있다면 로드
         if load_cookies(driver, cookies_path):
             driver.refresh()  # 쿠키 적용을 위한 새로고침
-            # 페이지 새로고침 후 충분한 대기 시간 추가
-            # time.sleep(10)  # 10초 대기
+            time.sleep(3)
             
             # 로그인 상태 확인
             if check_login_status(driver):
@@ -2061,11 +1954,8 @@ def login_with_cookies():
     except Exception as e:
         logger.info(f"로그인 중 예외 발생: {e}")
         # 드라이버 정리 - 메모리 누수 방지
-        if WebDriverManager._instance:
-            WebDriverManager._instance.quit()
-        WebDriverManager._instance = None
+        WebDriverManager.quit()
         return None
-
 
 # 재시도 로직이 포함된 TradingView 차트 캡처 함수
 def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False, debug=False, 
@@ -2151,15 +2041,7 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
     logger.error(f"최대 재시도 횟수({max_retries}) 초과, 차트 캡처 실패")
     
     # 마지막 정리 작업
-    try:
-        # WebDriverManager.quit() 대신 인스턴스 메서드 사용
-        if WebDriverManager._instance:
-            WebDriverManager._instance.quit()
-        WebDriverManager._instance = None
-        WebDriverManager._last_created = None
-    except Exception as cleanup_error:
-        logger.warning(f"WebDriver 정리 중 오류: {cleanup_error}")
-
+    WebDriverManager.quit()  # WebDriverManager에서 관리하는 드라이버 인스턴스 종료
     gc.collect()  # 가비지 컬렉션 명시적 호출
     
     return None, None, None
