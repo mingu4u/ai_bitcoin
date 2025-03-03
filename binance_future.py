@@ -106,7 +106,7 @@ class WebDriverManager:
         except Exception as e:
             logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
             return False
-    
+
     @classmethod
     def quit(cls):
         """드라이버 안전하게 종료"""
@@ -120,7 +120,8 @@ class WebDriverManager:
                 cls._last_created = None
             # 크롬 프로세스 정리 추가
             cleanup_chrome_processes()
-            
+            gc.collect()
+         
 # 시스템 리소스 모니터링 및 자가 복구 함수
 def check_resource_usage():
     # 메모리 사용량 모니터링
@@ -1982,8 +1983,22 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
         except Exception as e:
             logger.error(f"차트 캡처 중 오류 (시도 {attempt+1}/{max_retries}): {str(e)}")
             time.sleep(2)
+        finally:
+            # 명시적인 드라이버 종료 추가
+            # (이 부분은 try-except문 바깥에 있어서 항상 실행됨)
+            try:
+                if driver:
+                    driver.quit()
+                    logger.info("WebDriver 명시적으로 종료됨")
+            except Exception as e:
+                logger.warning(f"WebDriver 종료 중 오류: {str(e)}")
     
     logger.error(f"최대 재시도 횟수({max_retries}) 초과, 차트 캡처 실패")
+    
+    # 마지막 정리 작업
+    WebDriverManager.quit()  # WebDriverManager에서 관리하는 드라이버 인스턴스 종료
+    gc.collect()  # 가비지 컬렉션 명시적 호출
+    
     return None, None, None
 
 def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
@@ -2091,7 +2106,8 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
                 del img_pil
                 del img_np
                 del img_cv
-                
+                if 'png' in locals():
+                    del png            
                 # 가비지 컬렉션 강제 수행
                 gc.collect()
         
@@ -2126,6 +2142,68 @@ def modify_orderbook(orderbook):
     }
     
     return modified_orderbook
+
+def check_resource_usage():
+    # 메모리 사용량 모니터링
+    memory_percent = psutil.virtual_memory().percent
+    if memory_percent > 80:
+        logger.warning(f"High memory usage detected: {memory_percent}%")
+        # 정리 작업 수행
+        WebDriverManager.quit()
+        cleanup_chrome_processes()
+        gc.collect()
+        
+    # CPU 사용량 모니터링 추가
+    cpu_percent = psutil.cpu_percent(interval=1)
+    if cpu_percent > 90:
+        logger.warning(f"High CPU usage detected: {cpu_percent}%")
+        
+    # 디스크 사용량 모니터링 추가
+    disk_usage = psutil.disk_usage('/')
+    if disk_usage.percent > 85:
+        logger.warning(f"High disk usage detected: {disk_usage.percent}%")
+        # 로그 및 임시 파일 정리 작업 추가
+
+# 로그 관리 설정 추가
+def setup_logging():
+    log_dir = "logs"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+    # 로그 파일 이름에 날짜 포함
+    log_file = os.path.join(log_dir, f"trading_bot_{datetime.now().strftime('%Y%m%d')}.log")
+    
+    # 로그 핸들러 설정
+    file_handler = logging.FileHandler(log_file)
+    console_handler = logging.StreamHandler()
+    
+    # 포맷터 설정
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+    
+    # 로거 설정
+    logger = logging.getLogger()
+    logger.handlers.clear()
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    logger.setLevel(logging.INFO)
+    
+    # 로그 로테이션 설정
+    def cleanup_old_logs():
+        # 30일 이상 된 로그 파일 삭제
+        now = datetime.now()
+        for f in os.listdir(log_dir):
+            if f.startswith("trading_bot_") and f.endswith(".log"):
+                file_path = os.path.join(log_dir, f)
+                file_time = datetime.fromtimestamp(os.path.getctime(file_path))
+                if (now - file_time).days > 30:
+                    os.remove(file_path)
+    
+    # 매일 자정에 오래된 로그 정리
+    schedule.every().day.at("00:00").do(cleanup_old_logs)
+    
+    return logger
 
 # 종료 시 정리 작업을 수행하는 함수
 def cleanup_handler():
@@ -3121,6 +3199,13 @@ def ai_trading():
                 
                 # 트레일링 스탑로스 모니터링 추가
                 if 'monitor_sl' in order_info:
+                    # 기존 모니터링 작업 정리 - 이 부분이 추가됨
+                    global sl_monitor_jobs
+                    for job in sl_monitor_jobs[:]:  # 복사본으로 순회하여 안전하게 제거
+                        schedule.cancel_job(job)
+                        sl_monitor_jobs.remove(job)
+                        logger.info(f"이전 트레일링 SL 모니터링 작업 취소: {getattr(job, 'job_id', 'unknown')}")
+                    
                     # 함수를 변수에 저장
                     monitor_sl_func = order_info['monitor_sl']
                     
@@ -3129,13 +3214,27 @@ def ai_trading():
                     
                     def periodic_sl_monitoring(monitor_func, job_id=job_id):
                         try:
+                            # 함수 실행 시간 측정 추가
+                            start_time = time.time()
+                            
                             new_sl_order = monitor_func()
+                            
                             if new_sl_order:
                                 logger.info(f"Trailing SL order updated: {new_sl_order}")
+                            
+                            # 실행 시간 기록
+                            elapsed_time = time.time() - start_time
+                            logger.debug(f"SL monitoring job completed in {elapsed_time:.2f} seconds")
+                            
+                            # 리소스 상태 확인
+                            memory_percent = psutil.virtual_memory().percent
+                            if memory_percent > 85:
+                                logger.warning(f"High memory usage in SL monitoring: {memory_percent}%")
+                                gc.collect()  # 가비지 컬렉션 강제 수행
+                                
                         except Exception as e:
                             # 오류 발생 시 해당 작업을 스케줄에서 제거
                             logger.error(f"Error in SL monitoring: {e}")
-                            global sl_monitor_jobs
                             for job in sl_monitor_jobs:
                                 if job.job_id == job_id:
                                     schedule.cancel_job(job)
@@ -3147,9 +3246,8 @@ def ai_trading():
                     job.job_id = job_id  # ID 할당
                     
                     # 글로벌 작업 목록에 추가
-                    global sl_monitor_jobs
                     sl_monitor_jobs.append(job)
-                    logger.info(f"Created trailing SL monitoring job: {job_id}")
+                    logger.info(f"Created trailing SL monitoring job: {job_id}")          
                 
             else:
                 # 거래가 실행되지 않은 경우 (hold 또는 실패)
@@ -3194,6 +3292,8 @@ if __name__ == "__main__":
             if trading_in_progress:
                 logger.warning("Trading job is already in progress, skipping this run")
                 return
+            
+            start_time = time.time()
             try:
                 trading_in_progress = True
                 ai_trading()
@@ -3201,7 +3301,8 @@ if __name__ == "__main__":
                 logger.error(f"An error occurred in trading job: {e}")
             finally:
                 trading_in_progress = False
-                # 메모리 정리
+                elapsed_time = time.time() - start_time
+                logger.info(f"Trading job completed in {elapsed_time:.2f} seconds")
                 gc.collect()
 
         # 수동 거래 모니터링 작업을 수행하는 함수
