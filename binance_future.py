@@ -50,41 +50,45 @@ class WebDriverManager:
     
     @classmethod
     def get_driver(cls, force_new=False):
-        """
-        WebDriver 인스턴스 가져오기 - 필요시 새로 생성
-        
-        Args:
-            force_new (bool): 강제로 새 드라이버 생성 여부
-            
-        Returns:
-            WebDriver: 생성된 WebDriver 인스턴스
-        """
         current_time = time.time()
         
-        # 1. 강제 재생성 또는 인스턴스가 없는 경우
-        if force_new or cls._instance is None:
-            if cls._instance:
-                cls.quit()  # 기존 드라이버 정리
-            cls._instance = safe_create_driver()
-            cls._last_created = current_time
-            return cls._instance
-            
-        # 2. 드라이버 수명 초과 확인
-        if cls._last_created and (current_time - cls._last_created) > cls._max_lifetime:
-            logger.info(f"드라이버 최대 수명({cls._max_lifetime}초) 초과, 재생성")
-            cls.quit()  # 기존 드라이버 정리
-            cls._instance = safe_create_driver()
-            cls._last_created = current_time
-            return cls._instance
-            
-        # 3. 드라이버 건강상태 확인
-        if not cls._is_alive(cls._instance):
-            logger.warning("드라이버가 응답하지 않음, 재생성")
-            cls.quit()  # 기존 드라이버 정리
-            cls._instance = safe_create_driver()
-            cls._last_created = current_time
+        # 먼저 크롬 프로세스 정리 - 항상 새로운 환경에서 시작
+        cleanup_chrome_processes()
         
-        return cls._instance
+        try:
+            # 1. 강제 재생성 또는 인스턴스가 없는 경우
+            if force_new or cls._instance is None:
+                if cls._instance:
+                    cls.quit()  # 기존 드라이버 정리
+                cls._instance = safe_create_driver()
+                cls._last_created = current_time
+                return cls._instance
+                
+            # 2. 드라이버 수명 초과 확인
+            if cls._last_created and (current_time - cls._last_created) > cls._max_lifetime:
+                logger.info(f"드라이버 최대 수명({cls._max_lifetime}초) 초과, 재생성")
+                cls.quit()  # 기존 드라이버 정리
+                cls._instance = safe_create_driver()
+                cls._last_created = current_time
+                return cls._instance
+                
+            # 3. 드라이버 건강상태 확인
+            if not cls._is_alive(cls._instance):
+                logger.warning("드라이버가 응답하지 않음, 재생성")
+                cls.quit()  # 기존 드라이버 정리
+                cls._instance = safe_create_driver()
+                cls._last_created = current_time
+            
+            return cls._instance
+        except Exception as e:
+            logger.error(f"드라이버 생성 중 예외 발생: {e}")
+            cls._instance = None
+            cls._last_created = None
+            # 예외 발생시 마지막 정리
+            cleanup_chrome_processes()
+            # 메모리 정리
+            gc.collect()
+            raise e
     
     @classmethod
     def _is_alive(cls, driver):
@@ -137,11 +141,24 @@ def check_resource_usage():
 def cleanup_chrome_processes():
     try:
         if os.getenv("ENVIRONMENT") == "ec2":
-            os.system('sudo pkill -f "chrome|chromium|chromedriver"')
+            # 강제 종료 옵션과 함께 모든 크롬/크롬드라이버 프로세스 종료
+            os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
+            # 확실한 정리를 위한 추가 명령
+            os.system('sudo killall -9 chrome chromium-browser chromedriver')
         elif os.getenv("ENVIRONMENT") == "local":
             os.system('taskkill /f /im chrome.exe')
             os.system('taskkill /f /im chromedriver.exe')
-        time.sleep(2)  # 프로세스들이 완전히 종료되기를 기다림
+        
+        # 프로세스가 완전히 종료될 때까지 충분히 대기
+        time.sleep(3)
+        
+        # 프로세스가 확실히 종료되었는지 확인 (EC2의 경우)
+        if os.getenv("ENVIRONMENT") == "ec2":
+            chrome_processes = os.popen('ps aux | grep -E "chrome|chromedriver" | grep -v grep').read()
+            if chrome_processes.strip():
+                logger.warning(f"Some Chrome processes still running: {chrome_processes}")
+                # 다시 시도
+                os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
     except Exception as e:
         logger.error(f"Chrome processes cleanup failed: {e}")
 
@@ -1487,30 +1504,38 @@ class BinanceFuturesTrader:
         try:
             ticker = self.exchange.fetch_ticker(self.symbol)
             current_price = ticker['last']
-
+            
             # TP/SL 가격 보정
             min_price_diff_val = current_price * MIN_PRICE_DIFF
 
-            if side == 'buy':
+            if side == 'buy':  # LONG 포지션
+                # SL 가격 검증
                 if sl_price >= current_price or (current_price - sl_price) < min_price_diff_val:
                     sl_price = current_price * (1 - SAFETY_MARGIN)
                     self.logger.warning(f"Invalid SL price for long position. Adjusted to {sl_price}")
-
-                tp_price = current_price + pl_ratio * (current_price - sl_price)
-                if tp_price <= current_price or (tp_price - current_price) < pl_ratio * min_price_diff_val:
-                    tp_price = current_price * (1 + SAFETY_MARGIN)
-                    self.logger.warning(f"Invalid TP price for long position. Adjusted to {tp_price}")
-
-            else:  # side == 'sell'
+                
+                # 거리 계산 (현재가와 SL 사이의 거리)
+                price_distance = current_price - sl_price
+                
+                # TP 가격 계산 (현재가에서 위쪽으로 [거리 × PL 비율]만큼 이동)
+                tp_price = current_price + (price_distance * pl_ratio)
+                
+                self.logger.info(f"LONG position: Entry={current_price}, SL={sl_price}, TP={tp_price}, Distance={price_distance}, PL Ratio={pl_ratio}")
+                
+            else:  # side == 'sell' (SHORT 포지션)
+                # SL 가격 검증
                 if sl_price <= current_price or (sl_price - current_price) < min_price_diff_val:
                     sl_price = current_price * (1 + SAFETY_MARGIN)
                     self.logger.warning(f"Invalid SL price for short position. Adjusted to {sl_price}")
-
-                tp_price = current_price - pl_ratio * (sl_price - current_price)
-                if tp_price >= current_price or (current_price - tp_price) < pl_ratio * min_price_diff_val:
-                    tp_price = current_price * (1 - SAFETY_MARGIN)
-                    self.logger.warning(f"Invalid TP price for short position. Adjusted to {tp_price}")
-
+                
+                # 거리 계산 (SL과 현재가 사이의 거리)
+                price_distance = sl_price - current_price
+                
+                # TP 가격 계산 (현재가에서 아래쪽으로 [거리 × PL 비율]만큼 이동)
+                tp_price = current_price - (price_distance * pl_ratio)
+                
+                self.logger.info(f"SHORT position: Entry={current_price}, SL={sl_price}, TP={tp_price}, Distance={price_distance}, PL Ratio={pl_ratio}")
+        
         except Exception as e:
             self.logger.error(f"Error calculating prices: {e}")
             return None
@@ -1835,11 +1860,29 @@ def safe_create_driver():
     retries = 3
     for attempt in range(retries):
         try:
+            # 시도마다 프로세스 정리
+            cleanup_chrome_processes()
+            # 메모리 사용량 확인
+            memory_percent = psutil.virtual_memory().percent
+            if memory_percent > 90:
+                logger.warning(f"메모리 사용량이 매우 높습니다: {memory_percent}%. 메모리 정리 중...")
+                gc.collect()
+                time.sleep(2)  # 메모리 정리를 위한 대기
+            
             driver = create_driver()
+            # 드라이버가 실제로 작동하는지 간단한 테스트
+            driver.execute_script("return 1")
             return driver
         except WebDriverException as e:
             logger.error(f"WebDriver 생성 실패 (시도 {attempt + 1}/{retries}): {e}")
-            time.sleep(2)  # 재시도 전 대기
+            time.sleep(5)  # 재시도 전 더 오래 대기 (5초)
+            # 명시적으로 남아있는 드라이버 종료 시도
+            try:
+                if 'driver' in locals() and driver:
+                    driver.quit()
+            except:
+                pass
+    
     raise WebDriverException("WebDriver 생성 실패. 크롬 드라이버를 확인하세요.")
 
 # XPath로 Element 찾기
@@ -2144,25 +2187,49 @@ def modify_orderbook(orderbook):
     return modified_orderbook
 
 def check_resource_usage():
+    """시스템 리소스 모니터링 및 필요시 정리 작업 수행"""
     # 메모리 사용량 모니터링
     memory_percent = psutil.virtual_memory().percent
-    if memory_percent > 80:
-        logger.warning(f"High memory usage detected: {memory_percent}%")
-        # 정리 작업 수행
+    # CPU 사용량 모니터링
+    cpu_percent = psutil.cpu_percent(interval=1)
+    # 디스크 사용량 모니터링
+    disk_usage = psutil.disk_usage('/').percent
+    
+    logger.info(f"시스템 리소스 모니터링: 메모리 {memory_percent}%, CPU {cpu_percent}%, 디스크 {disk_usage}%")
+    
+    # 경고 수준 (80%)에 도달했을 때 가벼운 정리 수행
+    if memory_percent > 80 or cpu_percent > 80:
+        logger.warning(f"시스템 리소스 부족: 메모리 {memory_percent}%, CPU {cpu_percent}%")
+        # 크롬 프로세스 정리
         WebDriverManager.quit()
         cleanup_chrome_processes()
         gc.collect()
+    
+    # 심각 수준 (95%)에 도달했을 때 더 강력한 조치 수행
+    if memory_percent > 95 or cpu_percent > 95:
+        logger.critical(f"심각한 리소스 부족: 메모리 {memory_percent}%, CPU {cpu_percent}%")
         
-    # CPU 사용량 모니터링 추가
-    cpu_percent = psutil.cpu_percent(interval=1)
-    if cpu_percent > 90:
-        logger.warning(f"High CPU usage detected: {cpu_percent}%")
+        # 모든 작업 일시 중지
+        global trading_in_progress, monitoring_in_progress
+        trading_in_progress = True  # 일시적으로 작업 중단
+        monitoring_in_progress = True
         
-    # 디스크 사용량 모니터링 추가
-    disk_usage = psutil.disk_usage('/')
-    if disk_usage.percent > 85:
-        logger.warning(f"High disk usage detected: {disk_usage.percent}%")
-        # 로그 및 임시 파일 정리 작업 추가
+        # 강력한 정리 작업 수행
+        cleanup_chrome_processes()
+        for job in sl_monitor_jobs[:]:
+            schedule.cancel_job(job)
+            sl_monitor_jobs.remove(job)
+            
+        # 메모리 정리
+        gc.collect()
+        time.sleep(5)  # 시스템이 복구될 시간 제공
+        
+        # 작업 재개 허용
+        trading_in_progress = False
+        monitoring_in_progress = False
+        
+        logger.info("리소스 정리 완료, 작업 재개 가능")
+
 
 # 로그 관리 설정 추가
 def setup_logging():
@@ -2852,11 +2919,16 @@ def ai_trading():
                         You are a Bitcoin futures day trader on the 5-minute timeframe with {trader.leverage}x leverage. Your strategy centers on three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume Oscillator) and includes additional confluence checks (RSI, MACD, ATR, CMF, ADX, DI+, DI−, etc.). Strict timing rules apply—no aged signals, immediate exits on signal deterioration, and precise position management. Capital preservation is paramount.
 
                         ───────────────────────────────────────────────────────────────
-                        ## 1. ALWAYS Use Correct Exit Commands
-                        • "buy" to exit shorts  
-                        • "sell" to exit longs  
+                        ## 1. CRITICAL: NEVER CONFUSE EXIT COMMANDS
+                        ⚠️ IMPORTANT EXIT RULES ⚠️
+                        - "buy" is ALWAYS used to exit short positions or open new long positions
+                        - "sell" is ALWAYS used to exit long positions or open new short positions
 
-                        This ensures the correct order type is used when closing an existing position.
+                        DOUBLE-CHECK before deciding:
+                        - If current position is SHORT and you want to EXIT: You MUST use "buy"
+                        - If current position is LONG and you want to EXIT: You MUST use "sell"
+
+                        This is absolutely critical because using the wrong command will increase position risk instead of closing it.                       
 
                         ───────────────────────────────────────────────────────────────
                         ## 2. Market Data and Portfolio Placeholders
@@ -3040,12 +3112,14 @@ def ai_trading():
 
                         ───────────────────────────────────────────────────────────────
                         ### Final Notes
-
-                        1) Always check the Portfolio information before deciding: if Current Position Side is "none", then only new entry orders should be considered; exit orders are valid only when an active position exists.
-                        2) **Prioritize the extracted signal data in the "Trading Signals Data" section**, which provides accurate information about signal freshness. Only consider signals within 3 candles old for entry decisions.
-                        3) Use the correct exit commands: "buy" to exit a short and "sell" to exit a long.
-                        4) Incorporate dynamically updated values from the [Market Data], [Portfolio], and [Trading Signals Data] sections.
-                        5) Preserve capital by exiting immediately on conflicting or invalid signals.
+                        1) CRITICAL REMINDER: For position exits, always use the OPPOSITE command of your position direction:
+                            - SHORT position exit = "buy" command (never "sell")
+                            - LONG position exit = "sell" command (never "buy")
+                            Using the wrong command will INCREASE your position risk instead of reducing it.
+                        2) Always check the Portfolio information before deciding: if Current Position Side is "none", then only new entry orders should be considered; exit orders are valid only when an active position exists.
+                        3) **Prioritize the extracted signal data in the "Trading Signals Data" section**, which provides accurate information about signal freshness. Only consider signals within 3 candles old for entry decisions.
+                        5) Incorporate dynamically updated values from the [Market Data], [Portfolio], and [Trading Signals Data] sections.
+                        6) Preserve capital by exiting immediately on conflicting or invalid signals.
                         
                         ───────────────────────────────────────────────────────────────
                         This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤3 candles old) for any entry—even though slight delays of 3–4 candles may be acceptable if the price remains within ±0.2% of the trigger level and volume momentum persists (otherwise, treat it as stale if more than 4 candles have passed or if the price moves more than 0.5% away). Additionally, always check the Portfolio first to determine if you already have an active position; only execute exit orders if a position exists. Additional Indicators can only confirm or reject a fresh (or slightly delayed) primary signal—never generate an entry on their own. For position sizing, apply the Position Sizing Rules above when computing the percentage (0–100) for entries and exits. Also, incorporate local highs/lows across the 5-minute, 1-hour, and 4-hour charts to identify potential support/resistance zones and further refine or reject your primary signals.
@@ -3279,7 +3353,7 @@ if __name__ == "__main__":
         init_db()
 
         # 리소스 모니터링 작업 추가
-        schedule.every(5).minutes.do(check_resource_usage)
+        schedule.every(10).minutes.do(check_resource_usage)
 
         # 글로벌 변수 초기화
         sl_monitor_jobs = []
