@@ -3366,7 +3366,18 @@ def ai_trading():
                         • If the Volume Oscillator falls below 0%, that is an immediate red flag.  
                         • If secondary indicators exhibit significant contradictions (e.g., strong RSI or MACD divergence), exit early.  
                         • Employ partial exits when appropriate (for example, scaling out in increments of +0.1% gains).  
-                        **• If the 5-minute MACD shows a clear trend reversal for 2 consecutive candles in the opposite direction, execute an immediate “Full Exit” of the position.**
+                        **• If the 5-minute MACD shows a clear trend reversal for 2 consecutive candles in the opposite direction, execute an immediate "Full Exit" of the position.**
+
+                        ### Critical Loss Prevention Rules (MANDATORY):
+                        **• If your position is at -10% PnL or worse, AND there are negative signals on multiple timeframes (especially 1h or 4h), you MUST exit immediately to prevent further losses.**
+                        **• When the position is down -5% or more, increase your sensitivity to additional negative signals:**
+                        **- Strong bearish divergence on RSI or MACD while in a long position**
+                        **- Strong bullish divergence on RSI or MACD while in a short position**
+                        **- Volume significantly decreasing during what should be a continuation move in your position's direction**
+                        **- Price breaking important support/resistance levels against your position direction**
+                        **• If multiple negative signals occur while the position is already in negative territory (any PnL below 0%), consider an immediate exit unless there is a very strong case for recovery.**
+                        **• For any long position, if RSI(14) < 30 on the 5-minute AND < 40 on the 1-hour timeframe, exit to avoid further downside.**
+                        **• For any short position, if RSI(14) > 70 on the 5-minute AND > 60 on the 1-hour timeframe, exit to avoid sudden upside reversals.**
 
                         ───────────────────────────────────────────────────────────────
                         ## 6. Response Format
