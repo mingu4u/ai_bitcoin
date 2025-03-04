@@ -544,7 +544,7 @@ def analyze_chart_signals(image_path,
                          # UT Bot parameters
                          utbot_xaxis_yrange=(0.87, 0.91),
                          # Volume Oscillator parameters (normalized ROI)
-                         volume_roi=(0.93, 0.69, 0.97, 0.88),
+                         volume_roi=(0.93, 0.68, 0.97, 0.88),
                          # Debug flag and prefix
                          debug=False,
                          debug_prefix="debug_"):
@@ -2031,6 +2031,8 @@ def create_driver():
         driver.set_page_load_timeout(30)
         driver.set_script_timeout(30)
         
+        driver.set_window_size(1920, 1028)
+        
         return driver
     except Exception as e:
         logger.error(f"ChromeDriver 생성 중 오류 발생: {e}")
@@ -2285,7 +2287,7 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         # 브라우저 창 크기 설정
         try:
             logger.info("브라우저 창 크기 설정 시작")
-            driver.set_window_size(1920, 1080)
+            driver.set_window_size(1920, 1028) # driver.set_window_size(1920, 1080)
             time.sleep(1)
         except Exception as e:
             logger.warning(f"브라우저 창 크기 설정 중 오류 (무시됨): {e}")
