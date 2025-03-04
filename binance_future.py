@@ -106,22 +106,41 @@ class WebDriverManager:
         except Exception as e:
             logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
             return False
-
+    
     @classmethod
     def quit(cls):
-        """드라이버 안전하게 종료"""
+        """드라이버 안전하게 종료 - 개선된 버전"""
         if cls._instance:
             try:
+                # 열려있는 모든 창 닫기 시도
+                try:
+                    windows = cls._instance.window_handles
+                    for window in windows[1:]:  # 메인 창 제외 모든 창 닫기
+                        cls._instance.switch_to.window(window)
+                        cls._instance.close()
+                    cls._instance.switch_to.window(windows[0])  # 메인 창으로 복귀
+                except Exception as e:
+                    logger.warning(f"창 정리 중 오류 (무시됨): {str(e)}")
+                
+                # 열린 경고창 처리 시도
+                try:
+                    alert = cls._instance.switch_to.alert
+                    alert.dismiss()
+                except Exception:
+                    pass  # 경고창이 없는 경우 무시
+                
+                # 드라이버 종료
                 cls._instance.quit()
             except Exception as e:
                 logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
             finally:
                 cls._instance = None
                 cls._last_created = None
+            
             # 크롬 프로세스 정리 추가
             cleanup_chrome_processes()
             gc.collect()
-         
+            
 # 시스템 리소스 모니터링 및 자가 복구 함수
 def check_resource_usage():
     # 메모리 사용량 모니터링
@@ -133,7 +152,7 @@ def check_resource_usage():
         cleanup_chrome_processes()
         gc.collect()
         
-# 모든 크롬 프로세스 종료 후 정리
+# 크롬 프로세스 정리 함수 개선
 def cleanup_chrome_processes():
     try:
         if os.getenv("ENVIRONMENT") == "ec2":
@@ -141,22 +160,21 @@ def cleanup_chrome_processes():
             os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
             # 확실한 정리를 위한 추가 명령
             os.system('sudo killall -9 chrome chromium-browser chromedriver')
+            
+            # 프로세스가 완전히 종료될 때까지 충분히 대기
+            time.sleep(3)
+            
+            # 프로세스가 확실히 종료되었는지 확인
+            chrome_processes = os.popen('ps aux | grep -E "chrome|chromedriver" | grep -v grep').read()
+            if chrome_processes.strip():
+                logger.warning(f"일부 크롬 프로세스가 아직 실행 중입니다: {chrome_processes}")
+                # 다시 시도
+                os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
         elif os.getenv("ENVIRONMENT") == "local":
             os.system('taskkill /f /im chrome.exe')
             os.system('taskkill /f /im chromedriver.exe')
-        
-        # 프로세스가 완전히 종료될 때까지 충분히 대기
-        time.sleep(3)
-        
-        # 프로세스가 확실히 종료되었는지 확인 (EC2의 경우)
-        if os.getenv("ENVIRONMENT") == "ec2":
-            chrome_processes = os.popen('ps aux | grep -E "chrome|chromedriver" | grep -v grep').read()
-            if chrome_processes.strip():
-                logger.warning(f"Some Chrome processes still running: {chrome_processes}")
-                # 다시 시도
-                os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
     except Exception as e:
-        logger.error(f"Chrome processes cleanup failed: {e}")
+        logger.error(f"크롬 프로세스 정리 실패: {e}")
 
 class SignalTracker:
     def __init__(self, cache_file="trading_signals_cache.json"):
@@ -2083,6 +2101,10 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         img_pil.save(buffered, format="PNG")
         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
         
+        # 메모리 관리: buffered 객체 명시적 정리
+        buffered.close()
+        del buffered
+        
         # OpenCV 이미지로 변환 (PIL → OpenCV)
         img_np = np.array(img_pil)
         # RGB to BGR (PIL is RGB, OpenCV uses BGR)
@@ -2096,10 +2118,17 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         # 이미지가 올바르게 로드되었는지 확인
         if img_cv is None or img_cv.size == 0:
             logger.error("OpenCV 이미지 변환 실패 또는 이미지가 비어 있습니다")
+            # 명시적 메모리 정리
+            del img_pil
+            if 'png' in locals():
+                del png
+            gc.collect()
             return base64_image, None, file_path if save_image else None
         
         # 신호 분석 수행 (메모리 내 이미지 사용)
         signal_analysis = None
+        temp_path = None  # 변수 초기화
+        
         if chart_processor is not None:
             # 임시 이미지 파일 생성 (analyze_chart_signals가 파일 경로를 필요로 하므로)
             temp_path = os.path.join(script_dir, f"temp_{current_time}.png")
@@ -2117,26 +2146,50 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
                     logger.info(f"신호 분석 결과: {signal_analysis}")
                 else:
                     logger.warning("차트 신호 분석 결과 없음")
+            except Exception as analysis_error:
+                logger.error(f"신호 분석 중 오류: {analysis_error}")
+                signal_analysis = None
             finally:
                 # 분석 후 임시 파일 삭제 (저장 옵션이 비활성화된 경우)
-                if not save_image and os.path.exists(temp_path):
-                    os.remove(temp_path)
-                    logger.info(f"임시 파일 삭제: {temp_path}")
+                if temp_path and os.path.exists(temp_path) and not save_image:
+                    try:
+                        os.remove(temp_path)
+                        logger.info(f"임시 파일 삭제: {temp_path}")
+                    except Exception as del_error:
+                        logger.warning(f"임시 파일 삭제 실패: {del_error}")
                 
-                # 명시적으로 큰 객체 제거
-                del img_pil
-                del img_np
-                del img_cv
-                if 'png' in locals():
-                    del png            
-                # 가비지 컬렉션 강제 수행
-                gc.collect()
+        # 명시적으로 큰 객체 제거 - 순서 중요
+        del img_cv
+        del img_np
+        del img_pil
+        if 'png' in locals():
+            del png
+            
+        # 가비지 컬렉션 강제 수행
+        gc.collect()
         
         return base64_image, signal_analysis, file_path if save_image else None
         
     except Exception as e:
         logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}", exc_info=True)
+        # 예외 발생 시에도 메모리 정리 시도
+        for var in ['img_cv', 'img_np', 'img_pil', 'png', 'buffered']:
+            if var in locals() and locals()[var] is not None:
+                try:
+                    del locals()[var]
+                except:
+                    pass
+        
+        # 임시 파일 정리
+        if 'temp_path' in locals() and temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+                
+        gc.collect()
         return None, None, None
+
 
 def modify_orderbook(orderbook):
     """
@@ -3308,12 +3361,61 @@ if __name__ == "__main__":
 
         # 리소스 모니터링 작업 추가
         schedule.every(5).minutes.do(check_resource_usage)
+        
+        # 메모리 덤프 및 리소스 모니터링을 위한 새 함수 - 새로 추가됨
+        def log_memory_usage():
+            process = psutil.Process(os.getpid())
+            memory_info = process.memory_info()
+            
+            logger.info(f"메모리 사용량: {memory_info.rss / 1024 / 1024:.2f} MB")
+            logger.info(f"가상 메모리: {memory_info.vms / 1024 / 1024:.2f} MB")
+            
+            # 최근 30개 이상의 로그 파일만 유지 (너무 많은 로그 파일 생성 방지)
+            log_dir = "logs"
+            if os.path.exists(log_dir):
+                log_files = sorted([os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.endswith('.log')])
+                if len(log_files) > 30:
+                    for old_file in log_files[:-30]:
+                        try:
+                            os.remove(old_file)
+                            logger.info(f"오래된 로그 파일 삭제: {old_file}")
+                        except Exception as e:
+                            logger.warning(f"로그 파일 삭제 실패: {e}")
+        
+        # 메모리 모니터링 스케줄 추가 - 새로 추가됨
+        schedule.every(30).minutes.do(log_memory_usage)
 
         # 글로벌 변수 초기화
         sl_monitor_jobs = []
         trading_in_progress = False
         monitoring_in_progress = False
         
+        # 시스템 안정화 함수 (주기적 재부팅) - 새로 추가됨
+        def system_stabilization():
+            try:
+                # 현재 실행 시간이 24시간 이상이면 정상 종료 준비
+                process = psutil.Process(os.getpid())
+                uptime_seconds = time.time() - process.create_time()
+                
+                if uptime_seconds > 86400:  # 24시간 (86400초)
+                    logger.info("24시간 이상 실행 중, 안정화를 위한 정상 종료 준비...")
+                    
+                    # 모든 리소스 정리
+                    WebDriverManager.quit()
+                    cleanup_chrome_processes()
+                    
+                    # 스케줄러 작업 정리
+                    schedule.clear()
+                    
+                    # 프로그램 종료
+                    logger.info("안정화 종료 프로세스 완료. 종료합니다...")
+                    sys.exit(0)
+            except Exception as e:
+                logger.error(f"시스템 안정화 중 오류: {e}")
+        
+        # 시스템 안정화 스케줄 추가 - 새로 추가됨
+        schedule.every(1).hours.do(system_stabilization)
+
         # AI 트레이딩 작업을 수행하는 함수
         def trading_job():
             global trading_in_progress
