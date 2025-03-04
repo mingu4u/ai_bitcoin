@@ -107,67 +107,118 @@ class WebDriverManager:
             logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
             return False
     
-    # WebDriverManager 클래스의 quit 메소드 개선
     @classmethod
     def quit(cls):
         """드라이버 안전하게 종료 - 완전히 개선된 버전"""
         if cls._instance:
+            session_id = None
+            driver_url = None
+            
             try:
-                # 모든 진행 중인 스크립트 실행 중지 시도
-                try:
-                    cls._instance.execute_script("window.stop();")
-                except Exception:
-                    pass
-                    
-                # 열려있는 모든 창 닫기 시도
-                try:
-                    windows = cls._instance.window_handles
-                    for window in windows[1:]:  # 메인 창 제외 모든 창 닫기
-                        cls._instance.switch_to.window(window)
-                        cls._instance.close()
-                    cls._instance.switch_to.window(windows[0])  # 메인 창으로 복귀
-                except Exception:
-                    pass  # 창 이미 닫힘 또는 접근 불가
-                
-                # 열린 경고창 처리 시도
-                try:
-                    alert = cls._instance.switch_to.alert
-                    alert.dismiss()
-                except Exception:
-                    pass  # 경고창 없음
-                
-                # 드라이버 종료 전 타임아웃 설정 축소 
-                try:
-                    cls._instance.set_page_load_timeout(5)  # 5초로 축소
-                    cls._instance.set_script_timeout(5)
-                except Exception:
-                    pass
-                    
-                # 드라이버 종료
-                cls._instance.quit()
-            except Exception as e:
-                logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
-            finally:
-                # 참조 해제 전에 연결 정보 미리 저장
-                session_id = None
-                executor_url = None
+                # 세션 ID와 URL 저장 (디버깅 및 로깅용)
                 try:
                     session_id = cls._instance.session_id
-                    executor_url = cls._instance.command_executor._url
+                    driver_url = cls._instance.command_executor._url
+                    logger.debug(f"종료할 드라이버 세션: {session_id} @ {driver_url}")
                 except:
                     pass
                     
-                # 드라이버 인스턴스 참조 해제
+                # 모든 진행 중인 스크립트 실행 중지 시도
+                try:
+                    cls._instance.execute_script("window.stop();")
+                except:
+                    pass
+                    
+                # 모든 요청 취소 및 핸들러 제거
+                try:
+                    cls._instance.execute_script("""
+                        // 모든 진행 중인 Ajax 요청 중단
+                        if (window.jQuery) {
+                            jQuery.ajax({global: false});
+                            jQuery(document).unbind('ajaxSend ajaxComplete ajaxError');
+                        }
+                        // 모든 이벤트 리스너 제거
+                        window.onbeforeunload = null;
+                        window.onunload = null;
+                    """)
+                except:
+                    pass
+                    
+                # 현재 페이지 네비게이션 중단
+                try:
+                    cls._instance.execute_script("window.stop();")
+                except:
+                    pass
+                
+                # 드라이버 종료 전 타임아웃 설정 축소
+                try:
+                    cls._instance.set_page_load_timeout(2)  # 2초로 축소
+                    cls._instance.set_script_timeout(2)
+                except:
+                    pass
+                
+                # 드라이버 종료 - 먼저 참조 저장
+                temp_instance = cls._instance
+                
+                # 참조 즉시 해제하여 다른 코드가 재사용하지 못하도록 함
                 cls._instance = None
                 cls._last_created = None
                 
-                # 크롬 프로세스 정리 (드라이버 세션 ID 전달하여 정확히 타겟팅)
-                cleanup_chrome_processes(session_id)
+                # 이제 저장된 임시 참조로 종료 시도
+                try:
+                    temp_instance.quit()
+                    logger.info("드라이버 정상 종료됨")
+                except Exception as e:
+                    logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
                 
-                # 가비지 컬렉션 강제 수행 (더 철저하게)
+                # 참조 명시적 해제
+                del temp_instance
+                
+            except Exception as e:
+                logger.warning(f"드라이버 종료 프로세스 중 오류: {str(e)}")
+            finally:
+                # 세션 ID를 포함하여 크롬 프로세스 정리
+                if session_id:
+                    cleanup_chrome_processes(session_id)
+                else:
+                    cleanup_chrome_processes()
+                
+                # 네트워크 핸들러 수동 정리 (소켓 누수 방지)
+                clear_network_handlers()
+                
+                # 메모리 정리
                 gc.collect()
-                gc.collect()  # 두 번 실행하여 순환 참조도 정리
+
+def clear_network_handlers():
+    """네트워크 및 소켓 관련 리소스 정리"""
+    try:
+        # 파이썬 내장 모듈 정리
+        import urllib3
+        try:
+            # urllib3 커넥션 풀 비우기
+            urllib3.disable_warnings()
+            manager = urllib3.PoolManager()
+            manager.clear()
             
+            # 연결 풀에서 나오는 경고 메시지 수집 및 폐기
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                
+            logger.debug("urllib3 연결 풀 정리 완료")
+        except:
+            pass
+            
+        # 소켓 관련 리소스 정리
+        import socket
+        socket.setdefaulttimeout(1)  # 짧은 타임아웃 설정
+        
+        # 가비지 컬렉션 수행
+        gc.collect()
+        
+    except Exception as e:
+        logger.error(f"네트워크 핸들러 정리 중 오류: {e}")
+
 # 시스템 리소스 모니터링 및 자가 복구 함수
 def check_resource_usage():
     # 메모리 사용량 모니터링
@@ -2066,36 +2117,83 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
                 time.sleep(3)
             except Exception as e:
                 logger.error(f"페이지 로드 중 오류: {str(e)}")
+                
+                # 통신 에러 발생 시 즉시 세션 참조 정리
+                clear_webdriver_session_refs(driver)
+                
                 time.sleep(2)
                 continue
                 
             # 3. 이미지 캡처 및 신호 분석
             result = capture_and_analyze_chart(driver, chart_processor, save_image, debug)
             
-            # 결과가 유효하면 반환
+            # 결과가 유효하면 반환 전에 즉시 통신 종료
             if result[0]:  # base64 이미지가 있으면 성공
+                # 세션 참조 정리
+                clear_webdriver_session_refs(driver)
+                
+                # 성공적인 캡처 후 드라이버 즉시 종료
+                try:
+                    # 페이지 로드 및 자원 로드 중지
+                    try:
+                        driver.execute_script("window.stop();")
+                    except:
+                        pass
+                    
+                    # 실제 드라이버 종료 지연 (비동기적으로 처리)
+                    def delayed_quit():
+                        try:
+                            if driver:
+                                driver.quit()
+                        except:
+                            pass
+                    
+                    # 새 스레드에서 종료 실행 (현재 코드 블로킹 방지)
+                    from threading import Thread
+                    Thread(target=delayed_quit, daemon=True).start()
+                    
+                    logger.info("캡처 성공 후 WebDriver 종료 예약됨")
+                except:
+                    pass
+                
                 return result
             else:
                 logger.warning(f"캡처 실패 또는 빈 응답 (시도 {attempt+1}/{max_retries})")
+                
+                # 통신 에러 발생 시 즉시 세션 참조 정리
+                clear_webdriver_session_refs(driver)
+                
                 time.sleep(2)
         
         except Exception as e:
             logger.error(f"차트 캡처 중 오류 (시도 {attempt+1}/{max_retries}): {str(e)}")
+            
+            # 예외 발생 시 즉시 세션 참조 정리
+            if driver:
+                clear_webdriver_session_refs(driver)
+                
             time.sleep(2)
         finally:
-            # 명시적인 드라이버 종료 추가
-            # (이 부분은 try-except문 바깥에 있어서 항상 실행됨)
-            try:
-                if driver:
+            # 무조건 드라이버 종료 시도 (성공 시에는 이미 지연 종료 예약됨)
+            if driver:
+                try:
+                    # 종료 전 세션 참조 정리 한번 더
+                    clear_webdriver_session_refs(driver)
+                    
+                    # 실제 종료
                     driver.quit()
                     logger.info("WebDriver 명시적으로 종료됨")
-            except Exception as e:
-                logger.warning(f"WebDriver 종료 중 오류: {str(e)}")
+                except Exception as e:
+                    logger.warning(f"WebDriver 종료 중 오류: {str(e)}")
+                finally:
+                    # 참조 명시적 삭제
+                    driver = None
     
     logger.error(f"최대 재시도 횟수({max_retries}) 초과, 차트 캡처 실패")
     
     # 마지막 정리 작업
     WebDriverManager.quit()  # WebDriverManager에서 관리하는 드라이버 인스턴스 종료
+    cleanup_chrome_processes()  # 크롬 프로세스 정리
     gc.collect()  # 가비지 컬렉션 명시적 호출
     
     return None, None, None
@@ -2103,31 +2201,49 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
 # 캡처 함수 타임아웃 및 에러 처리 개선
 def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
     """
-    차트 이미지를 캡처하고 신호를 분석하는 함수 - 완전히 개선된 버전
+    차트 이미지를 캡처하고 신호를 분석하는 함수 - 최종 개선 버전
+    
+    Args:
+        driver: Selenium 웹드라이버
+        chart_processor: 차트 신호 프로세서 인스턴스
+        save_image: 이미지 저장 여부 (기본값: False)
+        debug: 디버그 모드 활성화 여부 (기본값: False)
+        
+    Returns:
+        tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로 또는 None)
     """
     temp_path = None
+    
     try:
         # 타임아웃 설정 개선
-        driver.set_page_load_timeout(30)  # 30초 제한
-        driver.set_script_timeout(30)     # 스크립트 실행 제한
+        try:
+            driver.set_page_load_timeout(30)  # 30초 제한
+            driver.set_script_timeout(30)     # 스크립트 실행 제한
+        except:
+            pass
         
         # 브라우저 창 크기 설정
         try:
             logger.info("브라우저 창 크기 설정 시작")
-            driver.set_window_size(1366, 768)  # 더 작은 크기로 설정 (리소스 절약)
+            driver.set_window_size(1920, 1080)
             time.sleep(1)
         except Exception as e:
             logger.warning(f"브라우저 창 크기 설정 중 오류 (무시됨): {e}")
         
-        # 스크린샷 캡처 - 직접 모든 페이지 캡처로 시도
+        # 스크린샷 캡처
         logger.info("스크린샷 캡처 시작")
         try:
-            # 직접 전체 페이지 캡처 (차트 요소 찾기 시도 없이)
-            png = driver.get_screenshot_as_png()  # screenshot_as_png 대신 get_screenshot_as_png 사용
+            # 명시적인 명령 사용
+            png = driver.get_screenshot_as_png()
             logger.info("전체 화면 스크린샷 캡처 완료")
+            
+            # 이미지 캡처 후 스크립트 실행 중단 (추가)
+            try:
+                driver.execute_script("window.stop();")
+            except:
+                pass
         except Exception as e:
             logger.error(f"스크린샷 캡처 실패: {e}")
-            # 실패 즉시 반환 (프로세스 손상 가능성)
             return None, None, None
         
         # PIL Image로 변환
@@ -2168,6 +2284,25 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         # 메모리 관리: buffered 객체 명시적 정리
         buffered.close()
         del buffered
+        
+        # 캡처 작업 완료 후 드라이버와의 통신 최소화 (추가)
+        try:
+            # 페이지 로드 중지
+            driver.execute_script("window.stop();")
+            # 불필요한 자원 해제
+            driver.execute_script("""
+                // 메모리 누수 가능성 있는 자원 정리
+                if (window.jQuery) jQuery.clear && jQuery.clear();
+                // DOM에 연결된 이벤트 리스너 제거
+                try {
+                    var oldElem = document.documentElement.cloneNode(false);
+                    document.replaceChild(oldElem, document.documentElement);
+                } catch(e) {}
+                // GC 힌트
+                if (typeof CollectGarbage === 'function') CollectGarbage();
+            """)
+        except:
+            pass
         
         # OpenCV 이미지로 변환
         img_np = np.array(img_pil)
@@ -2234,6 +2369,9 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         # 가비지 컬렉션 강제 수행
         gc.collect()
         
+        # 세션 참조 정리
+        clear_webdriver_session_refs(driver)
+        
         return base64_image, signal_analysis, file_path if save_image else None
         
     except Exception as e:
@@ -2255,7 +2393,34 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
                     pass
                 
         gc.collect()
+        
+        # 세션 참조 정리
+        clear_webdriver_session_refs(driver)
+        
         return None, None, None
+
+def clear_webdriver_session_refs(driver):
+    """WebDriver 세션 관련 참조 정리"""
+    try:
+        # 연결 비활성화 시도
+        try:
+            if hasattr(driver, 'command_executor') and hasattr(driver.command_executor, '_conn'):
+                driver.command_executor._conn = None
+        except:
+            pass
+            
+        # 세션 관련 속성 제거
+        for attr in ['_unwrapped', '_url', '_conn', '_commands', 'session_id']:
+            try:
+                if hasattr(driver, attr):
+                    setattr(driver, attr, None)
+                    
+                if hasattr(driver, 'command_executor') and hasattr(driver.command_executor, attr):
+                    setattr(driver.command_executor, attr, None)
+            except:
+                pass
+    except Exception as e:
+        logger.debug(f"WebDriver 세션 참조 정리 중 오류: {e}")
 
 
 def modify_orderbook(orderbook):
