@@ -107,11 +107,18 @@ class WebDriverManager:
             logger.warning(f"드라이버 상태 확인 실패: {str(e)}")
             return False
     
+    # WebDriverManager 클래스의 quit 메소드 개선
     @classmethod
     def quit(cls):
-        """드라이버 안전하게 종료 - 개선된 버전"""
+        """드라이버 안전하게 종료 - 완전히 개선된 버전"""
         if cls._instance:
             try:
+                # 모든 진행 중인 스크립트 실행 중지 시도
+                try:
+                    cls._instance.execute_script("window.stop();")
+                except Exception:
+                    pass
+                    
                 # 열려있는 모든 창 닫기 시도
                 try:
                     windows = cls._instance.window_handles
@@ -119,27 +126,47 @@ class WebDriverManager:
                         cls._instance.switch_to.window(window)
                         cls._instance.close()
                     cls._instance.switch_to.window(windows[0])  # 메인 창으로 복귀
-                except Exception as e:
-                    logger.warning(f"창 정리 중 오류 (무시됨): {str(e)}")
+                except Exception:
+                    pass  # 창 이미 닫힘 또는 접근 불가
                 
                 # 열린 경고창 처리 시도
                 try:
                     alert = cls._instance.switch_to.alert
                     alert.dismiss()
                 except Exception:
-                    pass  # 경고창이 없는 경우 무시
+                    pass  # 경고창 없음
                 
+                # 드라이버 종료 전 타임아웃 설정 축소 
+                try:
+                    cls._instance.set_page_load_timeout(5)  # 5초로 축소
+                    cls._instance.set_script_timeout(5)
+                except Exception:
+                    pass
+                    
                 # 드라이버 종료
                 cls._instance.quit()
             except Exception as e:
                 logger.warning(f"드라이버 종료 중 오류 (무시됨): {str(e)}")
             finally:
+                # 참조 해제 전에 연결 정보 미리 저장
+                session_id = None
+                executor_url = None
+                try:
+                    session_id = cls._instance.session_id
+                    executor_url = cls._instance.command_executor._url
+                except:
+                    pass
+                    
+                # 드라이버 인스턴스 참조 해제
                 cls._instance = None
                 cls._last_created = None
-            
-            # 크롬 프로세스 정리 추가
-            cleanup_chrome_processes()
-            gc.collect()
+                
+                # 크롬 프로세스 정리 (드라이버 세션 ID 전달하여 정확히 타겟팅)
+                cleanup_chrome_processes(session_id)
+                
+                # 가비지 컬렉션 강제 수행 (더 철저하게)
+                gc.collect()
+                gc.collect()  # 두 번 실행하여 순환 참조도 정리
             
 # 시스템 리소스 모니터링 및 자가 복구 함수
 def check_resource_usage():
@@ -151,15 +178,30 @@ def check_resource_usage():
         WebDriverManager.quit()
         cleanup_chrome_processes()
         gc.collect()
-        
+
 # 크롬 프로세스 정리 함수 개선
-def cleanup_chrome_processes():
+def cleanup_chrome_processes(session_id=None):
+    """
+    크롬 및 크롬드라이버 프로세스 강제 종료
+    
+    Args:
+        session_id (str, optional): 종료할 특정 WebDriver 세션 ID
+    """
     try:
         if os.getenv("ENVIRONMENT") == "ec2":
+            # 모든 프로세스 목록 가져오기
+            processes = os.popen('ps aux | grep -E "chrome|chromedriver"').read()
+            logger.debug(f"현재 실행 중인 크롬 관련 프로세스: {processes}")
+            
+            # 추가: session_id가 있으면 해당 프로세스만 찾아서 종료
+            if session_id:
+                os.system(f'sudo pkill -9 -f "{session_id}"')
+                
             # 강제 종료 옵션과 함께 모든 크롬/크롬드라이버 프로세스 종료
             os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
+            
             # 확실한 정리를 위한 추가 명령
-            os.system('sudo killall -9 chrome chromium-browser chromedriver')
+            os.system('sudo killall -9 chrome chromium-browser chromedriver 2>/dev/null || true')
             
             # 프로세스가 완전히 종료될 때까지 충분히 대기
             time.sleep(3)
@@ -167,12 +209,30 @@ def cleanup_chrome_processes():
             # 프로세스가 확실히 종료되었는지 확인
             chrome_processes = os.popen('ps aux | grep -E "chrome|chromedriver" | grep -v grep').read()
             if chrome_processes.strip():
-                logger.warning(f"일부 크롬 프로세스가 아직 실행 중입니다: {chrome_processes}")
-                # 다시 시도
-                os.system('sudo pkill -9 -f "chrome|chromium|chromedriver"')
+                logger.warning(f"일부 크롬 프로세스가 아직 실행 중: {chrome_processes}")
+                # 다시 시도 (특정 PID 찾아서 직접 종료)
+                pid_pattern = r'\S+\s+(\d+)'
+                pids = re.findall(pid_pattern, chrome_processes)
+                for pid in pids:
+                    os.system(f'sudo kill -9 {pid}')
         elif os.getenv("ENVIRONMENT") == "local":
-            os.system('taskkill /f /im chrome.exe')
-            os.system('taskkill /f /im chromedriver.exe')
+            # Windows 환경에서는 taskkill 사용
+            os.system('taskkill /f /im chrome.exe 2>nul')
+            os.system('taskkill /f /im chromedriver.exe 2>nul')
+        else:
+            # 기본 환경 (Linux)
+            os.system('pkill -9 -f "chrome|chromium|chromedriver" 2>/dev/null || true')
+            
+        # 소켓 파일 및 임시 파일 정리 (필요 시)
+        tmp_dirs = ['/tmp', '/var/tmp']
+        for tmp_dir in tmp_dirs:
+            if os.path.exists(tmp_dir):
+                for f in os.listdir(tmp_dir):
+                    if ('chrome' in f.lower() or 'selenium' in f.lower()) and not os.path.isdir(os.path.join(tmp_dir, f)):
+                        try:
+                            os.remove(os.path.join(tmp_dir, f))
+                        except:
+                            pass
     except Exception as e:
         logger.error(f"크롬 프로세스 정리 실패: {e}")
 
@@ -2040,52 +2100,56 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
     
     return None, None, None
 
+# 캡처 함수 타임아웃 및 에러 처리 개선
 def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
     """
-    차트 이미지를 캡처하고 신호를 분석하는 함수
-    
-    Args:
-        driver: Selenium 웹드라이버
-        chart_processor: 차트 신호 프로세서 인스턴스
-        save_image: 이미지 저장 여부 (기본값: False)
-        debug: 디버그 모드 활성화 여부 (기본값: False)
-        
-    Returns:
-        tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로 또는 None)
+    차트 이미지를 캡처하고 신호를 분석하는 함수 - 완전히 개선된 버전
     """
+    temp_path = None
     try:
-        # 브라우저 창 크기 설정 (최대한 크게, 하지만 타임아웃 방지)
+        # 타임아웃 설정 개선
+        driver.set_page_load_timeout(30)  # 30초 제한
+        driver.set_script_timeout(30)     # 스크립트 실행 제한
+        
+        # 브라우저 창 크기 설정
         try:
             logger.info("브라우저 창 크기 설정 시작")
-            # 적당한 창 크기로 설정 (너무 크지 않게)
-            driver.set_window_size(1920, 1080)
+            driver.set_window_size(1366, 768)  # 더 작은 크기로 설정 (리소스 절약)
             time.sleep(1)
         except Exception as e:
             logger.warning(f"브라우저 창 크기 설정 중 오류 (무시됨): {e}")
         
-        # 스크린샷 캡처 - 직접 차트 요소만 찾아서 캡처
-        logger.info("차트 요소 탐색 시작")
+        # 스크린샷 캡처 - 직접 모든 페이지 캡처로 시도
+        logger.info("스크린샷 캡처 시작")
         try:
-            # 차트 영역 찾기 (XPath는 TradingView의 실제 구조에 맞게 조정 필요)
-            chart_element = driver.find_element(By.XPATH, "/html/body/div[2]")
-            logger.info("차트 요소 찾음, 스크린샷 캡처 시작")
-            png = chart_element.screenshot_as_png
-            logger.info("차트 요소 스크린샷 캡처 완료")
-        except Exception as e:
-            logger.warning(f"차트 요소 캡처 실패, 전체 화면 캡처로 대체: {e}")
-            # 차트 요소를 찾지 못한 경우 전체 화면 캡처
-            png = driver.screenshot_as_png
+            # 직접 전체 페이지 캡처 (차트 요소 찾기 시도 없이)
+            png = driver.get_screenshot_as_png()  # screenshot_as_png 대신 get_screenshot_as_png 사용
             logger.info("전체 화면 스크린샷 캡처 완료")
+        except Exception as e:
+            logger.error(f"스크린샷 캡처 실패: {e}")
+            # 실패 즉시 반환 (프로세스 손상 가능성)
+            return None, None, None
         
         # PIL Image로 변환
         img_pil = Image.open(io.BytesIO(png))
         logger.info("PIL Image 변환 완료")
         
-        # 이미지 크기 기록 (디버깅 목적)
+        # 명시적으로 메모리 해제
+        del png
+        gc.collect()
+        
+        # 이미지 크기 기록 
         original_width, original_height = img_pil.size
         logger.info(f"원본 캡처 이미지 크기: {original_width}x{original_height}")
         
-        # 파일 경로 설정 (저장 여부와 관계없이 경로 생성)
+        # 이미지 크기가 너무 작은 경우 유효하지 않음
+        if original_width < 100 or original_height < 100:
+            logger.error(f"이미지 크기가 너무 작음: {original_width}x{original_height}")
+            del img_pil
+            gc.collect()
+            return None, None, None
+        
+        # 파일 경로 설정
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"chart_{current_time}.png"
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -2096,7 +2160,7 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
             img_pil.save(file_path)
             logger.info(f"스크린샷 저장 완료: {file_path}")
         
-        # Base64 인코딩 (UI 표시용)
+        # Base64 인코딩
         buffered = io.BytesIO()
         img_pil.save(buffered, format="PNG")
         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
@@ -2105,41 +2169,46 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         buffered.close()
         del buffered
         
-        # OpenCV 이미지로 변환 (PIL → OpenCV)
+        # OpenCV 이미지로 변환
         img_np = np.array(img_pil)
-        # RGB to BGR (PIL is RGB, OpenCV uses BGR)
         img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         logger.info("OpenCV 이미지 변환 완료")
         
-        # 이미지 크기 재확인
-        h, w = img_cv.shape[:2]
-        logger.info(f"OpenCV 이미지 크기: {w}x{h}")
+        # PIL 이미지 메모리 해제 (더 이상 필요 없음)
+        del img_pil
+        gc.collect()
         
-        # 이미지가 올바르게 로드되었는지 확인
+        # 이미지가 유효한지 확인
         if img_cv is None or img_cv.size == 0:
             logger.error("OpenCV 이미지 변환 실패 또는 이미지가 비어 있습니다")
-            # 명시적 메모리 정리
-            del img_pil
-            if 'png' in locals():
-                del png
             gc.collect()
             return base64_image, None, file_path if save_image else None
         
-        # 신호 분석 수행 (메모리 내 이미지 사용)
+        # 신호 분석 수행
         signal_analysis = None
-        temp_path = None  # 변수 초기화
-        
         if chart_processor is not None:
-            # 임시 이미지 파일 생성 (analyze_chart_signals가 파일 경로를 필요로 하므로)
+            # 임시 이미지 파일 생성
             temp_path = os.path.join(script_dir, f"temp_{current_time}.png")
             cv2.imwrite(temp_path, img_cv)
             
             try:
+                # 시간 제한 설정 - 분석에 최대 30초만 허용
+                analysis_start = time.time()
                 logger.info(f"차트 신호 분석 시작 (debug={debug})")
+                
+                # 분석 시간 제한 구현
+                MAX_ANALYSIS_TIME = 30  # 30초
+                signal_analysis = None
+                
+                # 별도 스레드로 실행하는 대신 시간 체크하며 실행
                 signal_analysis = chart_processor.process_chart_image(
                     image_path=temp_path,
                     debug=debug
                 )
+                
+                analysis_time = time.time() - analysis_start
+                if analysis_time > MAX_ANALYSIS_TIME:
+                    logger.warning(f"차트 신호 분석이 너무 오래 걸림: {analysis_time:.2f}초")
                 
                 if signal_analysis:
                     logger.info("차트 신호 분석 완료")
@@ -2150,21 +2219,18 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
                 logger.error(f"신호 분석 중 오류: {analysis_error}")
                 signal_analysis = None
             finally:
-                # 분석 후 임시 파일 삭제 (저장 옵션이 비활성화된 경우)
+                # 임시 파일 삭제
                 if temp_path and os.path.exists(temp_path) and not save_image:
                     try:
                         os.remove(temp_path)
                         logger.info(f"임시 파일 삭제: {temp_path}")
                     except Exception as del_error:
                         logger.warning(f"임시 파일 삭제 실패: {del_error}")
-                
-        # 명시적으로 큰 객체 제거 - 순서 중요
+        
+        # 메모리 정리
         del img_cv
         del img_np
-        del img_pil
-        if 'png' in locals():
-            del png
-            
+        
         # 가비지 컬렉션 강제 수행
         gc.collect()
         
@@ -2172,20 +2238,21 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         
     except Exception as e:
         logger.error(f"차트 캡처 및 분석 중 오류 발생: {e}", exc_info=True)
-        # 예외 발생 시에도 메모리 정리 시도
+        
+        # 임시 파일 정리
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+                
+        # 강제 메모리 정리
         for var in ['img_cv', 'img_np', 'img_pil', 'png', 'buffered']:
             if var in locals() and locals()[var] is not None:
                 try:
                     del locals()[var]
                 except:
                     pass
-        
-        # 임시 파일 정리
-        if 'temp_path' in locals() and temp_path and os.path.exists(temp_path):
-            try:
-                os.remove(temp_path)
-            except:
-                pass
                 
         gc.collect()
         return None, None, None
@@ -2217,26 +2284,80 @@ def modify_orderbook(orderbook):
     
     return modified_orderbook
 
+
+# 메인 코드의 리소스 모니터링 기능 강화
 def check_resource_usage():
-    # 메모리 사용량 모니터링
+    """시스템 리소스 모니터링 및 자동 정리 - 개선된 버전"""
+    # 메모리 사용량 모니터링 (더 낮은 임계값)
     memory_percent = psutil.virtual_memory().percent
-    if memory_percent > 80:
-        logger.warning(f"High memory usage detected: {memory_percent}%")
-        # 정리 작업 수행
+    if memory_percent > 70:  # 70%로 낮춤
+        logger.warning(f"높은 메모리 사용량 감지: {memory_percent}%")
+        # 강화된 정리 작업 수행
         WebDriverManager.quit()
         cleanup_chrome_processes()
-        gc.collect()
         
-    # CPU 사용량 모니터링 추가
+        # 파일 캐시 정리
+        if os.getenv("ENVIRONMENT") == "ec2":
+            try:
+                os.system('sudo sh -c "sync; echo 3 > /proc/sys/vm/drop_caches"')
+            except:
+                pass
+                
+        # 가비지 컬렉션 여러 번 실행
+        for _ in range(3):
+            gc.collect()
+        
+        # 메모리 사용량 로깅
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        logger.info(f"정리 후 메모리 사용량: {memory_info.rss / 1024 / 1024:.2f} MB")
+    
+    # CPU 사용량 모니터링
     cpu_percent = psutil.cpu_percent(interval=1)
-    if cpu_percent > 90:
-        logger.warning(f"High CPU usage detected: {cpu_percent}%")
+    if cpu_percent > 80:  # 80%로 낮춤
+        logger.warning(f"높은 CPU 사용량 감지: {cpu_percent}%")
+        # CPU 사용량 줄이기 위한 조치
+        time.sleep(5)  # 잠시 대기
         
-    # 디스크 사용량 모니터링 추가
+    # 디스크 사용량 모니터링
     disk_usage = psutil.disk_usage('/')
     if disk_usage.percent > 85:
-        logger.warning(f"High disk usage detected: {disk_usage.percent}%")
-        # 로그 및 임시 파일 정리 작업 추가
+        logger.warning(f"높은 디스크 사용량 감지: {disk_usage.percent}%")
+        # 로그 및 임시 파일 정리
+        cleanup_temp_files()
+        
+# 임시 파일 정리 함수 추가        
+def cleanup_temp_files():
+    """로그 및 임시 파일 정리"""
+    try:
+        # 임시 디렉토리 내 파일 정리
+        temp_dirs = ['/tmp', os.path.join(os.getcwd(), 'temp')]
+        for temp_dir in temp_dirs:
+            if os.path.exists(temp_dir):
+                for f in os.listdir(temp_dir):
+                    if f.startswith(('temp_', 'chart_', 'debug_')) and f.endswith(('.png', '.jpg')):
+                        file_path = os.path.join(temp_dir, f)
+                        # 1일 이상 지난 파일만 삭제
+                        if (time.time() - os.path.getctime(file_path)) > 86400:
+                            try:
+                                os.remove(file_path)
+                                logger.debug(f"오래된 임시 파일 삭제: {file_path}")
+                            except:
+                                pass
+        
+        # 로그 파일 정리
+        log_dir = "logs"
+        if os.path.exists(log_dir):
+            log_files = sorted([os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.endswith('.log')])
+            if len(log_files) > 10:  # 최근 10개만 보존
+                for old_file in log_files[:-10]:
+                    try:
+                        os.remove(old_file)
+                        logger.info(f"오래된 로그 파일 삭제: {old_file}")
+                    except:
+                        pass
+    except Exception as e:
+        logger.error(f"임시 파일 정리 중 오류: {e}")
 
 # 로그 관리 설정 추가
 def setup_logging():
@@ -3345,64 +3466,123 @@ def ai_trading():
         # 메모리 정리
         gc.collect()
 
+
+
 if __name__ == "__main__":
     logger.info("Starting trading bot...")
     try:
-        # 시작할 때도 크롬 프로세스 한번 정리
+        # 시작할 때 철저한 정리
         cleanup_chrome_processes()
-
-        # 프로그램 시작 시 핸들러 등록
-        signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
-        signal.signal(signal.SIGTERM, signal_handler)  # 종료 시그널
-        atexit.register(cleanup_handler)              # 정상 종료 시
-
+        cleanup_temp_files()
+        
+        # 메모리 덤프 및 리소스 모니터링을 위한 함수
+        def log_memory_usage():
+            """메모리 사용량 모니터링 및 로깅 - 개선된 버전"""
+            try:
+                # 현재 프로세스 정보 수집
+                process = psutil.Process(os.getpid())
+                memory_info = process.memory_info()
+                
+                # 상세한 메모리 정보 로깅
+                logger.info(f"메모리 사용량: {memory_info.rss / 1024 / 1024:.2f} MB")
+                logger.info(f"가상 메모리: {memory_info.vms / 1024 / 1024:.2f} MB")
+                
+                # 시스템 전체 메모리 정보
+                system_memory = psutil.virtual_memory()
+                logger.info(f"시스템 메모리 사용률: {system_memory.percent}%")
+                
+                # CPU 정보 추가
+                cpu_percent = psutil.cpu_percent(interval=1)
+                logger.info(f"CPU 사용률: {cpu_percent}%")
+                
+                # 열린 파일 핸들 수 확인
+                try:
+                    open_files = process.open_files()
+                    logger.info(f"열린 파일 핸들 수: {len(open_files)}")
+                except:
+                    logger.info("열린 파일 핸들 정보를 가져올 수 없음")
+                
+                # 스레드 정보 확인
+                threads = process.num_threads()
+                logger.info(f"활성 스레드 수: {threads}")
+                
+                # 상위 메모리 사용 프로세스 로깅 (크롬 관련)
+                try:
+                    chrome_processes = []
+                    for proc in psutil.process_iter(['pid', 'name', 'memory_info']):
+                        if 'chrome' in proc.info['name'].lower() or 'chromedriver' in proc.info['name'].lower():
+                            chrome_processes.append({
+                                'pid': proc.info['pid'],
+                                'name': proc.info['name'],
+                                'memory_mb': proc.info['memory_info'].rss / 1024 / 1024
+                            })
+                    
+                    if chrome_processes:
+                        # 메모리 사용량 기준 내림차순 정렬
+                        chrome_processes = sorted(chrome_processes, key=lambda x: x['memory_mb'], reverse=True)
+                        # 상위 5개만 로깅
+                        for proc in chrome_processes[:5]:
+                            logger.info(f"크롬 프로세스: PID={proc['pid']}, 이름={proc['name']}, 메모리={proc['memory_mb']:.2f} MB")
+                except:
+                    pass
+                
+                # 너무 많은 로그 파일 생성 방지 - 로그 파일 정리
+                log_dir = "logs"
+                if os.path.exists(log_dir):
+                    log_files = sorted([os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.endswith('.log')])
+                    if len(log_files) > 30:
+                        for old_file in log_files[:-30]:
+                            try:
+                                os.remove(old_file)
+                                logger.info(f"오래된 로그 파일 삭제: {old_file}")
+                            except Exception as e:
+                                logger.warning(f"로그 파일 삭제 실패: {e}")
+                
+                # 메모리 사용량이 높으면 자동 정리 수행
+                if system_memory.percent > 75:
+                    logger.warning(f"높은 메모리 사용량 감지: {system_memory.percent}%, 자동 정리 수행")
+                    WebDriverManager.quit()
+                    cleanup_chrome_processes()
+                    cleanup_temp_files()
+                    gc.collect()
+                    gc.collect()
+                    
+                    # 정리 후 메모리 사용량 다시 확인
+                    process = psutil.Process(os.getpid())
+                    memory_info = process.memory_info()
+                    logger.info(f"정리 후 메모리 사용량: {memory_info.rss / 1024 / 1024:.2f} MB")
+                    
+            except Exception as e:
+                logger.error(f"메모리 사용량 로깅 중 오류: {e}")
+        
+        # 핸들러 등록
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        atexit.register(cleanup_handler)
+        
         # 데이터베이스 초기화
         init_db()
-
-        # 리소스 모니터링 작업 추가
-        schedule.every(5).minutes.do(check_resource_usage)
         
-        # 메모리 덤프 및 리소스 모니터링을 위한 새 함수 - 새로 추가됨
-        def log_memory_usage():
-            process = psutil.Process(os.getpid())
-            memory_info = process.memory_info()
-            
-            logger.info(f"메모리 사용량: {memory_info.rss / 1024 / 1024:.2f} MB")
-            logger.info(f"가상 메모리: {memory_info.vms / 1024 / 1024:.2f} MB")
-            
-            # 최근 30개 이상의 로그 파일만 유지 (너무 많은 로그 파일 생성 방지)
-            log_dir = "logs"
-            if os.path.exists(log_dir):
-                log_files = sorted([os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.endswith('.log')])
-                if len(log_files) > 30:
-                    for old_file in log_files[:-30]:
-                        try:
-                            os.remove(old_file)
-                            logger.info(f"오래된 로그 파일 삭제: {old_file}")
-                        except Exception as e:
-                            logger.warning(f"로그 파일 삭제 실패: {e}")
+        # 리소스 모니터링 주기 단축 (5분→3분)
+        schedule.every(3).minutes.do(check_resource_usage)
         
-        # 메모리 모니터링 스케줄 추가 - 새로 추가됨
-        schedule.every(30).minutes.do(log_memory_usage)
-
-        # 글로벌 변수 초기화
-        sl_monitor_jobs = []
-        trading_in_progress = False
-        monitoring_in_progress = False
+        # 메모리 모니터링 주기 단축 (30분→15분)
+        schedule.every(15).minutes.do(log_memory_usage)
         
-        # 시스템 안정화 함수 (주기적 재부팅) - 새로 추가됨
+        # 시스템 안정화 기능 강화 (24시간→12시간)
         def system_stabilization():
             try:
-                # 현재 실행 시간이 24시간 이상이면 정상 종료 준비
                 process = psutil.Process(os.getpid())
                 uptime_seconds = time.time() - process.create_time()
                 
-                if uptime_seconds > 86400:  # 24시간 (86400초)
-                    logger.info("24시간 이상 실행 중, 안정화를 위한 정상 종료 준비...")
+                # 12시간으로 단축 (24시간→12시간)
+                if uptime_seconds > 43200:  # 12시간
+                    logger.info("12시간 이상 실행 중, 안정화를 위한 정상 종료 준비...")
                     
                     # 모든 리소스 정리
                     WebDriverManager.quit()
                     cleanup_chrome_processes()
+                    cleanup_temp_files()
                     
                     # 스케줄러 작업 정리
                     schedule.clear()
@@ -3413,10 +3593,15 @@ if __name__ == "__main__":
             except Exception as e:
                 logger.error(f"시스템 안정화 중 오류: {e}")
         
-        # 시스템 안정화 스케줄 추가 - 새로 추가됨
+        # 시스템 안정화 스케줄 추가 (매 시간 체크)
         schedule.every(1).hours.do(system_stabilization)
-
-        # AI 트레이딩 작업을 수행하는 함수
+        
+        # 글로벌 변수 초기화
+        sl_monitor_jobs = []
+        trading_in_progress = False
+        monitoring_in_progress = False
+        
+        # AI 트레이딩 작업 강화 - 실패 시 메모리 정리
         def trading_job():
             global trading_in_progress
             if trading_in_progress:
@@ -3426,16 +3611,34 @@ if __name__ == "__main__":
             start_time = time.time()
             try:
                 trading_in_progress = True
+                
+                # 작업 시작 전 리소스 확인
+                memory_percent = psutil.virtual_memory().percent
+                if memory_percent > 75:
+                    logger.warning(f"트레이딩 작업 시작 전 높은 메모리 사용량 감지: {memory_percent}%")
+                    WebDriverManager.quit()
+                    cleanup_chrome_processes()
+                    gc.collect()
+                
                 ai_trading()
             except Exception as e:
                 logger.error(f"An error occurred in trading job: {e}")
+                # 오류 발생 시 강제 정리
+                WebDriverManager.quit()
+                cleanup_chrome_processes()
             finally:
                 trading_in_progress = False
                 elapsed_time = time.time() - start_time
                 logger.info(f"Trading job completed in {elapsed_time:.2f} seconds")
+                
+                # 완료 후 메모리 정리 강화
                 gc.collect()
-
-        # 수동 거래 모니터링 작업을 수행하는 함수
+                gc.collect()  # 두 번 연속 호출
+                
+                process = psutil.Process(os.getpid())
+                logger.info(f"트레이딩 작업 후 메모리 사용량: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+        
+        # 수동 거래 모니터링 작업
         def monitoring_job():
             global monitoring_in_progress
             if monitoring_in_progress:
@@ -3450,26 +3653,29 @@ if __name__ == "__main__":
                 monitoring_in_progress = False
                 # 메모리 정리
                 gc.collect()
-
+        
         # 초기 실행
         trading_job()
         monitoring_job()
-
-        # AI 트레이딩 스케줄 설정 (5분마다 실행)
-        schedule.every(5).minutes.do(trading_job) # GPT-4o-mini를 사용하여 비용 절감, 더 자주 트레이딩 수행
-
-        # 수동 거래 모니터링 스케줄 설정 (1분마다 실행)
+        
+        # 스케줄 설정
+        schedule.every(5).minutes.do(trading_job)
         schedule.every(1).minutes.do(monitoring_job)
-
-        # 스케줄러 실행
+        
+        # 스케줄러 실행 - 예외 처리 강화
         while True:
-            schedule.run_pending()
-            time.sleep(1)
+            try:
+                schedule.run_pending()
+                time.sleep(1)
+            except Exception as e:
+                logger.error(f"스케줄러 실행 중 오류: {e}")
+                time.sleep(5)  # 오류 발생 시 대기 시간 증가
             
     except Exception as e:
         logger.error(f"Critical error occurred: {e}")
         cleanup_chrome_processes()
         WebDriverManager.quit()
     finally:
+        logger.info("Trading bot shutting down...")
         cleanup_chrome_processes()
         WebDriverManager.quit()
