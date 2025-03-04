@@ -189,6 +189,37 @@ class WebDriverManager:
                 # 메모리 정리
                 gc.collect()
 
+def force_quit_webdriver(driver):
+    """WebDriver 강제 종료 및 모든 리소스 해제"""
+    try:
+        # 페이지 로드 중지
+        try:
+            driver.execute_script("window.stop();")
+        except:
+            pass
+            
+        # 모든 자원 해제
+        try:
+            driver.execute_script("""
+                window.onbeforeunload = null;
+                window.onunload = null;
+                if (window.jQuery) {
+                    jQuery(document).unbind('ajaxSend ajaxComplete ajaxError');
+                }
+            """)
+        except:
+            pass
+            
+        # 명시적 종료
+        driver.quit()
+    except:
+        pass
+    finally:
+        # 세션 참조 정리
+        clear_webdriver_session_refs(driver)
+        # 크롬 프로세스 강제 종료
+        cleanup_chrome_processes()
+
 def clear_network_handlers():
     """네트워크 및 소켓 관련 리소스 정리"""
     try:
@@ -1955,15 +1986,35 @@ def create_driver():
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
+    
+    # 성능 최적화 옵션 추가
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-browser-side-navigation")
+    chrome_options.add_argument("--disable-infobars")
+    chrome_options.add_argument("--disable-browser-animations")
+    chrome_options.add_argument("--js-flags=--expose-gc")
+    chrome_options.add_argument("--disable-default-apps")
+    chrome_options.add_argument("--disable-translate")
+    chrome_options.add_argument("--disable-sync")
+    chrome_options.add_argument("--disable-web-security")
+    chrome_options.add_argument("--blink-settings=imagesEnabled=false")  # 이미지 로드 비활성화
+    
+    # 메모리 최적화 설정
+    chrome_options.add_argument("--js-flags=--max-old-space-size=128")  # JS 힙 크기 제한
+    chrome_options.add_argument("--memory-model=low")
+    chrome_options.add_argument("--disable-site-isolation-trials")
+    
     # WebGL 경고 메시지 제거를 위한 추가 옵션들
     chrome_options.add_argument("--enable-unsafe-webgl")
     chrome_options.add_argument("--enable-unsafe-swiftshader")
-    chrome_options.add_argument('--disable-web-security')
-    chrome_options.add_argument('--allow-running-insecure-content')
     chrome_options.add_argument('--disable-software-rasterizer')
 
     # 로깅 레벨 조정
     chrome_options.add_argument('--log-level=3')
+    
+    # 프록시 설정 제거 (잠재적 지연 요소)
+    chrome_options.add_argument('--no-proxy-server')
+    
     try:
         if env == "local":
             chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
@@ -1973,12 +2024,19 @@ def create_driver():
             service = Service('/usr/bin/chromedriver')
         else:
             raise ValueError(f"Unsupported environment. Only local or ec2: {env}")
+        
         driver = webdriver.Chrome(service=service, options=chrome_options)
+        
+        # 페이지 로드 전략 설정 (빠른 로드)
+        driver.set_page_load_timeout(30)
+        driver.set_script_timeout(30)
+        
         return driver
     except Exception as e:
         logger.error(f"ChromeDriver 생성 중 오류 발생: {e}")
         raise
-
+    
+    
 # 안전하게 WebDriver 생성 (싱글톤 패턴 활용)
 def safe_create_driver():
     """안전하게 WebDriver 인스턴스 생성"""
@@ -2199,20 +2257,22 @@ def capture_tradingview_chart_with_retry(chart_processor=None, save_image=False,
     return None, None, None
 
 # 캡처 함수 타임아웃 및 에러 처리 개선
-def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False):
+def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, debug=False, timeout=60):
     """
-    차트 이미지를 캡처하고 신호를 분석하는 함수 - 최종 개선 버전
+    차트 이미지를 캡처하고 신호를 분석하는 함수 - 타임아웃 및 메모리 관리 개선
     
     Args:
         driver: Selenium 웹드라이버
         chart_processor: 차트 신호 프로세서 인스턴스
         save_image: 이미지 저장 여부 (기본값: False)
         debug: 디버그 모드 활성화 여부 (기본값: False)
+        timeout: 캡처 타임아웃 (초) (기본값: 60)
         
     Returns:
         tuple: (차트 이미지 base64, 신호 분석 결과, 이미지 파일 경로 또는 None)
     """
     temp_path = None
+    start_time = time.time()
     
     try:
         # 타임아웃 설정 개선
@@ -2230,14 +2290,27 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         except Exception as e:
             logger.warning(f"브라우저 창 크기 설정 중 오류 (무시됨): {e}")
         
-        # 스크린샷 캡처
+        # 스크린샷 캡처 시작
         logger.info("스크린샷 캡처 시작")
+        capture_start = time.time()
+        
         try:
+            # 타임아웃 설정
+            if time.time() - start_time > timeout:
+                logger.error(f"캡처 타임아웃 초과: {timeout}초")
+                force_quit_webdriver(driver)
+                return None, None, None
+                
             # 명시적인 명령 사용
             png = driver.get_screenshot_as_png()
-            logger.info("전체 화면 스크린샷 캡처 완료")
+            capture_time = time.time() - capture_start
+            logger.info(f"전체 화면 스크린샷 캡처 완료 ({capture_time:.2f}초)")
             
-            # 이미지 캡처 후 스크립트 실행 중단 (추가)
+            # 캡처 시간이 너무 길면 경고
+            if capture_time > 10:
+                logger.warning(f"스크린샷 캡처에 {capture_time:.2f}초 소요 - 성능 저하 가능성")
+            
+            # 이미지 캡처 후 스크립트 실행 중단
             try:
                 driver.execute_script("window.stop();")
             except:
@@ -2246,13 +2319,16 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
             logger.error(f"스크린샷 캡처 실패: {e}")
             return None, None, None
         
-        # PIL Image로 변환
-        img_pil = Image.open(io.BytesIO(png))
-        logger.info("PIL Image 변환 완료")
+        # PIL Image로 변환 - 명시적 메모리 관리
+        img_buffer = io.BytesIO(png)
+        img_pil = Image.open(img_buffer)
+        img_pil.load()  # 이미지 데이터 즉시 로드
         
-        # 명시적으로 메모리 해제
+        # 원본 PNG 데이터 메모리 해제
         del png
         gc.collect()
+        
+        logger.info("PIL Image 변환 완료")
         
         # 이미지 크기 기록 
         original_width, original_height = img_pil.size
@@ -2261,7 +2337,11 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         # 이미지 크기가 너무 작은 경우 유효하지 않음
         if original_width < 100 or original_height < 100:
             logger.error(f"이미지 크기가 너무 작음: {original_width}x{original_height}")
+            # 명시적 메모리 해제
+            img_pil.close()
             del img_pil
+            img_buffer.close()
+            del img_buffer
             gc.collect()
             return None, None, None
         
@@ -2276,7 +2356,7 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
             img_pil.save(file_path)
             logger.info(f"스크린샷 저장 완료: {file_path}")
         
-        # Base64 인코딩
+        # Base64 인코딩 - 메모리 효율적 처리
         buffered = io.BytesIO()
         img_pil.save(buffered, format="PNG")
         base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
@@ -2285,14 +2365,16 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         buffered.close()
         del buffered
         
-        # 캡처 작업 완료 후 드라이버와의 통신 최소화 (추가)
+        # 캡처 작업 완료 후 드라이버와의 통신 최소화
         try:
             # 페이지 로드 중지
             driver.execute_script("window.stop();")
             # 불필요한 자원 해제
             driver.execute_script("""
                 // 메모리 누수 가능성 있는 자원 정리
-                if (window.jQuery) jQuery.clear && jQuery.clear();
+                if (window.jQuery) { 
+                    try { jQuery.clear && jQuery.clear(); } catch(e) {} 
+                }
                 // DOM에 연결된 이벤트 리스너 제거
                 try {
                     var oldElem = document.documentElement.cloneNode(false);
@@ -2304,22 +2386,32 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         except:
             pass
         
-        # OpenCV 이미지로 변환
+        # OpenCV 이미지로 변환 (중요: PIL 이미지 데이터 복사 후 변환)
         img_np = np.array(img_pil)
+        
+        # PIL 이미지 명시적 메모리 해제 (더 이상 필요 없음)
+        img_pil.close()
+        del img_pil
+        img_buffer.close()
+        del img_buffer
+        gc.collect()
+        
         img_cv = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         logger.info("OpenCV 이미지 변환 완료")
-        
-        # PIL 이미지 메모리 해제 (더 이상 필요 없음)
-        del img_pil
-        gc.collect()
         
         # 이미지가 유효한지 확인
         if img_cv is None or img_cv.size == 0:
             logger.error("OpenCV 이미지 변환 실패 또는 이미지가 비어 있습니다")
+            del img_np
             gc.collect()
             return base64_image, None, file_path if save_image else None
         
-        # 신호 분석 수행
+        # 타임아웃 체크 (분석 시작 전)
+        if time.time() - start_time > timeout * 0.8:  # 타임아웃의 80% 이상 소요됐으면 분석 건너뛰기
+            logger.warning(f"이미지 처리에 너무 많은 시간 소요: {time.time() - start_time:.2f}초")
+            return base64_image, None, file_path if save_image else None
+        
+        # 신호 분석 수행 (타임아웃 적용)
         signal_analysis = None
         if chart_processor is not None:
             # 임시 이미지 파일 생성
@@ -2333,14 +2425,14 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
                 
                 # 분석 시간 제한 구현
                 MAX_ANALYSIS_TIME = 30  # 30초
-                signal_analysis = None
                 
-                # 별도 스레드로 실행하는 대신 시간 체크하며 실행
+                # 분석 실행
                 signal_analysis = chart_processor.process_chart_image(
                     image_path=temp_path,
                     debug=debug
                 )
                 
+                # 타임아웃 체크
                 analysis_time = time.time() - analysis_start
                 if analysis_time > MAX_ANALYSIS_TIME:
                     logger.warning(f"차트 신호 분석이 너무 오래 걸림: {analysis_time:.2f}초")
@@ -2372,6 +2464,13 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
         # 세션 참조 정리
         clear_webdriver_session_refs(driver)
         
+        # 타임아웃 체크 및 소요시간 로깅
+        total_time = time.time() - start_time
+        if total_time > timeout * 0.9:
+            logger.warning(f"전체 처리 시간이 타임아웃에 근접: {total_time:.2f}초 / {timeout}초")
+        else:
+            logger.info(f"캡처 및 분석 완료 시간: {total_time:.2f}초")
+            
         return base64_image, signal_analysis, file_path if save_image else None
         
     except Exception as e:
@@ -2385,17 +2484,25 @@ def capture_and_analyze_chart(driver, chart_processor=None, save_image=False, de
                 pass
                 
         # 강제 메모리 정리
-        for var in ['img_cv', 'img_np', 'img_pil', 'png', 'buffered']:
+        for var in ['img_cv', 'img_np', 'img_pil', 'png', 'buffered', 'img_buffer']:
             if var in locals() and locals()[var] is not None:
                 try:
+                    if var == 'img_pil' and locals()[var] is not None:
+                        locals()[var].close()
                     del locals()[var]
                 except:
                     pass
                 
         gc.collect()
+        gc.collect()  # 두 번 실행하여 순환 참조도 정리
         
         # 세션 참조 정리
         clear_webdriver_session_refs(driver)
+        
+        # 타임아웃 체크 후 드라이버 강제 종료
+        if time.time() - start_time > timeout * 0.5:  # 절반 이상 소요됐으면 드라이버 재설정
+            logger.warning("처리 시간 초과로 WebDriver 강제 종료")
+            force_quit_webdriver(driver)
         
         return None, None, None
 
