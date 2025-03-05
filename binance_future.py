@@ -3879,7 +3879,8 @@ if __name__ == "__main__":
                 logger.error(f"시스템 안정화 중 오류: {e}")
         
         # 시스템 안정화 스케줄 추가 (매 시간 체크)
-        schedule.every(1).hours.do(system_stabilization)
+        # NOTE : (25-03-05) system_stabilization 실행 시 파이썬 코드 재실행 불가 문제 발생. 따라서, 스케줄링에서 현재는 제외
+        # schedule.every(1).hours.do(system_stabilization) 
         
         # 글로벌 변수 초기화
         sl_monitor_jobs = []
