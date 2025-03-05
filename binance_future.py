@@ -252,14 +252,37 @@ def clear_network_handlers():
 
 # 시스템 리소스 모니터링 및 자가 복구 함수
 def check_resource_usage():
-    # 메모리 사용량 모니터링
+    """시스템 리소스 모니터링 및 자동 정리 - 개선된 버전"""
+    # 메모리 사용량 모니터링 (더 낮은 임계값)
     memory_percent = psutil.virtual_memory().percent
-    if memory_percent > 80:
-        logger.warning(f"High memory usage detected: {memory_percent}%")
-        # 정리 작업 수행
+    if memory_percent > 70:  # 70%로 낮춤
+        logger.warning(f"높은 메모리 사용량 감지: {memory_percent}%")
+        # 강화된 정리 작업 수행
         WebDriverManager.quit()
         cleanup_chrome_processes()
-        gc.collect()
+        
+        # 가비지 컬렉션 여러 번 실행
+        for _ in range(3):
+            gc.collect()
+        
+        # 메모리 사용량 로깅
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        logger.info(f"정리 후 메모리 사용량: {memory_info.rss / 1024 / 1024:.2f} MB")
+    
+    # CPU 사용량 모니터링
+    cpu_percent = psutil.cpu_percent(interval=1)
+    if cpu_percent > 80:  # 80%로 낮춤
+        logger.warning(f"높은 CPU 사용량 감지: {cpu_percent}%")
+        # CPU 사용량 줄이기 위한 조치
+        time.sleep(5)  # 잠시 대기
+        
+    # 디스크 사용량 모니터링
+    disk_usage = psutil.disk_usage('/')
+    if disk_usage.percent > 75:  # 디스크 정리 시작 임계값
+        logger.warning(f"높은 디스크 사용량 감지: {disk_usage.percent}%")
+        # 디스크 정리 함수 호출
+        simple_disk_cleanup(logger)
 
 # 크롬 프로세스 정리 함수 개선
 def cleanup_chrome_processes(session_id=None):
@@ -3752,6 +3775,121 @@ def ai_trading():
         gc.collect()
 
 
+def simple_disk_cleanup(logger=None):
+    """
+    EC2 환경에서 디스크 공간을 효과적으로 정리하는 간결한 함수
+    """
+    import os
+    import glob
+    import psutil
+    import shutil
+    from datetime import datetime, timedelta
+    
+    if logger is None:
+        import logging
+        logger = logging.getLogger()
+    
+    # 시작 전 디스크 사용량 확인
+    initial_usage = psutil.disk_usage('/')
+    logger.info(f"디스크 정리 시작 - 현재 사용량: {initial_usage.percent}%")
+    
+    deleted_count = 0
+    deleted_size = 0
+    
+    # 1. 임시 이미지 파일 정리 (프로젝트 디렉토리)
+    project_dir = os.getcwd()
+    image_patterns = [
+        os.path.join(project_dir, "temp_*.png"),
+        os.path.join(project_dir, "chart_*.png"),
+        os.path.join(project_dir, "debug_*.png")
+    ]
+    
+    cutoff_time = datetime.now() - timedelta(hours=24)  # 24시간 이상 지난 파일
+    
+    for pattern in image_patterns:
+        for file_path in glob.glob(pattern):
+            try:
+                if os.path.isfile(file_path) and datetime.fromtimestamp(os.path.getmtime(file_path)) < cutoff_time:
+                    file_size = os.path.getsize(file_path)
+                    os.remove(file_path)
+                    deleted_count += 1
+                    deleted_size += file_size
+            except Exception as e:
+                logger.error(f"파일 삭제 오류: {file_path}, {e}")
+    
+    # 2. 로그 파일 정리
+    log_dir = os.path.join(project_dir, "logs")
+    if os.path.exists(log_dir):
+        log_files = sorted([
+            os.path.join(log_dir, f) 
+            for f in os.listdir(log_dir) 
+            if f.endswith('.log')
+        ])
+        
+        # 최신 5개 파일만 유지
+        if len(log_files) > 5:
+            for old_file in log_files[:-5]:
+                try:
+                    file_size = os.path.getsize(old_file)
+                    os.remove(old_file)
+                    deleted_count += 1
+                    deleted_size += file_size
+                except Exception as e:
+                    logger.error(f"로그 파일 삭제 오류: {old_file}, {e}")
+    
+    # 3. /tmp 디렉토리 정리
+    tmp_patterns = [
+        "/tmp/chrome_*",
+        "/tmp/selenium_*",
+        "/tmp/*.png",
+        "/tmp/*.log"
+    ]
+    
+    for pattern in tmp_patterns:
+        for file_path in glob.glob(pattern):
+            try:
+                if os.path.isfile(file_path) and datetime.fromtimestamp(os.path.getmtime(file_path)) < cutoff_time:
+                    file_size = os.path.getsize(file_path)
+                    os.remove(file_path)
+                    deleted_count += 1
+                    deleted_size += file_size
+            except Exception as e:
+                pass  # /tmp 파일은 삭제 권한 문제가 있을 수 있으므로 오류 무시
+    
+    # 4. __pycache__ 디렉토리 정리
+    for root, dirs, files in os.walk(project_dir):
+        if "__pycache__" in dirs:
+            pycache_dir = os.path.join(root, "__pycache__")
+            try:
+                # 디렉토리 크기 계산
+                dir_size = sum(os.path.getsize(os.path.join(pycache_dir, f)) 
+                             for f in os.listdir(pycache_dir) 
+                             if os.path.isfile(os.path.join(pycache_dir, f)))
+                
+                # 디렉토리 삭제
+                shutil.rmtree(pycache_dir)
+                deleted_count += 1
+                deleted_size += dir_size
+            except Exception as e:
+                logger.error(f"캐시 삭제 오류: {pycache_dir}, {e}")
+    
+    # 5. 시스템 캐시 정리 시도 (EC2에서 권한이 있을 경우)
+    try:
+        import subprocess
+        subprocess.run("sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'", 
+                      shell=True, timeout=5, capture_output=True)
+    except:
+        pass  # 권한 문제로 실패할 수 있으므로 무시
+    
+    # 정리 후 디스크 사용량 확인
+    final_usage = psutil.disk_usage('/')
+    space_freed = initial_usage.percent - final_usage.percent
+    
+    logger.info(f"디스크 정리 완료: {deleted_count}개 항목 제거, {deleted_size/1024/1024:.2f} MB 확보")
+    logger.info(f"디스크 사용량 변화: {initial_usage.percent}% → {final_usage.percent}% (감소: {space_freed:.1f}%)")
+    
+    return final_usage.percent
+
 
 if __name__ == "__main__":
     logger.info("Starting trading bot...")
@@ -3848,11 +3986,14 @@ if __name__ == "__main__":
         # 데이터베이스 초기화
         init_db()
         
-        # 리소스 모니터링 주기 단축 (5분→3분)
-        schedule.every(3).minutes.do(check_resource_usage)
+        # 리소스 모니터링
+        schedule.every(5).minutes.do(check_resource_usage)
         
         # 메모리 모니터링 주기 단축 (30분→15분)
         schedule.every(15).minutes.do(log_memory_usage)
+        
+        # 디스크 정리 추가 (3시간마다 실행)
+        schedule.every(3).hours.do(simple_disk_cleanup, logger)
         
         # 시스템 안정화 기능 강화 (24시간→12시간)
         def system_stabilization():
