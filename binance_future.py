@@ -3429,17 +3429,17 @@ def ai_trading():
                         ### A. Critical Timing
 
                         **For Long Entry:**  
-                        - **BlackFlag FTS:** Must show a red-to-green transition (indicating a change from bearish to bullish) within the last 3 candles. Refer to the "BlackFlag FTS Signal" data in the trading signals section to confirm the signal and its freshness.
-                        - **UT Bot Alerts:** Must display a BUY alert within the last 3 candles. Refer to the "UT Bot Alert" data in the trading signals section to confirm the signal and its freshness.
+                        - **BlackFlag FTS:** Must show a red-to-green transition (indicating a change from bearish to bullish) within the last 10 candles. Refer to the "BlackFlag FTS Signal" data in the trading signals section to confirm the signal and its freshness.
+                        - **UT Bot Alerts:** Must display a BUY alert within the last 10 candles. Refer to the "UT Bot Alert" data in the trading signals section to confirm the signal and its freshness.
                         - **Volume Oscillator:** Must be positive on the current candle, confirming rising volume momentum supportive of a long move. Refer to the "Volume Oscillator" data in the trading signals section to check current value and recent history.
 
                         **For Short Entry:**  
-                        - **BlackFlag FTS:** Must show a green-to-red transition (indicating a change from bullish to bearish) within the last 3 candles. Refer to the "BlackFlag FTS Signal" data in the trading signals section to confirm the signal and its freshness.
-                        - **UT Bot Alerts:** Must display a SELL alert within the last 3 candles. Refer to the "UT Bot Alert" data in the trading signals section to confirm the signal and its freshness.
+                        - **BlackFlag FTS:** Must show a green-to-red transition (indicating a change from bullish to bearish) within the last 10 candles. Refer to the "BlackFlag FTS Signal" data in the trading signals section to confirm the signal and its freshness.
+                        - **UT Bot Alerts:** Must display a SELL alert within the last 10 candles. Refer to the "UT Bot Alert" data in the trading signals section to confirm the signal and its freshness.
                         - **Volume Oscillator:** Must be positive on the current candle, confirming sufficient momentum for a short move. Refer to the "Volume Oscillator" data in the trading signals section to check current value and recent history.
 
                         Any stale signals or misalignment → "hold" (no entry).  
-                        **This is mandatory: prioritize the "Trading Signals Data" section from the user input, which provides exact information about each indicator signal and its freshness (candles ago). If any core indicator signal is older than 3 candles, you must not enter. Always "hold" unless all three primary indicators are fresh (≤3 candles).**
+                        **This is mandatory: prioritize the "Trading Signals Data" section from the user input, which provides exact information about each indicator signal and its freshness (candles ago). If any core indicator signal is older than 10 candles, you must not enter. Always "hold" unless all three primary indicators are fresh (≤3 candles).**
                                                 
                         ### B. Additional Indicators (RSI, MACD, ATR, CMF, ADX, DI+/DI-)
                         Use these solely for extra confirmation or for rejecting the primary signal.  
@@ -3498,7 +3498,6 @@ def ai_trading():
                         • If the Volume Oscillator falls below 0%, that is an immediate red flag.  
                         • If secondary indicators exhibit significant contradictions (e.g., strong RSI or MACD divergence), exit early.  
                         • Employ partial exits when appropriate (for example, scaling out in increments of +0.1% gains).  
-                        **• If the 5-minute MACD shows a clear trend reversal for 2 consecutive candles in the opposite direction, execute an immediate "Full Exit" of the position.**
 
                         ### Critical Loss Prevention Rules (MANDATORY):
                         **• If your position is at -10% PnL or worse, AND there are negative signals on multiple timeframes (especially 1h or 4h), you MUST exit immediately to prevent further losses.**
@@ -3533,7 +3532,7 @@ def ai_trading():
                         - A clear statement of the current portfolio status (e.g., whether you have an active position and its side—long, short, or none).
                         - An explanation of the state of the primary indicators:
                             - **BlackFlag FTS:** Describe whether it shows a red-to-green transition for a long entry or a green-to-red transition for a short entry, and comment on its freshness.
-                            - **UT Bot Alerts:** Specify if a BUY or SELL alert has been issued within the last 3 candles.
+                            - **UT Bot Alerts:** Specify if a BUY or SELL alert has been issued within the last 10 candles.
                             - **Volume Oscillator:** Confirm that it is positive, indicating sufficient momentum.
                         - Mention any other relevant details regarding volume or volatility that affect the decision.
                         
@@ -3553,12 +3552,12 @@ def ai_trading():
                             - LONG position exit = "sell" command (never "buy")
                             Using the wrong command will INCREASE your position risk instead of reducing it.
                         2) Always check the Portfolio information before deciding: if Current Position Side is "none", then only new entry orders should be considered; exit orders are valid only when an active position exists.
-                        3) **Prioritize the extracted signal data in the "Trading Signals Data" section**, which provides accurate information about signal freshness. Only consider signals within 3 candles old for entry decisions.
-                        5) Incorporate dynamically updated values from the [Market Data], [Portfolio], and [Trading Signals Data] sections.
-                        6) Preserve capital by exiting immediately on conflicting or invalid signals.
+                        3) **Prioritize the extracted signal data in the "Trading Signals Data" section**, which provides accurate information about signal freshness. Only consider signals within 10 candles old for entry decisions.
+                        4) Incorporate dynamically updated values from the [Market Data], [Portfolio], and [Trading Signals Data] sections.
+                        5) Preserve capital by exiting immediately on conflicting or invalid signals.
                         
                         ───────────────────────────────────────────────────────────────
-                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤3 candles old) for any entry—even though slight delays of 3–4 candles may be acceptable if the price remains within ±0.2% of the trigger level and volume momentum persists (otherwise, treat it as stale if more than 4 candles have passed or if the price moves more than 0.5% away). Additionally, always check the Portfolio first to determine if you already have an active position; only execute exit orders if a position exists. Additional Indicators can only confirm or reject a fresh (or slightly delayed) primary signal—never generate an entry on their own. For position sizing, apply the Position Sizing Rules above when computing the percentage (0–100) for entries and exits. Also, incorporate local highs/lows across the 5-minute, 1-hour, and 4-hour charts to identify potential support/resistance zones and further refine or reject your primary signals.
+                        This is the final integrated prompt. Use all provided data, ensure that the three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume OSC) are fresh (≤10 candles old) for any entry—even though slight delays of 3-4 candles may be acceptable if the price remains within ±0.2% of the trigger level and volume momentum persists (otherwise, treat it as stale if more than 10 candles have passed or if the price moves more than 0.5% away). Additionally, always check the Portfolio first to determine if you already have an active position; only execute exit orders if a position exists. Additional Indicators can only confirm or reject a fresh (or slightly delayed) primary signal—never generate an entry on their own. For position sizing, apply the Position Sizing Rules above when computing the percentage (0-100) for entries and exits. Also, incorporate local highs/lows across the 5-minute, 1-hour, and 4-hour charts to identify potential support/resistance zones and further refine or reject your primary signals.
                         ───────────────────────────────────────────────────────────────                        
                         """
                     },
