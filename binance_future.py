@@ -3607,14 +3607,14 @@ Adjust within this range based on current market volatility.
 Output a JSON object:
 
 ```json
-{
+{{
 "decision": "buy" or "sell" or "hold",
 "percentage": integer (0-100),
 "stop_loss_price": float,
 "pl_ratio": float (1.3-2.0),
 "reason": "Concise rationale referencing signals & data",
 "entry_type": "primary" or "secondary"
-}
+}}
 ```
 
 - **decision:** Determine whether to open or close a position. "buy" is used to close shorts or open a new long; "sell" is used to close longs or open a new short; "hold" means take no action. Additionally, make sure to check your current position: if the Current Position Side shows "none", then no exit order should be issued.
