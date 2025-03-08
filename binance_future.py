@@ -1662,8 +1662,9 @@ class BinanceFuturesTrader:
         """
         # 상수 정의
         SAFETY_MARGIN = 0.002      # 안전 마진 (0.2%)
-        TRAILING_THRESHOLD = 0.005 # 트레일링 시작 기준 수익률 (0.5%)
-        TRAILING_BUFFER = 0.002   # 트레일링 버퍼 (0.2%)
+        TRAILING_THRESHOLD = 0.004 # 트레일링 시작 기준 수익률 (0.4%)
+        TRAILING_STEP = 0.003      # 트레일링 스탑 업데이트 단계 (0.3%)
+        TRAILING_BUFFER = 0.002    # 트레일링 버퍼 (0.2%)
         MINIMUM_ORDER_VALUE = 10   # 최소 주문 금액 (USDT)
         MIN_PRICE_DIFF = 0.001     # 최소 가격 차이 (0.1%)
         MAX_BALANCE_USE = 0.80     # 최대 사용 가능 잔고 비율 (80%)
@@ -1884,7 +1885,7 @@ class BinanceFuturesTrader:
 
             return None
 
-        # 5. 트레일링 스탑로스 모니터링 함수 정의
+        # 5. 트레일링 스탑로스 모니터링 함수 정의 - 개선된 버전
         def monitor_and_adjust_sl():
             try:
                 positions_ = self.exchange.fetch_positions([self.symbol])
@@ -1901,32 +1902,76 @@ class BinanceFuturesTrader:
                 profit_percentage = (current_market_price - entry_price) / entry_price if pos_side == 'long' \
                                     else (entry_price - current_market_price) / entry_price
 
+                # 최소 트레일링 단계 확인 (0.4%)
                 if profit_percentage >= TRAILING_THRESHOLD:
-                    # 새로운 SL 가격 계산
-                    new_sl_price = current_market_price * (1 - TRAILING_BUFFER) if pos_side == 'long' \
-                                else current_market_price * (1 + TRAILING_BUFFER)
-
-                    # 기존 SL 주문 취소 (clientOrderId로 식별)
+                    # 이 함수에 상태를 저장하기 위한 비공개 속성이 없으므로 
+                    # 현재 스탑로스 주문을 조회하여 마지막 업데이트 가격을 확인
                     try:
                         open_orders_ = self.exchange.fetch_open_orders(self.symbol)
                         existing_sl = [o for o in open_orders_ if o.get('clientOrderId','').startswith('sl_')]
-                        cancel_orders(existing_sl)
-
-                        # 새 SL 주문 생성
-                        t_side = 'sell' if pos_side == 'long' else 'buy'
-                        new_sl_order = self.exchange.create_order(
-                            symbol=self.symbol,
-                            type='STOP_MARKET',
-                            side=t_side,
-                            amount=position_size,
-                            params={
-                                'stopPrice': new_sl_price,
-                                'closePosition': True,
-                                'clientOrderId': f"sl_{order['id']}"
-                            }
-                        )
-                        self.logger.info(f"Trailing SL updated: {new_sl_price}")
-                        return new_sl_order
+                        
+                        if not existing_sl:
+                            self.logger.warning("No existing SL order found for trailing update")
+                            return None
+                            
+                        # 기존 SL 가격 가져오기
+                        current_sl_price = float(existing_sl[0]['info'].get('stopPrice', 0))
+                        
+                        # 새로운 SL 가격 계산
+                        if pos_side == 'long':
+                            # 진입가와 현재가의 차이에서 TRAILING_STEP(0.5%) 단위로 나누어 몇 번째 스텝인지 계산
+                            step_count = int(profit_percentage / TRAILING_STEP)
+                            # 새로운 SL은 진입가 + (스텝 수 - 1) * 스텝 크기 * 진입가
+                            # 첫 번째 스텝(0.5%)에서는 SL을 진입가에 두고, 두 번째 스텝(1.0%)부터는 0.5% 간격으로 올림
+                            min_sl_price = entry_price * (1 + (step_count - 1) * TRAILING_STEP) if step_count > 0 else entry_price
+                            
+                            # 현재 가격에서 버퍼만큼 내린 값
+                            new_sl_price = current_market_price * (1 - TRAILING_BUFFER)
+                            
+                            # 기존 SL과 계산된 min_sl_price 중 높은 값만 사용 (SL은 항상 올리기만 함)
+                            if min_sl_price <= current_sl_price:
+                                # 이미 적절한 SL이 설정되어 있음
+                                return None
+                                
+                        else:  # short position
+                            # 진입가와 현재가의 차이에서 TRAILING_STEP(0.5%) 단위로 나누어 몇 번째 스텝인지 계산
+                            step_count = int(profit_percentage / TRAILING_STEP)
+                            # 새로운 SL은 진입가 - (스텝 수 - 1) * 스텝 크기 * 진입가
+                            # 첫 번째 스텝(0.5%)에서는 SL을 진입가에 두고, 두 번째 스텝(1.0%)부터는 0.5% 간격으로 내림
+                            max_sl_price = entry_price * (1 - (step_count - 1) * TRAILING_STEP) if step_count > 0 else entry_price
+                            
+                            # 현재 가격에서 버퍼만큼 올린 값
+                            new_sl_price = current_market_price * (1 + TRAILING_BUFFER)
+                            
+                            # 기존 SL과 계산된 max_sl_price 중 낮은 값만 사용 (SL은 항상 내리기만 함)
+                            if max_sl_price >= current_sl_price:
+                                # 이미 적절한 SL이 설정되어 있음
+                                return None
+                        
+                        # 현재 SL보다 유리한 가격으로 업데이트 가능한 경우만 실행
+                        if (pos_side == 'long' and new_sl_price > current_sl_price) or \
+                        (pos_side == 'short' and new_sl_price < current_sl_price):
+                            
+                            # 기존 SL 주문 취소
+                            cancel_orders(existing_sl)
+                            
+                            # 새 SL 주문 생성
+                            t_side = 'sell' if pos_side == 'long' else 'buy'
+                            new_sl_order = self.exchange.create_order(
+                                symbol=self.symbol,
+                                type='STOP_MARKET',
+                                side=t_side,
+                                amount=position_size,
+                                params={
+                                    'stopPrice': new_sl_price,
+                                    'closePosition': True,
+                                    'clientOrderId': f"sl_{order['id']}"
+                                }
+                            )
+                            
+                            # 로그 출력 - 현재 이익률과 업데이트된 SL 표시
+                            self.logger.info(f"Trailing SL updated: Price={new_sl_price:.2f}, Current Profit={profit_percentage*100:.2f}%, Step={step_count}")
+                            return new_sl_order
 
                     except Exception as e_:
                         self.logger.error(f"Error updating trailing SL: {e_}")
@@ -3836,8 +3881,8 @@ Output a JSON object:
                                     sl_monitor_jobs.remove(job)
                                     break
                     
-                    # 5분마다 SL 모니터링 작업 예약
-                    job = schedule.every(5).minutes.do(periodic_sl_monitoring, monitor_sl_func)
+                    # 1분마다 SL 모니터링 작업 예약
+                    job = schedule.every(1).minutes.do(periodic_sl_monitoring, monitor_sl_func)
                     job.job_id = job_id  # ID 할당
                     
                     # 글로벌 작업 목록에 추가
