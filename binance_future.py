@@ -1663,8 +1663,8 @@ class BinanceFuturesTrader:
         # 상수 정의
         SAFETY_MARGIN = 0.002      # 안전 마진 (0.2%)
         TRAILING_THRESHOLD = 0.004 # 트레일링 시작 기준 수익률 (0.4%)
-        TRAILING_STEP = 0.003      # 트레일링 스탑 업데이트 단계 (0.3%)
-        TRAILING_BUFFER = 0.002    # 트레일링 버퍼 (0.2%)
+        TRAILING_STEP = 0.005      # 트레일링 스탑 업데이트 단계 (0.5%)
+        TRAILING_BUFFER = 0.003    # 트레일링 버퍼 (0.3%)
         MINIMUM_ORDER_VALUE = 10   # 최소 주문 금액 (USDT)
         MIN_PRICE_DIFF = 0.001     # 최소 가격 차이 (0.1%)
         MAX_BALANCE_USE = 0.80     # 최대 사용 가능 잔고 비율 (80%)
