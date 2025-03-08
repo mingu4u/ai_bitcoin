@@ -493,8 +493,8 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
             self.signals["BlackFlag"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 10캔들 이상 지난 신호는 None 처리
-            if self.signals["BlackFlag"]["candles_ago"] > 10:
+            # 15캔들 이상 지난 신호는 None 처리
+            if self.signals["BlackFlag"]["candles_ago"] > 15:
                 self.signals["BlackFlag"] = {
                     "signal": None,
                     "candles_ago": None,
@@ -507,8 +507,8 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["UTBot"]["timestamp"])
             self.signals["UTBot"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 10캔들 이상 지난 신호는 None 처리
-            if self.signals["UTBot"]["candles_ago"] > 10:
+            # 15캔들 이상 지난 신호는 None 처리
+            if self.signals["UTBot"]["candles_ago"] > 15:
                 self.signals["UTBot"] = {
                     "signal": None,
                     "candles_ago": None,
@@ -1650,9 +1650,11 @@ class BinanceFuturesTrader:
         weighted_sl = ((position_size * position_sl_price) + (new_size * new_sl_price)) / total_size
         return weighted_sl
 
+
+    # market_order_with_tp_sl 함수 수정 - monitor_and_adjust_sl 함수에서 SL 업데이트 이슈 해결
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         """
-        시장가 주문과 TP/SL 설정을 처리하는 함수
+        시장가 주문과 TP/SL 설정을 처리하는 함수 - 중복 SL 생성 버그 수정
 
         Args:
             side (str): 'buy' 또는 'sell'
@@ -1675,7 +1677,7 @@ class BinanceFuturesTrader:
             for o in orders_to_cancel:
                 try:
                     self.exchange.cancel_order(o['id'], self.symbol)
-                    self.logger.info(f"Cancelled order: {o['id']} (ClientOrderId={o.get('clientOrderId','')})")
+                    self.logger.info(f"Cancelled order: {o['id']} (ClientOrderId={o.get('clientOrderId','')}")
                 except Exception as e:
                     self.logger.error(f"Error cancelling order {o['id']}: {e}")
                 time.sleep(API_DELAY)
@@ -1885,8 +1887,13 @@ class BinanceFuturesTrader:
 
             return None
 
-        # 5. 트레일링 스탑로스 모니터링 함수 정의 - 개선된 버전
+        # 5. 트레일링 스탑로스 모니터링 함수 정의 - 개선된 버전 (수익률 조건 충족 시에만 SL 업데이트)
         def monitor_and_adjust_sl():
+            """
+            트레일링 스탑로스를 모니터링하고 필요시 업데이트하는 함수
+            - 수정: 수익률이 TRAILING_THRESHOLD(0.4%) 이상일 때만 스탑로스 업데이트
+            - 호출 즉시 SL 생성하지 않고 조건 충족 시에만 기존 SL 업데이트
+            """
             try:
                 positions_ = self.exchange.fetch_positions([self.symbol])
                 current_pos = next((p for p in positions_ if float(p.get('contracts', 0) or 0) != 0), None)
@@ -1976,6 +1983,10 @@ class BinanceFuturesTrader:
                     except Exception as e_:
                         self.logger.error(f"Error updating trailing SL: {e_}")
                         return None
+                else:
+                    # 수익률이 충분하지 않으면 SL 업데이트 하지 않음
+                    self.logger.debug(f"Profit percentage ({profit_percentage*100:.2f}%) below threshold ({TRAILING_THRESHOLD*100}%) - no SL update")
+                    return None
 
             except Exception as e_:
                 self.logger.error(f"Error in SL monitoring: {e_}")
@@ -1989,6 +2000,8 @@ class BinanceFuturesTrader:
             'monitor_sl': monitor_and_adjust_sl,
             'entry_price': entry_price
         }
+
+
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
@@ -3481,7 +3494,26 @@ You must first check the Portfolio information before making any trading decisio
 
 Any stale signals or misalignment → Consider Secondary Entry or "hold".
 
-**This is mandatory: prioritize the "Trading Signals Data" section from the user input, which provides exact information about each indicator signal and its freshness (candles ago). If any core indicator signal is older than 10 candles, you must not enter. Always "hold" unless all three primary indicators are fresh (≤3 candles) OR the Secondary Entry Conditions are fully met.**
+**This is mandatory: prioritize the "Trading Signals Data" section from the user input, which provides exact information about each indicator signal and its freshness (10 candles ago). If any core indicator signal is older than 10 candles, you must not enter. Always "hold" unless all three primary indicators are fresh (≤10 candles) OR the Secondary Entry Conditions are fully met.**
+
+**IMPORTANT - MARKET OVERHEATING CHECK:** Even when all Primary Entry Signal conditions are aligned, you MUST check for overheated market conditions and exercise extra caution:
+
+1. **For LONG entries:**
+   - If price is already at or above the upper Bollinger Band on the 5-minute chart
+   - If RSI(14) is already above 70 on the 5-minute chart or above 60 on higher timeframes
+   - If the price has moved more than 0.8% in the last 5 candles without pullback
+
+2. **For SHORT entries:**
+   - If price is already at or below the lower Bollinger Band on the 5-minute chart
+   - If RSI(14) is already below 30 on the 5-minute chart or below 40 on higher timeframes
+   - If the price has moved more than 0.8% in the last 5 candles without pullback
+
+When any of these overheating conditions are detected, you must either:
+- HOLD and wait for a better entry point with lower risk, or
+- Reduce position size by at least 50% and set tighter stops (closer to entry)
+- Explicitly mention the overheating condition in your reasoning
+
+This is a critical risk management rule. Do not chase overextended moves - better entries will always present themselves after market cooling down and mean reversion.
 
 ### B. Secondary Entry Conditions (EXTREMELY RESTRICTIVE)
 
@@ -3541,7 +3573,6 @@ If the Primary Entry signals are not all perfectly aligned, you may still enter 
 Use additional indicators solely for extra confirmation or for rejecting signals (both primary and secondary).
 
 **When using Primary Entry:** Additional indicators may override or cancel a primary entry (resulting in a "hold"), but cannot independently generate an entry.
-
 **When using Secondary Entry:** Additional indicators MUST all be in alignment - any single contradiction invalidates the entry.
 
 Adjust stops and position size using ATR; monitor momentum (MACD, ADX) and money flow (CMF).
