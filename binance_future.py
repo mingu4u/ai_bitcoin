@@ -3359,7 +3359,7 @@ def assess_trend_strength(df_5min, df_hourly, current_price):
 def assess_exit_signals(df_5min, signals_data, position_side):
     """
     Evaluate exit signals using rule-based criteria
-
+    
     Args:
         df_5min: 5-minute OHLCV DataFrame with indicators
         signals_data: Dictionary containing signal data from chart analysis
@@ -3368,8 +3368,12 @@ def assess_exit_signals(df_5min, signals_data, position_side):
     Returns:
         dict: Dictionary with exit assessment results
     """
+    # 시작 시 로깅 추가
+    logger.info(f"Starting exit signals assessment for position_side: {position_side}")
+    
     # If no position, no exit needed
     if not position_side:
+        logger.info("No position to exit")
         return {"should_exit": False, "exit_signals": []}
         
     exit_signals = []
@@ -3498,17 +3502,20 @@ def assess_exit_signals(df_5min, signals_data, position_side):
     except Exception as e:
         logger.error(f"Error checking trend reversal: {e}")
     
-    # Return True if any exit signal is detected
+    # Return dictionary with results
     should_exit = len(exit_signals) > 0
     
     # Log exit signals if they exist
     if should_exit:
         logger.info(f"Exit signals detected: {exit_signals}")
     
-    return {
+    # 반환 직전 로깅 추가
+    result = {
         "should_exit": should_exit,
         "exit_signals": exit_signals
     }
+    logger.info(f"Exit assessment result: {result}, type: {type(result)}")
+    return result
 
 
 ### 메인 AI 트레이딩 로직
