@@ -3359,18 +3359,18 @@ def assess_trend_strength(df_5min, df_hourly, current_price):
 def assess_exit_signals(df_5min, signals_data, position_side):
     """
     Evaluate exit signals using rule-based criteria
-    
+
     Args:
         df_5min: 5-minute OHLCV DataFrame with indicators
         signals_data: Dictionary containing signal data from chart analysis
         position_side: Current position side ('long', 'short', or None)
         
     Returns:
-        bool: True if exit is recommended, False otherwise
+        dict: Dictionary with exit assessment results
     """
     # If no position, no exit needed
     if not position_side:
-        return False
+        return {"should_exit": False, "exit_signals": []}
         
     exit_signals = []
     
