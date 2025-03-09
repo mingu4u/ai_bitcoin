@@ -3349,13 +3349,12 @@ def assess_trend_strength(df_5min, df_hourly, current_price):
     long_trend_is_strong = len(long_criteria) > 0
     short_trend_is_strong = len(short_criteria) > 0
     
-    # Log the results
-    logger.info(f"Trend strength assessment - Long: {long_trend_is_strong}, Short: {short_trend_is_strong}")
-    
-    return {
+    result = {
         "long_trend_strong": long_trend_is_strong,
         "short_trend_strong": short_trend_is_strong
     }
+    logger.info(f"Trend strength assessment result: {result}, type: {type(result)}")
+    return result
 
 def assess_exit_signals(df_5min, signals_data, position_side):
     """
@@ -3651,22 +3650,37 @@ def ai_trading():
     signals_data = chart_processor.generate_ai_prompt_data()
         
     ### PRE-CALCULATE Key Decision Points
-    
+        
     # 1. Assess trend strength (TREND STRENGTH CHECK)
-    trend_strength_result = assess_trend_strength(df_5min, df_hourly, current_price)
-    if isinstance(trend_strength_result, dict):
-        long_trend_strong = trend_strength_result.get("long_trend_strong", False)
-        short_trend_strong = trend_strength_result.get("short_trend_strong", False)
-    else:
-        # 반환값이 딕셔너리가 아닌 경우의 안전 처리
-        logger.error("trend_strength_result is not a dictionary")
+    try:
+        trend_strength_result = assess_trend_strength(df_5min, df_hourly, current_price)
+        if isinstance(trend_strength_result, dict):
+            long_trend_strong = trend_strength_result.get("long_trend_strong", False)
+            short_trend_strong = trend_strength_result.get("short_trend_strong", False)
+        else:
+            logger.error("trend_strength_result is not a dictionary")
+            long_trend_strong = False
+            short_trend_strong = False
+    except Exception as e:
+        logger.error(f"Error during trend strength assessment: {e}")
         long_trend_strong = False
         short_trend_strong = False
-        
+
     # 2. Assess exit signals
-    exit_assessment = assess_exit_signals(df_5min, signals_data, position_side)
-    should_exit = exit_assessment["should_exit"]
-    exit_signals_list = exit_assessment["exit_signals"]
+    try:
+        exit_assessment = assess_exit_signals(df_5min, signals_data, position_side)
+        if isinstance(exit_assessment, dict):
+            should_exit = exit_assessment.get("should_exit", False)
+            exit_signals_list = exit_assessment.get("exit_signals", [])
+        else:
+            logger.error("exit_assessment is not a dictionary")
+            should_exit = False
+            exit_signals_list = []
+    except Exception as e:
+        logger.error(f"Error during exit signals assessment: {e}")
+        should_exit = False
+        exit_signals_list = []
+    
     
     # 3. Check market overheating conditions
     market_overheating = {
