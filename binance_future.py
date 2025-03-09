@@ -3654,9 +3654,15 @@ def ai_trading():
     
     # 1. Assess trend strength (TREND STRENGTH CHECK)
     trend_strength_result = assess_trend_strength(df_5min, df_hourly, current_price)
-    long_trend_strong = trend_strength_result["long_trend_strong"]
-    short_trend_strong = trend_strength_result["short_trend_strong"]
-    
+    if isinstance(trend_strength_result, dict):
+        long_trend_strong = trend_strength_result.get("long_trend_strong", False)
+        short_trend_strong = trend_strength_result.get("short_trend_strong", False)
+    else:
+        # 반환값이 딕셔너리가 아닌 경우의 안전 처리
+        logger.error("trend_strength_result is not a dictionary")
+        long_trend_strong = False
+        short_trend_strong = False
+        
     # 2. Assess exit signals
     exit_assessment = assess_exit_signals(df_5min, signals_data, position_side)
     should_exit = exit_assessment["should_exit"]
