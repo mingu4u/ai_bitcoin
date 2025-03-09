@@ -3223,53 +3223,342 @@ class TradingDecision(BaseModel):
     stop_loss_price: int
     pl_ratio: float
 
+
+def assess_trend_strength(df_5min, df_hourly, current_price):
+    """
+    Evaluate trend strength using rule-based criteria
+    
+    Args:
+        df_5min: 5-minute OHLCV DataFrame with indicators
+        df_hourly: 1-hour OHLCV DataFrame with indicators
+        current_price: Current BTC price
+        
+    Returns:
+        dict: Simple boolean results for long and short trend strength
+    """
+    # Get the latest indicator values
+    latest_5min = df_5min.iloc[-1]
+    latest_hourly = df_hourly.iloc[-1]
+    
+    # Initialize criteria check results
+    long_criteria = []
+    short_criteria = []
+    
+    # Check EMA positioning on 5-minute chart (criterion 1)
+    try:
+        ema20 = latest_5min.get('ema20', latest_5min.get('sma_20', 0))  # Fallback to SMA if EMA not available
+        ema50 = latest_5min.get('ema50', 0)
+        
+        if ema20 > 0 and ema50 > 0:
+            # Long criterion: Price above both EMAs and properly aligned (20 EMA > 50 EMA)
+            if current_price > ema20 and current_price > ema50 and ema20 > ema50:
+                long_criteria.append(True)
+            
+            # Short criterion: Price below both EMAs and properly aligned (20 EMA < 50 EMA)
+            if current_price < ema20 and current_price < ema50 and ema20 < ema50:
+                short_criteria.append(True)
+    except Exception as e:
+        logger.error(f"Error in EMA check: {e}")
+    
+    # Check for consecutive candle direction (criterion 2)
+    try:
+        # Get the last 3 candles
+        recent_candles = df_5min.iloc[-3:].copy()
+        
+        # Check if 3 consecutive candles closed higher than their opening prices
+        bullish_candles = (recent_candles['close'] > recent_candles['open']).all()
+        if bullish_candles:
+            long_criteria.append(True)
+        
+        # Check if 3 consecutive candles closed lower than their opening prices
+        bearish_candles = (recent_candles['close'] < recent_candles['open']).all()
+        if bearish_candles:
+            short_criteria.append(True)
+    except Exception as e:
+        logger.error(f"Error in consecutive candle check: {e}")
+    
+    # Check MACD histogram direction (criterion 3)
+    try:
+        if 'macd_diff' in df_5min.columns:
+            recent_macd = df_5min['macd_diff'].iloc[-3:].values
+            
+            # For long: MACD histogram is positive AND increasing for minimum 2 candles
+            if recent_macd[-1] > 0 and recent_macd[-1] > recent_macd[-2]:
+                long_criteria.append(True)
+            
+            # For short: MACD histogram is negative AND decreasing for minimum 2 candles
+            if recent_macd[-1] < 0 and recent_macd[-1] < recent_macd[-2]:
+                short_criteria.append(True)
+    except Exception as e:
+        logger.error(f"Error in MACD check: {e}")
+    
+    # Check for higher highs and higher lows / lower highs and lower lows (criterion 4)
+    try:
+        # For trend structure verification, we'll look at the last 15 candles
+        last_15_candles = df_5min.iloc[-15:].copy()
+        
+        # Identify swing highs and lows (simple approach)
+        highs = []
+        lows = []
+        
+        for i in range(1, len(last_15_candles) - 1):
+            # A swing high is formed when the current high is higher than adjacent highs
+            if last_15_candles['high'].iloc[i] > last_15_candles['high'].iloc[i-1] and \
+               last_15_candles['high'].iloc[i] > last_15_candles['high'].iloc[i+1]:
+                highs.append(last_15_candles['high'].iloc[i])
+            
+            # A swing low is formed when the current low is lower than adjacent lows
+            if last_15_candles['low'].iloc[i] < last_15_candles['low'].iloc[i-1] and \
+               last_15_candles['low'].iloc[i] < last_15_candles['low'].iloc[i+1]:
+                lows.append(last_15_candles['low'].iloc[i])
+        
+        # Check for higher highs and higher lows (uptrend)
+        if len(highs) >= 3 and len(lows) >= 3:
+            higher_highs = all(highs[i] > highs[i-1] for i in range(1, len(highs)))
+            higher_lows = all(lows[i] > lows[i-1] for i in range(1, len(lows)))
+            
+            if higher_highs and higher_lows:
+                long_criteria.append(True)
+        
+            # Check for lower highs and lower lows (downtrend)
+            lower_highs = all(highs[i] < highs[i-1] for i in range(1, len(highs)))
+            lower_lows = all(lows[i] < lows[i-1] for i in range(1, len(lows)))
+            
+            if lower_highs and lower_lows:
+                short_criteria.append(True)
+    except Exception as e:
+        logger.error(f"Error in price structure check: {e}")
+    
+    # Check 1-hour timeframe trend with ADX (criterion 5)
+    try:
+        hourly_adx = latest_hourly['adx']
+        hourly_di_plus = latest_hourly['di_plus']
+        hourly_di_minus = latest_hourly['di_minus']
+        
+        # Long: 1-hour chart shows ADX > 20 with DI+ > DI-
+        if hourly_adx > 20 and hourly_di_plus > hourly_di_minus:
+            long_criteria.append(True)
+        
+        # Short: 1-hour chart shows ADX > 20 with DI- > DI+
+        if hourly_adx > 20 and hourly_di_minus > hourly_di_plus:
+            short_criteria.append(True)
+    except Exception as e:
+        logger.error(f"Error in hourly ADX check: {e}")
+    
+    # Final assessment: if ANY criterion is met, trend is considered strong
+    long_trend_is_strong = len(long_criteria) > 0
+    short_trend_is_strong = len(short_criteria) > 0
+    
+    # Log the results
+    logger.info(f"Trend strength assessment - Long: {long_trend_is_strong}, Short: {short_trend_is_strong}")
+    
+    return {
+        "long_trend_strong": long_trend_is_strong,
+        "short_trend_strong": short_trend_is_strong
+    }
+
+def assess_exit_signals(df_5min, signals_data, position_side):
+    """
+    Evaluate exit signals using rule-based criteria
+    
+    Args:
+        df_5min: 5-minute OHLCV DataFrame with indicators
+        signals_data: Dictionary containing signal data from chart analysis
+        position_side: Current position side ('long', 'short', or None)
+        
+    Returns:
+        bool: True if exit is recommended, False otherwise
+    """
+    # If no position, no exit needed
+    if not position_side:
+        return False
+        
+    exit_signals = []
+    
+    # 1. Check if core signals reversed
+    try:
+        # For long positions, check if BlackFlag or UTBot signals changed to Sell
+        if position_side == 'long':
+            if signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 10:
+                exit_signals.append("BlackFlag FTS signal reversed to Sell")
+                
+            if signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 10:
+                exit_signals.append("UTBot signal reversed to Sell")
+                
+        # For short positions, check if BlackFlag or UTBot signals changed to Buy
+        elif position_side == 'short':
+            if signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 10:
+                exit_signals.append("BlackFlag FTS signal reversed to Buy")
+                
+            if signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 10:
+                exit_signals.append("UTBot signal reversed to Buy")
+    except Exception as e:
+        logger.error(f"Error checking core signal reversal: {e}")
+    
+    # 2. Check if Volume Oscillator falls below 0%
+    try:
+        volume_osc = signals_data.get("VolumeOsc_Current")
+        if volume_osc is not None and float(volume_osc) < 0:
+            exit_signals.append("Volume Oscillator below 0%")
+    except Exception as e:
+        logger.error(f"Error checking Volume Oscillator: {e}")
+    
+    # 3. Check for strong divergence on RSI or MACD
+    try:
+        # Get the last 5 candles for divergence check
+        recent_df = df_5min.iloc[-5:].copy()
+        
+        # Price making higher highs but RSI making lower highs (bearish divergence)
+        if position_side == 'long':
+            # Check if price made higher high
+            if recent_df['close'].iloc[-1] > recent_df['close'].iloc[-3] and recent_df['close'].iloc[-3] > recent_df['close'].iloc[-5]:
+                # But RSI made lower high
+                if recent_df['rsi'].iloc[-1] < recent_df['rsi'].iloc[-3] and recent_df['rsi'].iloc[-3] < recent_df['rsi'].iloc[-5]:
+                    exit_signals.append("Bearish RSI divergence detected in long position")
+            
+            # Check for MACD bearish divergence
+            if 'macd' in recent_df.columns:
+                if recent_df['close'].iloc[-1] > recent_df['close'].iloc[-3] and recent_df['macd'].iloc[-1] < recent_df['macd'].iloc[-3]:
+                    exit_signals.append("Bearish MACD divergence detected in long position")
+        
+        # Price making lower lows but RSI making higher lows (bullish divergence)
+        elif position_side == 'short':
+            # Check if price made lower low
+            if recent_df['close'].iloc[-1] < recent_df['close'].iloc[-3] and recent_df['close'].iloc[-3] < recent_df['close'].iloc[-5]:
+                # But RSI made higher low
+                if recent_df['rsi'].iloc[-1] > recent_df['rsi'].iloc[-3] and recent_df['rsi'].iloc[-3] > recent_df['rsi'].iloc[-5]:
+                    exit_signals.append("Bullish RSI divergence detected in short position")
+            
+            # Check for MACD bullish divergence
+            if 'macd' in recent_df.columns:
+                if recent_df['close'].iloc[-1] < recent_df['close'].iloc[-3] and recent_df['macd'].iloc[-1] > recent_df['macd'].iloc[-3]:
+                    exit_signals.append("Bullish MACD divergence detected in short position")
+    except Exception as e:
+        logger.error(f"Error checking divergence: {e}")
+    
+    # 4. Check if trend strength indicators reverse
+    try:
+        latest = df_5min.iloc[-1]
+        previous = df_5min.iloc[-2]
+        
+        # For long positions
+        if position_side == 'long':
+            # Price closes below 20 EMA
+            ema20 = latest.get('ema20', latest.get('sma_20', 0))
+            if ema20 > 0 and latest['close'] < ema20:
+                exit_signals.append("Price closed below 20 EMA in long position")
+            
+            # MACD histogram reverses direction
+            if 'macd_diff' in df_5min.columns:
+                if latest['macd_diff'] < 0 and previous['macd_diff'] > 0:
+                    exit_signals.append("MACD histogram turned negative in long position")
+            
+            # Price breaks recent swing low
+            try:
+                # Find recent swing lows (last 10 candles)
+                swing_lows = []
+                candles_to_check = df_5min.iloc[-10:].copy()
+                
+                for i in range(1, len(candles_to_check) - 1):
+                    if candles_to_check['low'].iloc[i] < candles_to_check['low'].iloc[i-1] and \
+                       candles_to_check['low'].iloc[i] < candles_to_check['low'].iloc[i+1]:
+                        swing_lows.append(candles_to_check['low'].iloc[i])
+                
+                if swing_lows and latest['low'] < min(swing_lows):
+                    exit_signals.append("Price broke below recent swing low in long position")
+            except Exception as e:
+                logger.error(f"Error checking swing low break: {e}")
+        
+        # For short positions
+        elif position_side == 'short':
+            # Price closes above 20 EMA
+            ema20 = latest.get('ema20', latest.get('sma_20', 0))
+            if ema20 > 0 and latest['close'] > ema20:
+                exit_signals.append("Price closed above 20 EMA in short position")
+            
+            # MACD histogram reverses direction
+            if 'macd_diff' in df_5min.columns:
+                if latest['macd_diff'] > 0 and previous['macd_diff'] < 0:
+                    exit_signals.append("MACD histogram turned positive in short position")
+            
+            # Price breaks recent swing high
+            try:
+                # Find recent swing highs (last 10 candles)
+                swing_highs = []
+                candles_to_check = df_5min.iloc[-10:].copy()
+                
+                for i in range(1, len(candles_to_check) - 1):
+                    if candles_to_check['high'].iloc[i] > candles_to_check['high'].iloc[i-1] and \
+                       candles_to_check['high'].iloc[i] > candles_to_check['high'].iloc[i+1]:
+                        swing_highs.append(candles_to_check['high'].iloc[i])
+                
+                if swing_highs and latest['high'] > max(swing_highs):
+                    exit_signals.append("Price broke above recent swing high in short position")
+            except Exception as e:
+                logger.error(f"Error checking swing high break: {e}")
+    except Exception as e:
+        logger.error(f"Error checking trend reversal: {e}")
+    
+    # Return True if any exit signal is detected
+    should_exit = len(exit_signals) > 0
+    
+    # Log exit signals if they exist
+    if should_exit:
+        logger.info(f"Exit signals detected: {exit_signals}")
+    
+    return {
+        "should_exit": should_exit,
+        "exit_signals": exit_signals
+    }
+
+
 ### 메인 AI 트레이딩 로직
 def ai_trading():
-    """메인 AI 트레이딩 함수 - 시장 데이터 수집, 분석, 거래 결정 및 실행"""
+    """Main AI trading function with pre-calculated trend strength and exit signals"""
     
-    # 차트 신호 프로세서 초기화
+    # Chart signal processor initialization
     chart_processor = ChartSignalProcessor()
     
-    ### 데이터 가져오기
-    # 7. Selenium으로 차트 캡처
+    ### Data Collection
+    # 7. Capture trading view chart with Selenium
     chart_image = None
     signals_analysis = None
     try:
-        # 로그인 후 재시도 로직이 포함된 캡처 함수 호출
-        login_with_cookies()  # 쿠키로 로그인만 먼저 시도
+        # Try login with cookies first
+        login_with_cookies()
         
-        # 재시도 로직이 포함된 캡처 함수 호출
+        # Capture chart with retry logic
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
             save_image=False, 
             debug=False,
-            max_retries=3,  # 최대 3번 재시도
-            page_load_timeout=40  # 페이지 로드 타임아웃 40초
+            max_retries=3,
+            page_load_timeout=40
         )
         
         if chart_image:
-            logger.info("TradingView 스크린샷 캡처 및 분석 완료")
+            logger.info("TradingView screenshot capture and analysis completed")
         else:
-            logger.error("최대 재시도 후에도 스크린샷 캡처 실패")
+            logger.error("Screenshot capture failed after maximum retries")
             
     except Exception as e:
-        logger.error(f"차트 캡처 프로세스 중 심각한 오류 발생: {e}", exc_info=True)
+        logger.error(f"Serious error during chart capture process: {e}", exc_info=True)
     finally:
-        # 항상 드라이버 정리 (현재 실행 여부와 관계없이)
+        # Always clean up driver
         WebDriverManager.quit()
 
-    # 1. 현재 투자 상태 조회
-    # USDT 잔고 조회
+    # 1. Check current investment status
+    # Query USDT balance
     balance = trader.exchange.fetch_balance()
     usdt_balance = balance['USDT']
-    free_usdt = usdt_balance['free']      # 사용 가능한 잔고
-    used_usdt = usdt_balance['used']      # 주문에 묶인 잔고
-    total_usdt = usdt_balance['total']    # 전체 잔고
+    free_usdt = usdt_balance['free']      # Available balance
+    used_usdt = usdt_balance['used']      # Balance in orders
+    total_usdt = usdt_balance['total']    # Total balance
     filtered_balances = [used_usdt, free_usdt]
 
-    # 포지션 정보 조회
+    # Query position information
     positions = trader.exchange.fetch_positions([trader.symbol])
-    btc_avg_buy_price = 0  # 기본값 설정
+    btc_avg_buy_price = 0  # Default value
     position_side = None
     position_size = 0
     unrealized_pnl = None
@@ -3277,21 +3566,21 @@ def ai_trading():
     for position in positions:
         if float(position.get('contracts', 0) or 0) != 0:
             btc_avg_buy_price = float(position['entryPrice'])
-            position_side = position['side']  # 'long' 또는 'short'
-            position_size = float(position['notional']) # contracts * entryPrice = USDT 단위
-            unrealized_pnl = float(position.get('percentage', 0))  # 수익률(%)
+            position_side = position['side']  # 'long' or 'short'
+            position_size = float(position['notional']) # contracts * entryPrice = In USDT
+            unrealized_pnl = float(position.get('percentage', 0))  # Profit/loss (%)
             break
 
-    # 2. 오더북(호가 데이터) 조회
+    # 2. Get orderbook data
     orderbook = trader.exchange.fetch_order_book('BTC/USDT')
     modified_orderbook = modify_orderbook(orderbook)
 
-    # 3. 차트 데이터 조회 및 보조지표 추가   
-    # Binance 거래소의 BTC/USDT Perpetual 현재가격
+    # 3. Get chart data and add technical indicators
+    # Binance exchange BTC/USDT Perpetual current price
     ticker = trader.exchange.fetch_ticker(trader.symbol)
     current_price = ticker['last']
 
-    # 바이낸스 5분봉 데이터 조회 (최근 2.5시간)
+    # Query Binance 5-minute candles
     df_5min = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT",
@@ -3305,10 +3594,10 @@ def ai_trading():
     df_5min = dropna(df_5min)
     df_5min = add_indicators(df_5min)
     
-    # 마지막 60개 데이터만 선택 (NaN 제거)
+    # Select only the last 60 data points
     df_5min = df_5min.tail(60)
 
-    # 바이낸스 1시간봉 데이터 조회 (최근 24시간)
+    # Query Binance 1-hour candles
     df_hourly = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT", 
@@ -3322,10 +3611,10 @@ def ai_trading():
     df_hourly = dropna(df_hourly)
     df_hourly = add_indicators(df_hourly)
 
-    # 마지막 24개 데이터만 선택 (NaN 제거)
+    # Select only the last 24 data points
     df_hourly = df_hourly.tail(24)
 
-    # 바이낸스 4시간봉 데이터 조회 (최근 3일)
+    # Query Binance 4-hour candles
     df_4h = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT",
@@ -3339,66 +3628,134 @@ def ai_trading():
     df_4h = dropna(df_4h)
     df_4h = add_indicators(df_4h)    
 
-    # 마지막 18개 데이터만 선택 (NaN 제거)
+    # Select only the last 18 data points
     df_4h = df_4h.tail(18)
 
-    # 4. 공포 탐욕 지수 가져오기
+    # 4. Get Fear & Greed Index
     fear_greed_index = get_fear_and_greed_index()
 
-    # 5. 뉴스 헤드라인 가져오기
+    # 5. Get news headlines
     news_headlines = get_bitcoin_news()
 
-    # 6. YouTube 자막 데이터 가져오기
+    # 6. Get YouTube transcript data
     try:
         f2 = open("strategy2.txt", "r", encoding="utf-8")
         youtube_transcript2 = f2.read()
         f2.close()
     except Exception as e:
-        logger.error(f"전략 파일 읽기 실패: {e}")
+        logger.error(f"Failed to read strategy file: {e}")
         youtube_transcript2 = ""
+        
+    ### Get chart signal data and trading signals text
+    trading_signals_text = chart_processor.create_prompt_text()
+    signals_data = chart_processor.generate_ai_prompt_data()
+        
+    ### PRE-CALCULATE Key Decision Points
+    
+    # 1. Assess trend strength (TREND STRENGTH CHECK)
+    trend_strength_result = assess_trend_strength(df_5min, df_hourly, current_price)
+    long_trend_strong = trend_strength_result["long_trend_strong"]
+    short_trend_strong = trend_strength_result["short_trend_strong"]
+    
+    # 2. Assess exit signals
+    exit_assessment = assess_exit_signals(df_5min, signals_data, position_side)
+    should_exit = exit_assessment["should_exit"]
+    exit_signals_list = exit_assessment["exit_signals"]
+    
+    # 3. Check market overheating conditions
+    market_overheating = {
+        "long_overheated": False,
+        "short_overheated": False,
+        "reasons": []
+    }
+    
+    try:
+        # Get latest candle data
+        latest = df_5min.iloc[-1]
+        
+        # Long overheating checks
+        if latest['close'] >= latest['bb_bbh']:
+            market_overheating["long_overheated"] = True
+            market_overheating["reasons"].append("Price at/above upper Bollinger Band")
+            
+        if latest['rsi'] > 70:
+            market_overheating["long_overheated"] = True
+            market_overheating["reasons"].append("RSI above 70")
+        
+        # Check if price moved more than 0.8% in last 5 candles without pullback
+        recent_5 = df_5min.iloc[-5:]
+        price_5_candles_ago = recent_5.iloc[0]['close']
+        price_percent_change = (latest['close'] - price_5_candles_ago) / price_5_candles_ago * 100
+        
+        if price_percent_change > 0.8 and all(recent_5.iloc[i]['close'] > recent_5.iloc[i-1]['close'] for i in range(1, 5)):
+            market_overheating["long_overheated"] = True
+            market_overheating["reasons"].append(f"Price moved up {price_percent_change:.2f}% in last 5 candles without pullback")
+            
+        # Short overheating checks
+        if latest['close'] <= latest['bb_bbl']:
+            market_overheating["short_overheated"] = True
+            market_overheating["reasons"].append("Price at/below lower Bollinger Band")
+            
+        if latest['rsi'] < 30:
+            market_overheating["short_overheated"] = True
+            market_overheating["reasons"].append("RSI below 30")
+            
+        if price_percent_change < -0.8 and all(recent_5.iloc[i]['close'] < recent_5.iloc[i-1]['close'] for i in range(1, 5)):
+            market_overheating["short_overheated"] = True
+            market_overheating["reasons"].append(f"Price moved down {abs(price_percent_change):.2f}% in last 5 candles without pullback")
+    
+    except Exception as e:
+        logger.error(f"Error assessing market overheating: {e}")
 
-### AI에게 데이터 제공하고 판단 받기
+    ### AI Decision Making
     try:
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         if not client.api_key:
             logger.error("OpenAI API key is missing or invalid.")
             return None
             
-        # 데이터베이스 연결
+        # Database connection
         conn = get_db_connection()
         if not conn:
             logger.error("Database connection failed.")
             return None
             
         try:
-            # 최근 거래 내역 가져오기
+            # Get recent trades
             recent_trades = get_recent_trades(conn)
             
-            # 현재 시장 데이터 수집 (기존 코드에서 가져온 데이터 사용)
+            # Collect current market data
             current_market_data = {
                 "Current Price": current_price,
                 "fear_greed_index": fear_greed_index,
                 "news_headlines": news_headlines,
                 "orderbook": modified_orderbook,
-                "5min_ohlcv": df_5min.to_dict(),      # 5시간치 5분봉 데이터 추가
-                "hourly_ohlcv": df_hourly.to_dict(),  # 24시간치 1시간봉 데이터 추가
-                "4hour_ohlcv": df_4h.to_dict()        # 3일치 4시간봉 데이터 추가
+                "5min_ohlcv": df_5min.to_dict(),
+                "hourly_ohlcv": df_hourly.to_dict(),
+                "4hour_ohlcv": df_4h.to_dict()
             }
-            # 반성 및 개선 내용 생성
-            reflection = generate_reflection(recent_trades, current_market_data)
-            # 차트 신호 데이터를 AI 프롬프트에 포함 (새로 추가)
-            trading_signals_text = chart_processor.create_prompt_text()
             
-            # AI 모델에 프롬프트 제공 (수정된 부분)
+            # Generate reflection and improvement content
+            reflection = generate_reflection(recent_trades, current_market_data)
+            
+            # Format pre-calculated data for the AI prompt
+            blackflag_signal = signals_data.get("BlackFlag_Signal", "None") 
+            blackflag_candles_ago = signals_data.get("BlackFlag_CandlesAgo", "None")
+            utbot_signal = signals_data.get("UTBot_Signal", "None")
+            utbot_candles_ago = signals_data.get("UTBot_CandlesAgo", "None")
+            volume_osc_current = signals_data.get("VolumeOsc_Current", "None")
+            stop_loss_price = signals_data.get("StopLoss_Price", "None")
+            
+            # Call OpenAI API with the updated prompt format
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {
                     "role": "system",
                     "content": f"""
-# Bitcoin Futures Trading Strategy with Enhanced Entry Conditions
+# Bitcoin Futures Trading Strategy with Pre-calculated Indicators
 
-You are a Bitcoin futures day trader on the 5-minute timeframe with leveraged positions. Your strategy centers on three primary indicators (BlackFlag FTS, UT Bot Alerts, Volume Oscillator) with an additional trend strength filter. Capital preservation is paramount.
+You are a Bitcoin futures day trader on the 5-minute timeframe with leveraged positions. Your strategy uses pre-calculated core indicators and trend strength assessments. Capital preservation is paramount.
 
 ## 1. CRITICAL: POSITION MANAGEMENT RULES
 ⚠️ **POSITION MANAGEMENT RULES - READ FIRST** ⚠️
@@ -3463,112 +3820,53 @@ The data below must be considered in your analysis.
 • Current Position Side: {position_side}  ← "long", "short", or "none"  
 • Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
 
-## 3. Entry Strategies
+## 3. Pre-Calculated Indicators and Signals
 
-### A. Primary Entry Strategy (Enhanced with Trend Strength)
+**CORE INDICATORS STATUS (PRE-CALCULATED):**
+- BlackFlag FTS Signal: {blackflag_signal} (Candles ago: {blackflag_candles_ago})
+- UT Bot Signal: {utbot_signal} (Candles ago: {utbot_candles_ago})
+- Volume Oscillator: {volume_osc_current}
+- Stop Loss Price: {stop_loss_price}
+
+**TREND STRENGTH ASSESSMENT (PRE-CALCULATED):**
+- Long Trend Strength: {"STRONG" if long_trend_strong else "WEAK"}
+- Short Trend Strength: {"STRONG" if short_trend_strong else "WEAK"}
+
+**EXIT SIGNALS ASSESSMENT (PRE-CALCULATED):**
+- Should Exit Current Position: {"YES" if should_exit else "NO"}
+- Exit Signals Detected: {len(exit_signals_list)}
+
+**MARKET OVERHEATING (PRE-CALCULATED):**
+- Long Side Overheated: {"YES" if market_overheating["long_overheated"] else "NO"}
+- Short Side Overheated: {"YES" if market_overheating["short_overheated"] else "NO"}
+
+## 4. Decision Rules
+
+For a valid PRIMARY entry, ALL of the following must be true:
 
 **For Long Entry:**  
-1. **BlackFlag FTS:** Must show a red-to-green transition within the last 10 candles
-2. **UT Bot Alerts:** Must display a BUY alert within the last 10 candles
-3. **Volume Oscillator:** Must be positive on the current candle
-4. **TREND STRENGTH CHECK (REQUIRED):** At least ONE of these must be true:
-   - ADX > 25 on the 5-minute chart AND DI+ > DI-
-   - ADX > 20 on the 1-hour chart AND DI+ > DI-
-   - CMF > 0.05 on the 5-minute chart (indicating strong positive money flow)
-   - Clear uptrend structure (minimum 3 higher highs and higher lows)
+1. BlackFlag FTS: Must show a BUY signal within the last 10 candles
+2. UT Bot Alerts: Must display a BUY alert within the last 10 candles
+3. Volume Oscillator: Must be POSITIVE
+4. Trend Strength: Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"})
 
 **For Short Entry:**  
-1. **BlackFlag FTS:** Must show a green-to-red transition within the last 10 candles
-2. **UT Bot Alerts:** Must display a SELL alert within the last 10 candles
-3. **Volume Oscillator:** Must be positive on the current candle
-4. **TREND STRENGTH CHECK (REQUIRED):** At least ONE of these must be true:
-   - ADX > 25 on the 5-minute chart AND DI- > DI+
-   - ADX > 20 on the 1-hour chart AND DI- > DI+
-   - CMF < -0.05 on the 5-minute chart (indicating strong negative money flow)
-   - Clear downtrend structure (minimum 3 lower lows and lower highs)
+1. BlackFlag FTS: Must show a SELL signal within the last 10 candles
+2. UT Bot Alerts: Must display a SELL alert within the last 10 candles
+3. Volume Oscillator: Must be POSITIVE
+4. Trend Strength: Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"})
 
-Any stale signals, misalignment, or failure to meet trend strength criteria → Consider Secondary Entry or "hold".
+**Exit Rules:**
+1. If exit signals are detected (pre-calculated as {"YES" if should_exit else "NO"}), exit the current position
 
-**IMPORTANT - MARKET OVERHEATING CHECK:** Even when all Primary Entry Signal conditions are aligned, you MUST check for overheated market conditions:
+**Position Sizing Rules:**
+1. If market is overheated in the direction of entry, reduce position size by 50%
+2. Standard position sizes:
+   - Strong Signal: 100% of calculated size
+   - Moderate Signal: 60% of calculated size
+   - Weak Signal: 30% of calculated size
 
-1. **For LONG entries:**
-   - If price is already at or above the upper Bollinger Band on the 5-minute chart
-   - If RSI(14) is already above 70 on the 5-minute chart
-   - If the price has moved more than 0.8% in the last 5 candles without pullback
-
-2. **For SHORT entries:**
-   - If price is already at or below the lower Bollinger Band on the 5-minute chart
-   - If RSI(14) is already below 30 on the 5-minute chart
-   - If the price has moved more than 0.8% in the last 5 candles without pullback
-
-When overheating conditions are detected, either HOLD or reduce position size by 50%.
-
-### B. Secondary Entry Conditions
-
-Secondary entries should be rare and only used when Primary Entry signals aren't aligned but strong technical evidence exists. All of these conditions must be met:
-
-1. **Clear support/resistance level** with minimum 3 touches in last 24 hours
-2. **Multiple timeframe alignment** on 5min, 1h, AND 4h charts
-3. **Strong volume confirmation** (current volume > 150% of 20-period average)
-4. **Clear risk/reward** with immediate stop loss level identified (1.5:1 minimum)
-5. **ADX > 25** on the 5-minute chart confirming trend strength
-
-For Secondary Entries:
-- Position Size: Maximum 30% of standard size
-- Stop Loss: Maximum 0.3% from entry
-- Take Profit: 1.3-1.5x risk
-- Maximum Hold Time: 12 candles mandatory
-
-## 4. Position Sizing
-
-### For Primary Entry Signals:
-
-• **Strong Signal**  
-- All indicators aligned with high volume and strong trend confirmation
-- Position Size: 100% of calculated size
-- Stop Loss: ±0.7% from entry
-- P/L Ratio: ~2.0
-
-• **Moderate Signal**  
-- Adequate alignment but some minor concerns
-- Position Size: ~60%
-- Stop Loss: ±0.5% from entry
-- P/L Ratio: ~1.75
-
-• **Weak Signal**  
-- Minimum required alignment with lower confidence
-- Position Size: ~30%
-- Stop Loss: ±0.4% from entry
-- P/L Ratio: ~1.5
-
-### For Secondary Entry Signals:
-- Always considered Restricted Signal
-- Position Size: Maximum 30% (NEVER exceed this)
-- Stop Loss: 0.15-0.3% from entry
-- P/L Ratio: 1.3-1.5x
-- Maximum hold time: 12 candles
-
-## 5. Exit & Risk Management
-
-### Position Exit Rules (CRITICAL)
-1. **FIRST CHECK YOUR CURRENT POSITION:**
-   - For LONG positions → Use "sell" to exit
-   - For SHORT positions → Use "buy" to exit
-   - If position is "none" → Cannot exit (consider entry only)
-
-2. **Exit Signals:**
-   - Exit if any core signal reverses
-   - Exit if Volume Oscillator falls below 0%
-   - Exit if strong divergence appears on RSI or MACD
-   - Exit if trend strength indicators reverse (ADX falling below 20 or DI crossover against position)
-
-### Critical Loss Prevention Rules:
-- If position is at -10% PnL or worse, exit immediately
-- When position is down -5% or more, increase sensitivity to negative signals
-- If multiple warning signs occur while in negative territory, exit immediately
-- For Secondary Entries: Mandatory exit after 12 candles regardless of profit/loss
-
-## 6. Response Format
+## 5. Response Format
 
 Output a JSON object:
 
@@ -3578,8 +3876,7 @@ Output a JSON object:
 "percentage": integer (0-100),
 "stop_loss_price": float,
 "pl_ratio": float (1.3-2.0),
-"reason": "Concise rationale referencing signals & data",
-"entry_type": "primary" or "secondary"
+"reason": "Concise rationale referencing signals & data"
 }}
 ```
 
@@ -3594,17 +3891,9 @@ Output a JSON object:
 - **stop_loss_price:** Based on strategy guidelines
 - **pl_ratio:** Based on signal strength (1.3-2.0)
 - **reason:** Include clear explanation with all relevant factors
-- **entry_type:** "primary" or "secondary"
 
-## 7. Final Notes
-1) **ALWAYS CHECK CURRENT POSITION FIRST:**
-   - Exit LONG positions with "sell"
-   - Exit SHORT positions with "buy"
-   - Current position "none" means only new entries are possible
-
-2) Primary entries now require trend strength confirmation to avoid range-bound traps
-
-3) When in doubt, preserve capital - "hold" is often the safest decision    
+## 6. Final Notes
+When in doubt, preserve capital - "hold" is often the safest decision. All key indicators have been pre-calculated for you. Focus on making a clear decision based on the provided data.
                         """
                     },
                     {
@@ -3648,7 +3937,7 @@ Output a JSON object:
                 max_tokens=4095
             )
 
-            # Pydantic을 사용하여 AI의 트레이딩 결정 구조를 정의
+            # Validate AI's trading decision with Pydantic
             try:
                 result = TradingDecision.model_validate_json(response.choices[0].message.content)
             except Exception as e:
@@ -3659,32 +3948,32 @@ Output a JSON object:
             logger.info(f"### Reason: {result.reason} ###")
 
             order_executed = False
-            order_info = None  # 변수 초기화 추가
+            order_info = None  # Initialize variable
 
             try:
-                # 현재가 조회
+                # Get current price
                 ticker = trader.exchange.fetch_ticker('BTC/USDT')
                 current_btc_price = ticker['last']
                 
-                # 계좌 잔고 조회
+                # Check account balance
                 balance = trader.exchange.fetch_balance()
                 total_balance = float(balance['USDT']['free'])
                 
-                # 주문 금액 계산 (수수료 고려)
-                # 포지션 보유 중일 때
+                # Calculate order amount (considering fees)
+                # When position is active
                 if position_side:
-                    # 보유 포지션과 반대 방향 주문이면 포지션 크기 기준으로 계산
+                    # If order direction is opposite to current position, calculate based on position size
                     if ((position_side == 'long' and result.decision == 'sell') or 
                         (position_side == 'short' and result.decision == 'buy')):
                             order_amount = position_size * (result.percentage / 100)
-                    # 같은 방향 추가 주문이면 잔고 기준으로 계산
+                    # If adding to existing position in same direction, calculate based on balance
                     else:
                         order_amount = total_balance * (result.percentage / 100) * 0.9996
-                else:  # 신규 진입일 때도 잔고 기준으로 계산
+                else:  # For new entries, calculate based on balance
                     order_amount = total_balance * (result.percentage / 100) * 0.9996
                 
                 if result.decision == "buy" and result.percentage > 0:
-                    # 롱 포지션 진입
+                    # Long position entry or short position exit
                     order_info = trader.market_order_with_tp_sl(
                         side='buy',
                         buy_amount=order_amount,
@@ -3693,11 +3982,11 @@ Output a JSON object:
                     )
                     
                     if order_info != None:
-                        logger.info(f"롱 포지션 진입: 금액={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
+                        logger.info(f"Buy order executed: Amount={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
                         order_executed = True
                         
                 elif result.decision == "sell" and result.percentage > 0:
-                    # 숏 포지션 진입
+                    # Short position entry or long position exit
                     order_info = trader.market_order_with_tp_sl(
                         side='sell',
                         buy_amount=order_amount,
@@ -3706,25 +3995,25 @@ Output a JSON object:
                     )
                     
                     if order_info != None:
-                        logger.info(f"숏 포지션 진입: 금액={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
+                        logger.info(f"Sell order executed: Amount={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
                         order_executed = True
                         
             except Exception as e:
-                logger.error(f"주문 실행 중 오류 발생: {str(e)}")
+                logger.error(f"Error executing order: {str(e)}")
                 
-            # 거래 실행 여부와 관계없이 현재 잔고 조회
-            time.sleep(1)  # API 호출 제한을 고려하여 잠시 대기
+            # Update balance info after order (executed or not)
+            time.sleep(1)  # Brief delay to allow API updates
             balance = trader.exchange.fetch_balance()
             usdt_balance = balance['USDT']
-            free_usdt = usdt_balance['free']    # 사용 가능한 잔고
-            used_usdt = usdt_balance['used']    # 주문에 묶인 잔고
-            total_usdt = usdt_balance['total']  # 전체 잔고
+            free_usdt = usdt_balance['free']
+            used_usdt = usdt_balance['used']
+            total_usdt = usdt_balance['total']
             
-            # 현재 포지션 정보 조회
+            # Get current position info
             try:
                 positions = trader.exchange.fetch_positions([trader.symbol])
                 if positions and len(positions) > 0:
-                    position = positions[0]  # BTC/USDT 포지션
+                    position = positions[0]
                     btc_avg_buy_price = float(position['entryPrice']) 
                     position_size = float(position['contracts'])
                 else:
@@ -3735,14 +4024,11 @@ Output a JSON object:
                 btc_avg_buy_price = 0 
                 position_size = 0
                 
-            # BTC/USDT 현재가 조회
+            # Get current BTC price
             ticker = trader.exchange.fetch_ticker('BTC/USDT')
             current_btc_price = ticker['last']
 
-            # 신호 데이터 추출
-            signals_data = chart_processor.generate_ai_prompt_data()
-
-            # 거래 기록을 DB에 저장하기
+            # Record trade in database
             if order_executed and order_info != None:
                 order_id = order_info['entry']['id']
                 tp_order_id = order_info['tp']['id'] if order_info.get('tp') else None
@@ -3752,24 +4038,24 @@ Output a JSON object:
                 used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
                 reflection, tp_order_id, sl_order_id, signals_data)
                 
-                # 트레일링 스탑로스 모니터링 추가
+                # Set up trailing stop loss monitoring if available
                 if 'monitor_sl' in order_info:
-                    # 기존 모니터링 작업 정리 - 이 부분이 추가됨
+                    # Clean up existing monitoring jobs
                     global sl_monitor_jobs
-                    for job in sl_monitor_jobs[:]:  # 복사본으로 순회하여 안전하게 제거
+                    for job in sl_monitor_jobs[:]:
                         schedule.cancel_job(job)
                         sl_monitor_jobs.remove(job)
-                        logger.info(f"이전 트레일링 SL 모니터링 작업 취소: {getattr(job, 'job_id', 'unknown')}")
+                        logger.info(f"Cancelled previous trailing SL monitoring job: {getattr(job, 'job_id', 'unknown')}")
                     
-                    # 함수를 변수에 저장
+                    # Store monitor function
                     monitor_sl_func = order_info['monitor_sl']
                     
-                    # 각 작업에 고유 ID 할당
+                    # Create unique job ID
                     job_id = f"sl_monitor_{order_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
                     
                     def periodic_sl_monitoring(monitor_func, job_id=job_id):
                         try:
-                            # 함수 실행 시간 측정 추가
+                            # Measure function execution time
                             start_time = time.time()
                             
                             new_sl_order = monitor_func()
@@ -3777,18 +4063,18 @@ Output a JSON object:
                             if new_sl_order:
                                 logger.info(f"Trailing SL order updated: {new_sl_order}")
                             
-                            # 실행 시간 기록
+                            # Log execution time
                             elapsed_time = time.time() - start_time
                             logger.debug(f"SL monitoring job completed in {elapsed_time:.2f} seconds")
                             
-                            # 리소스 상태 확인
+                            # Check resource usage
                             memory_percent = psutil.virtual_memory().percent
                             if memory_percent > 85:
                                 logger.warning(f"High memory usage in SL monitoring: {memory_percent}%")
-                                gc.collect()  # 가비지 컬렉션 강제 수행
+                                gc.collect()
                                 
                         except Exception as e:
-                            # 오류 발생 시 해당 작업을 스케줄에서 제거
+                            # Remove job if error occurs
                             logger.error(f"Error in SL monitoring: {e}")
                             for job in sl_monitor_jobs:
                                 if job.job_id == job_id:
@@ -3796,16 +4082,16 @@ Output a JSON object:
                                     sl_monitor_jobs.remove(job)
                                     break
                     
-                    # 1분마다 SL 모니터링 작업 예약
+                    # Schedule monitoring job every minute
                     job = schedule.every(1).minutes.do(periodic_sl_monitoring, monitor_sl_func)
-                    job.job_id = job_id  # ID 할당
+                    job.job_id = job_id
                     
-                    # 글로벌 작업 목록에 추가
+                    # Add to global job list
                     sl_monitor_jobs.append(job)
                     logger.info(f"Created trailing SL monitoring job: {job_id}")          
                 
             else:
-                # 거래가 실행되지 않은 경우 (hold 또는 실패)
+                # If no trade was executed (hold or failed)
                 log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
                         used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
                         reflection, None, None, signals_data)
@@ -3815,8 +4101,8 @@ Output a JSON object:
                 conn.close()
     
     except Exception as e:
-        logger.error(f"AI 트레이딩 함수 오류: {e}")
-        # 메모리 정리
+        logger.error(f"Error in AI trading function: {e}")
+        # Clean up memory
         gc.collect()
 
 
