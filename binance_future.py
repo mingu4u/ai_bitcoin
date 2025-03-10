@@ -3224,13 +3224,14 @@ class TradingDecision(BaseModel):
     pl_ratio: float
 
 
-def assess_trend_strength(df_5min, df_hourly, current_price):
+def assess_trend_strength(df_5min, df_hourly, df_4h, current_price):
     """
-    Evaluate trend strength using stricter rule-based criteria
+    Evaluate trend strength using much stricter rule-based criteria
     
     Args:
         df_5min: 5-minute OHLCV DataFrame with indicators
         df_hourly: 1-hour OHLCV DataFrame with indicators
+        df_4h: 4-hour OHLCV DataFrame with indicators
         current_price: Current BTC price
         
     Returns:
@@ -3239,158 +3240,308 @@ def assess_trend_strength(df_5min, df_hourly, current_price):
     # Get the latest indicator values
     latest_5min = df_5min.iloc[-1]
     latest_hourly = df_hourly.iloc[-1]
+    latest_4h = df_4h.iloc[-1] if df_4h is not None else None
     
     # Initialize criteria check results
     long_criteria = []
     short_criteria = []
     
-    # Check EMA positioning on 5-minute chart (criterion 1)
+    # 초기 트렌드 상태 설정
+    long_trend_disqualified = False
+    short_trend_disqualified = False
+    disqualification_reasons = []
+    
+    # 1. 기준 시간대 고점/저점 근처 확인 - 추세 진입 제한 (최우선 체크)
     try:
-        ema20 = latest_5min.get('ema20', latest_5min.get('sma_20', 0))  # Fallback to SMA if EMA not available
-        ema50 = latest_5min.get('ema50', 0)
+        # 1시간 차트 고점/저점 검사
+        hourly_high = df_hourly['high'].max()
+        hourly_low = df_hourly['low'].min()
+        hourly_range = hourly_high - hourly_low
         
-        if ema20 > 0 and ema50 > 0:
-            # Long criterion: Price above both EMAs and properly aligned (20 EMA > 50 EMA)
-            if current_price > ema20 and current_price > ema50 and ema20 > ema50:
-                # 추가 강화: 현재가가 EMA20보다 최소 0.15% 이상 위에 있어야 함
-                if (current_price - ema20) / ema20 > 0.0015:
+        # 고점 근처 체크 (상위 5% 이내)
+        if (hourly_high - current_price) / hourly_range < 0.05:
+            long_trend_disqualified = True
+            disqualification_reasons.append(f"Price near hourly high ({((hourly_high - current_price) / hourly_range * 100):.2f}% from top)")
+        
+        # 저점 근처 체크 (하위 5% 이내)
+        if (current_price - hourly_low) / hourly_range < 0.05:
+            short_trend_disqualified = True
+            disqualification_reasons.append(f"Price near hourly low ({((current_price - hourly_low) / hourly_range * 100):.2f}% from bottom)")
+            
+        # 4시간 차트 고점/저점 검사 (더 중요)
+        if df_4h is not None:
+            four_hour_high = df_4h['high'].max()
+            four_hour_low = df_4h['low'].min()
+            four_hour_range = four_hour_high - four_hour_low
+            
+            # 고점 근처 체크 (상위 7% 이내)
+            if (four_hour_high - current_price) / four_hour_range < 0.07:
+                long_trend_disqualified = True
+                disqualification_reasons.append(f"Price near 4h high ({((four_hour_high - current_price) / four_hour_range * 100):.2f}% from top)")
+            
+            # 저점 근처 체크 (하위 7% 이내)
+            if (current_price - four_hour_low) / four_hour_range < 0.07:
+                short_trend_disqualified = True
+                disqualification_reasons.append(f"Price near 4h low ({((current_price - four_hour_low) / four_hour_range * 100):.2f}% from bottom)")
+    except Exception as e:
+        logger.error(f"Error checking price extremes: {e}")
+    
+    # 2. RSI 과매수/과매도 체크 - 추세 신뢰도 제한
+    try:
+        # 1시간 RSI 체크
+        hourly_rsi = latest_hourly['rsi']
+        
+        # 과매수 존재 체크 (RSI > 70)
+        if hourly_rsi > 70:
+            long_trend_disqualified = True
+            disqualification_reasons.append(f"Hourly RSI overbought ({hourly_rsi:.2f})")
+        
+        # 과매도 존재 체크 (RSI < 30)
+        if hourly_rsi < 30:
+            short_trend_disqualified = True
+            disqualification_reasons.append(f"Hourly RSI oversold ({hourly_rsi:.2f})")
+            
+        # 4시간 RSI도 체크
+        if df_4h is not None and 'rsi' in latest_4h:
+            four_hour_rsi = latest_4h['rsi']
+            
+            # 4시간봉 기준 과매수 (RSI > 75)
+            if four_hour_rsi > 75:
+                long_trend_disqualified = True
+                disqualification_reasons.append(f"4h RSI strongly overbought ({four_hour_rsi:.2f})")
+            
+            # 4시간봉 기준 과매도 (RSI < 25)
+            if four_hour_rsi < 25:
+                short_trend_disqualified = True
+                disqualification_reasons.append(f"4h RSI strongly oversold ({four_hour_rsi:.2f})")
+    except Exception as e:
+        logger.error(f"Error checking RSI extremes: {e}")
+    
+    # 3. 추세 지속 기간 체크 - 너무 오래 지속된 추세는 제한
+    try:
+        if 'ema20' in df_5min.columns or 'sma_20' in df_5min.columns:
+            # 20개 캔들 분석
+            last_20_candles = df_5min.iloc[-20:].copy()
+            
+            # 20개 캔들 중 양봉/음봉 비율 체크
+            bullish_count = sum(last_20_candles['close'] > last_20_candles['open'])
+            bearish_count = sum(last_20_candles['close'] < last_20_candles['open'])
+            
+            # 지나치게 한쪽으로 치우친 경우 (80% 이상) - 추세 전환 가능성 높음
+            if bullish_count / 20 >= 0.8:
+                long_trend_disqualified = True
+                disqualification_reasons.append(f"Extended uptrend ({bullish_count}/20 bullish candles)")
+            
+            if bearish_count / 20 >= 0.8:
+                short_trend_disqualified = True
+                disqualification_reasons.append(f"Extended downtrend ({bearish_count}/20 bearish candles)")
+            
+            # 또는 8개 연속 같은 방향 캔들 확인
+            consecutive_bullish = 0
+            consecutive_bearish = 0
+            for i in range(20):
+                if last_20_candles['close'].iloc[i] > last_20_candles['open'].iloc[i]:
+                    consecutive_bullish += 1
+                    consecutive_bearish = 0
+                else:
+                    consecutive_bearish += 1
+                    consecutive_bullish = 0
+                    
+                if consecutive_bullish >= 8:  # 8개 이상 연속 양봉
+                    long_trend_disqualified = True
+                    disqualification_reasons.append("8+ consecutive bullish candles")
+                    break
+                    
+                if consecutive_bearish >= 8:  # 8개 이상 연속 음봉
+                    short_trend_disqualified = True
+                    disqualification_reasons.append("8+ consecutive bearish candles")
+                    break
+    except Exception as e:
+        logger.error(f"Error checking trend duration: {e}")
+    
+    # 4. 볼린저 밴드 상/하단 초과 체크
+    try:
+        if 'bb_bbh' in latest_5min and 'bb_bbl' in latest_5min:
+            # 볼린저 밴드 상단 근처 또는 초과
+            if current_price >= latest_5min['bb_bbh'] * 0.995:
+                long_trend_disqualified = True
+                disqualification_reasons.append("Price at/above upper Bollinger Band")
+            
+            # 볼린저 밴드 하단 근처 또는 초과
+            if current_price <= latest_5min['bb_bbl'] * 1.005:
+                short_trend_disqualified = True
+                disqualification_reasons.append("Price at/below lower Bollinger Band")
+    except Exception as e:
+        logger.error(f"Error checking Bollinger Bands: {e}")
+    
+    # 자격 박탈 사유가 있다면 로깅
+    if disqualification_reasons:
+        logger.info(f"Trend disqualification reasons: {disqualification_reasons}")
+    
+    # 자격 박탈 검사 통과했을 때만 정상 기준 평가 진행
+    if not long_trend_disqualified or not short_trend_disqualified:
+        # Check EMA positioning on 5-minute chart (criterion 1)
+        try:
+            ema20 = latest_5min.get('ema20', latest_5min.get('sma_20', 0))  # Fallback to SMA if EMA not available
+            ema50 = latest_5min.get('ema50', 0)
+            
+            if ema20 > 0 and ema50 > 0:
+                # 강화: Long criterion - 현재가가 EMA20보다 최소 0.2% 이상 위에 있어야 함
+                if current_price > ema20 and current_price > ema50 and ema20 > ema50:
+                    if (current_price - ema20) / ema20 > 0.002:  # 0.15% → 0.2%
+                        long_criteria.append(True)
+                
+                # 강화: Short criterion - 현재가가 EMA20보다 최소 0.2% 이상 아래에 있어야 함
+                if current_price < ema20 and current_price < ema50 and ema20 < ema50:
+                    if (ema20 - current_price) / ema20 > 0.002:  # 0.15% → 0.2%
+                        short_criteria.append(True)
+        except Exception as e:
+            logger.error(f"Error in EMA check: {e}")
+        
+        # Check for consecutive candle direction (criterion 2)
+        try:
+            # Get the last 5 candles (강화: 4→5개)
+            recent_candles = df_5min.iloc[-5:].copy()
+            
+            # 강화: 최소 4개 이상의 캔들이 상승 중이어야 함 (3→4개)
+            bullish_count = sum(recent_candles['close'] > recent_candles['open'])
+            if bullish_count >= 4 and recent_candles['close'].iloc[-1] > recent_candles['close'].iloc[-4]:
+                # 최근 캔들은 반드시 양봉 + 추가: 최소 0.1% 이상 상승
+                if (recent_candles['close'].iloc[-1] > recent_candles['open'].iloc[-1] and
+                    (recent_candles['close'].iloc[-1] - recent_candles['open'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.001):
                     long_criteria.append(True)
             
-            # Short criterion: Price below both EMAs and properly aligned (20 EMA < 50 EMA)
-            if current_price < ema20 and current_price < ema50 and ema20 < ema50:
-                # 추가 강화: 현재가가 EMA20보다 최소 0.15% 이상 아래에 있어야 함
-                if (ema20 - current_price) / ema20 > 0.0015:
+            # 강화: 최소 4개 이상의 캔들이 하락 중이어야 함 (3→4개)
+            bearish_count = sum(recent_candles['close'] < recent_candles['open'])
+            if bearish_count >= 4 and recent_candles['close'].iloc[-1] < recent_candles['close'].iloc[-4]:
+                # 최근 캔들은 반드시 음봉 + 추가: 최소 0.1% 이상 하락
+                if (recent_candles['close'].iloc[-1] < recent_candles['open'].iloc[-1] and
+                    (recent_candles['open'].iloc[-1] - recent_candles['close'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.001):
                     short_criteria.append(True)
-    except Exception as e:
-        logger.error(f"Error in EMA check: {e}")
+        except Exception as e:
+            logger.error(f"Error in consecutive candle check: {e}")
+        
+        # Check MACD histogram direction (criterion 3)
+        try:
+            if 'macd_diff' in df_5min.columns:
+                recent_macd = df_5min['macd_diff'].iloc[-5:].values  # 강화: 4→5개
+                
+                # 강화: MACD 히스토그램이 최소 3개 캔들 연속 증가 (2→3개)
+                if (recent_macd[-1] > 0 and 
+                    recent_macd[-1] > recent_macd[-2] and
+                    recent_macd[-2] > recent_macd[-3] and 
+                    recent_macd[-3] > recent_macd[-4] and 
+                    abs(recent_macd[-1]) > 0.75):  # 강화: 임계값 증가 (0.5→0.75)
+                    long_criteria.append(True)
+                
+                # 강화: MACD 히스토그램이 최소 3개 캔들 연속 감소 (2→3개)
+                if (recent_macd[-1] < 0 and 
+                    recent_macd[-1] < recent_macd[-2] and
+                    recent_macd[-2] < recent_macd[-3] and 
+                    recent_macd[-3] < recent_macd[-4] and 
+                    abs(recent_macd[-1]) > 0.75):  # 강화: 임계값 증가 (0.5→0.75)
+                    short_criteria.append(True)
+        except Exception as e:
+            logger.error(f"Error in MACD check: {e}")
+        
+        # Check for higher highs and higher lows / lower highs and lower lows (criterion 4)
+        try:
+            # 강화: 캔들 수 증가 (20→25개)
+            last_25_candles = df_5min.iloc[-25:].copy()
+            
+            # Identify swing highs and lows (simple approach)
+            highs = []
+            lows = []
+            
+            for i in range(1, len(last_25_candles) - 1):
+                # A swing high is formed when the current high is higher than adjacent highs
+                if last_25_candles['high'].iloc[i] > last_25_candles['high'].iloc[i-1] and \
+                   last_25_candles['high'].iloc[i] > last_25_candles['high'].iloc[i+1]:
+                    highs.append(last_25_candles['high'].iloc[i])
+                
+                # A swing low is formed when the current low is lower than adjacent lows
+                if last_25_candles['low'].iloc[i] < last_25_candles['low'].iloc[i-1] and \
+                   last_25_candles['low'].iloc[i] < last_25_candles['low'].iloc[i+1]:
+                    lows.append(last_25_candles['low'].iloc[i])
+            
+            # 강화: 최소 5개 이상의 고점과 저점 필요 (4→5개)
+            if len(highs) >= 5 and len(lows) >= 5:
+                # 강화: 가장 최근 고점이 이전 고점들보다 최소 0.1% 이상 높아야 함
+                higher_highs = all(highs[-1] > h * 1.001 for h in highs[:-1])
+                higher_lows = all(lows[i] > lows[i-1] * 1.001 for i in range(1, len(lows)))
+                
+                if higher_highs and higher_lows:
+                    long_criteria.append(True)
+            
+                # 강화: 가장 최근 저점이 이전 저점들보다 최소 0.1% 이상 낮아야 함
+                lower_highs = all(highs[i] < highs[i-1] * 0.999 for i in range(1, len(highs)))
+                lower_lows = all(lows[-1] < l * 0.999 for l in lows[:-1])
+                
+                if lower_highs and lower_lows:
+                    short_criteria.append(True)
+        except Exception as e:
+            logger.error(f"Error in price structure check: {e}")
+        
+        # Check 1-hour timeframe trend with ADX (criterion 5)
+        try:
+            hourly_adx = latest_hourly['adx']
+            hourly_di_plus = latest_hourly['di_plus']
+            hourly_di_minus = latest_hourly['di_minus']
+            
+            # 강화: ADX 임계값 증가 (25→28)
+            # Long: 1-hour chart shows ADX > 28 with DI+ > DI-
+            if hourly_adx > 28 and hourly_di_plus > hourly_di_minus:
+                # 추가 강화: DI+와 DI- 사이의 차이가 8 이상 (5→8)
+                if hourly_di_plus - hourly_di_minus > 8:
+                    long_criteria.append(True)
+            
+            # Short: 1-hour chart shows ADX > 28 with DI- > DI+
+            if hourly_adx > 28 and hourly_di_minus > hourly_di_plus:
+                # 추가 강화: DI-와 DI+ 사이의 차이가 8 이상 (5→8)
+                if hourly_di_minus - hourly_di_plus > 8:
+                    short_criteria.append(True)
+        except Exception as e:
+            logger.error(f"Error in hourly ADX check: {e}")
+        
+        # 추가: 6번째 기준 - 4시간 차트의 MACD 방향 확인
+        try:
+            if df_4h is not None and 'macd' in df_4h.columns and 'macd_signal' in df_4h.columns:
+                # 4시간 차트의 MACD 방향성 확인
+                four_hour_macd = df_4h['macd'].iloc[-3:].values
+                four_hour_macd_signal = df_4h['macd_signal'].iloc[-3:].values
+                
+                # 강화: 4시간 MACD 조건 보강 - 최소한 현재 MACD 값이 양수
+                # Long: 4시간 MACD가 시그널 라인을 상향 돌파 + MACD 값이 양수
+                if (four_hour_macd[-2] < four_hour_macd_signal[-2] and 
+                    four_hour_macd[-1] > four_hour_macd_signal[-1] and
+                    four_hour_macd[-1] > 0):
+                    long_criteria.append(True)
+                
+                # Short: 4시간 MACD가 시그널 라인을 하향 돌파 + MACD 값이 음수
+                if (four_hour_macd[-2] > four_hour_macd_signal[-2] and 
+                    four_hour_macd[-1] < four_hour_macd_signal[-1] and
+                    four_hour_macd[-1] < 0):
+                    short_criteria.append(True)
+        except Exception as e:
+            logger.error(f"Error in 4h MACD check: {e}")
     
-    # Check for consecutive candle direction (criterion 2)
-    try:
-        # Get the last 4 candles (강화: 3→4개)
-        recent_candles = df_5min.iloc[-4:].copy()
-        
-        # 강화: 최소 3개 이상의 캔들이 상승 중이어야 함
-        bullish_count = sum(recent_candles['close'] > recent_candles['open'])
-        if bullish_count >= 3 and recent_candles['close'].iloc[-1] > recent_candles['close'].iloc[-4]:
-            # 추가 강화: 가장 최근 캔들은 반드시 양봉이어야 함
-            if recent_candles['close'].iloc[-1] > recent_candles['open'].iloc[-1]:
-                long_criteria.append(True)
-        
-        # 강화: 최소 3개 이상의 캔들이 하락 중이어야 함
-        bearish_count = sum(recent_candles['close'] < recent_candles['open'])
-        if bearish_count >= 3 and recent_candles['close'].iloc[-1] < recent_candles['close'].iloc[-4]:
-            # 추가 강화: 가장 최근 캔들은 반드시 음봉이어야 함
-            if recent_candles['close'].iloc[-1] < recent_candles['open'].iloc[-1]:
-                short_criteria.append(True)
-    except Exception as e:
-        logger.error(f"Error in consecutive candle check: {e}")
-    
-    # Check MACD histogram direction (criterion 3)
-    try:
-        if 'macd_diff' in df_5min.columns:
-            recent_macd = df_5min['macd_diff'].iloc[-4:].values  # 강화: 3→4개
-            
-            # 강화: MACD 히스토그램이 최소 2개 캔들 연속 증가하고, 가장 최근 값이 양수이며 일정 임계값 이상
-            if (recent_macd[-1] > 0 and recent_macd[-1] > recent_macd[-2] and
-                recent_macd[-2] > recent_macd[-3] and abs(recent_macd[-1]) > 0.5):  # 추가: 임계값 체크
-                long_criteria.append(True)
-            
-            # 강화: MACD 히스토그램이 최소 2개 캔들 연속 감소하고, 가장 최근 값이 음수이며 일정 임계값 이하
-            if (recent_macd[-1] < 0 and recent_macd[-1] < recent_macd[-2] and
-                recent_macd[-2] < recent_macd[-3] and abs(recent_macd[-1]) > 0.5):  # 추가: 임계값 체크
-                short_criteria.append(True)
-    except Exception as e:
-        logger.error(f"Error in MACD check: {e}")
-    
-    # Check for higher highs and higher lows / lower highs and lower lows (criterion 4)
-    try:
-        # 강화: 캔들 수 증가 (15→20개)
-        last_20_candles = df_5min.iloc[-20:].copy()
-        
-        # Identify swing highs and lows (simple approach)
-        highs = []
-        lows = []
-        
-        for i in range(1, len(last_20_candles) - 1):
-            # A swing high is formed when the current high is higher than adjacent highs
-            if last_20_candles['high'].iloc[i] > last_20_candles['high'].iloc[i-1] and \
-               last_20_candles['high'].iloc[i] > last_20_candles['high'].iloc[i+1]:
-                highs.append(last_20_candles['high'].iloc[i])
-            
-            # A swing low is formed when the current low is lower than adjacent lows
-            if last_20_candles['low'].iloc[i] < last_20_candles['low'].iloc[i-1] and \
-               last_20_candles['low'].iloc[i] < last_20_candles['low'].iloc[i+1]:
-                lows.append(last_20_candles['low'].iloc[i])
-        
-        # 강화: 최소 4개 이상의 고점과 저점 필요 (3→4개)
-        if len(highs) >= 4 and len(lows) >= 4:
-            # 강화: 가장 최근 고점이 모든 이전 고점보다 높아야 함
-            higher_highs = all(highs[-1] > h for h in highs[:-1])
-            higher_lows = all(lows[i] > lows[i-1] for i in range(1, len(lows)))
-            
-            if higher_highs and higher_lows:
-                long_criteria.append(True)
-        
-            # 강화: 가장 최근 저점이 모든 이전 저점보다 낮아야 함
-            lower_highs = all(highs[i] < highs[i-1] for i in range(1, len(highs)))
-            lower_lows = all(lows[-1] < l for l in lows[:-1])
-            
-            if lower_highs and lower_lows:
-                short_criteria.append(True)
-    except Exception as e:
-        logger.error(f"Error in price structure check: {e}")
-    
-    # Check 1-hour timeframe trend with ADX (criterion 5)
-    try:
-        hourly_adx = latest_hourly['adx']
-        hourly_di_plus = latest_hourly['di_plus']
-        hourly_di_minus = latest_hourly['di_minus']
-        
-        # 강화: ADX 임계값 증가 (20→25)
-        # Long: 1-hour chart shows ADX > 25 with DI+ > DI-
-        if hourly_adx > 25 and hourly_di_plus > hourly_di_minus:
-            # 추가 강화: DI+와 DI- 사이의 차이가 5 이상
-            if hourly_di_plus - hourly_di_minus > 5:
-                long_criteria.append(True)
-        
-        # Short: 1-hour chart shows ADX > 25 with DI- > DI+
-        if hourly_adx > 25 and hourly_di_minus > hourly_di_plus:
-            # 추가 강화: DI-와 DI+ 사이의 차이가 5 이상
-            if hourly_di_minus - hourly_di_plus > 5:
-                short_criteria.append(True)
-    except Exception as e:
-        logger.error(f"Error in hourly ADX check: {e}")
-    
-    # 추가: 6번째 기준 - 4시간 차트의 MACD 방향 확인
-    try:
-        if 'macd' in df_hourly.columns:
-            # 4시간 차트의 MACD 방향성 확인
-            hourly_macd = df_hourly['macd'].iloc[-3:].values
-            hourly_macd_signal = df_hourly['macd_signal'].iloc[-3:].values
-            
-            # Long: 4시간 MACD가 시그널 라인을 상향 돌파
-            if hourly_macd[-2] < hourly_macd_signal[-2] and hourly_macd[-1] > hourly_macd_signal[-1]:
-                long_criteria.append(True)
-            
-            # Short: 4시간 MACD가 시그널 라인을 하향 돌파
-            if hourly_macd[-2] > hourly_macd_signal[-2] and hourly_macd[-1] < hourly_macd_signal[-1]:
-                short_criteria.append(True)
-    except Exception as e:
-        logger.error(f"Error in hourly MACD check: {e}")
-    
-    # 강화: 최종 평가 기준 변경 - 최소 2개 이상의 기준 충족 필요
-    long_trend_is_strong = len(long_criteria) >= 2  # 변경: >0 → >=2
-    short_trend_is_strong = len(short_criteria) >= 2  # 변경: >0 → >=2
+    # 강화: 최종 평가 기준 변경
+    # 1. 자격 박탈 이유가 있으면 무조건 해당 방향 추세는 weak
+    # 2. 자격 박탈 이유가 없는 경우 기준 3개 이상 충족해야 strong (2→3개)
+    long_trend_is_strong = (not long_trend_disqualified) and (len(long_criteria) >= 3)
+    short_trend_is_strong = (not short_trend_disqualified) and (len(short_criteria) >= 3)
     
     result = {
         "long_trend_strong": long_trend_is_strong,
         "short_trend_strong": short_trend_is_strong,
-        "long_criteria_count": len(long_criteria),  # 디버깅용 추가 정보
-        "short_criteria_count": len(short_criteria)  # 디버깅용 추가 정보
+        "long_criteria_count": len(long_criteria),
+        "short_criteria_count": len(short_criteria),
+        "long_disqualified": long_trend_disqualified,
+        "short_disqualified": short_trend_disqualified,
+        "disqualification_reasons": disqualification_reasons
     }
     logger.info(f"Trend strength assessment result: {result}, type: {type(result)}")
     return result
-
 
 def assess_exit_signals(df_5min, signals_data, position_side):
     """
@@ -3583,20 +3734,46 @@ def assess_exit_signals(df_5min, signals_data, position_side):
     # 이 부분은 포지션의 진입가와 현재 가격 비교가 필요하나 데이터가 없으므로 대체 방법 사용
     try:
         # 예시: 볼린저 밴드 상단/하단 터치 시 익절 고려
-        if position_side == 'long' and latest['close'] >= latest['bb_bbh']:
-            exit_signals.append("Price touched upper Bollinger Band in long position")
-            exit_signal_weights.append(0.5)  # 중간 가중치 (이익 실현 목적)
-        elif position_side == 'short' and latest['close'] <= latest['bb_bbl']:
-            exit_signals.append("Price touched lower Bollinger Band in short position")
-            exit_signal_weights.append(0.5)  # 중간 가중치 (이익 실현 목적)
+        if position_side == 'long' and 'bb_bbh' in latest:
+            if latest['close'] >= latest['bb_bbh']:
+                exit_signals.append("Price touched upper Bollinger Band in long position")
+                exit_signal_weights.append(0.5)  # 중간 가중치 (이익 실현 목적)
+        elif position_side == 'short' and 'bb_bbl' in latest:
+            if latest['close'] <= latest['bb_bbl']:
+                exit_signals.append("Price touched lower Bollinger Band in short position")
+                exit_signal_weights.append(0.5)  # 중간 가중치 (이익 실현 목적)
     except Exception as e:
         logger.error(f"Error checking profit target: {e}")
+    
+    # 6. 새로운 지표: 변동성 폭발 확인 (높은 ATR)
+    try:
+        if 'atr' in latest:
+            # ATR 값이 최근 20개 캔들의 평균 ATR보다 2배 이상
+            recent_atr_avg = df_5min['atr'].iloc[-20:].mean()
+            if latest['atr'] > recent_atr_avg * 2:
+                exit_signals.append(f"Volatility explosion detected (ATR: {latest['atr']:.2f}, Avg: {recent_atr_avg:.2f})")
+                exit_signal_weights.append(0.7)  # 높은 가중치
+    except Exception as e:
+        logger.error(f"Error checking volatility: {e}")
+    
+    # 7. 추가: 1시간 차트에서 강한 반전 신호 (시간대 이중 확인)
+    try:
+        # 마지막 25% 가중치는 1시간 차트 반전이 있을 때만 부여 (더 보수적인 접근)
+        if 'hourly_reversal' in signals_data:
+            if position_side == 'long' and signals_data['hourly_reversal'] == 'bearish':
+                exit_signals.append("Confirmed bearish reversal on hourly chart")
+                exit_signal_weights.append(0.8)  # 매우 높은 가중치
+            elif position_side == 'short' and signals_data['hourly_reversal'] == 'bullish':
+                exit_signals.append("Confirmed bullish reversal on hourly chart")
+                exit_signal_weights.append(0.8)  # 매우 높은 가중치
+    except Exception as e:
+        logger.error(f"Error checking hourly reversal: {e}")
     
     # 신호 가중치 합산하여 최종 결정
     exit_score = sum(exit_signal_weights)
     
-    # 강화: 최소 1.5 이상의 가중치 합산 점수가 필요
-    should_exit = exit_score >= 1.5
+    # 강화: 최소 1.7 이상의 가중치 합산 점수가 필요 (1.5→1.7)
+    should_exit = exit_score >= 1.7
     
     # Log exit signals if they exist
     if exit_signals:
@@ -3606,10 +3783,12 @@ def assess_exit_signals(df_5min, signals_data, position_side):
     result = {
         "should_exit": should_exit,
         "exit_signals": exit_signals,
-        "exit_score": exit_score  # 디버깅용 추가 정보
+        "exit_score": exit_score,  # 디버깅용 추가 정보
+        "exit_signal_weights": exit_signal_weights  # 디버깅용 추가 정보
     }
     logger.info(f"Exit assessment result: {result}, type: {type(result)}")
     return result
+
 
 
 ### 메인 AI 트레이딩 로직
