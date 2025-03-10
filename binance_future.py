@@ -3359,20 +3359,66 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     except Exception as e:
         logger.error(f"Error checking trend duration: {e}")
     
-    # 4. 볼린저 밴드 상/하단 초과 체크
+    # 4. 볼린저 밴드 상/하단 초과 체크 - 변동성 기반 접근법
     try:
-        if 'bb_bbh' in latest_5min and 'bb_bbl' in latest_5min:
-            # 볼린저 밴드 상단 근처 또는 초과
-            if current_price >= latest_5min['bb_bbh'] * 0.995:
-                long_trend_disqualified = True
-                disqualification_reasons.append("Price at/above upper Bollinger Band")
+        if 'bb_bbh' in latest_5min and 'bb_bbl' in latest_5min and 'bb_bbm' in latest_5min:
+            # 전체 밴드 폭 계산 (상단 - 하단)
+            band_width = latest_5min['bb_bbh'] - latest_5min['bb_bbl']
             
-            # 볼린저 밴드 하단 근처 또는 초과
-            if current_price <= latest_5min['bb_bbl'] * 1.005:
+            # 밴드 폭의 일정 비율을 계산 (표준편차의 약 0.15배)
+            # 볼린저 밴드는 표준편차에 기반하므로, 이 방식이 고정 비율보다 변동성에 더 적응적
+            threshold_distance = band_width * 0.15
+            
+            # 상단 밴드와의 거리
+            distance_to_upper = latest_5min['bb_bbh'] - current_price
+            # 하단 밴드와의 거리
+            distance_to_lower = current_price - latest_5min['bb_bbl']
+            
+            # 상단 밴드 근처 체크 (밴드 폭의 15% 이내)
+            if distance_to_upper <= threshold_distance or current_price > latest_5min['bb_bbh']:
+                long_trend_disqualified = True
+                if current_price > latest_5min['bb_bbh']:
+                    disqualification_reasons.append(f"Price above upper Bollinger Band ({current_price:.2f} > {latest_5min['bb_bbh']:.2f})")
+                else:
+                    percent_to_upper = (distance_to_upper / band_width) * 100
+                    disqualification_reasons.append(f"Price near upper Bollinger Band ({percent_to_upper:.2f}% from top)")
+            
+            # 하단 밴드 근처 체크 (밴드 폭의 15% 이내)
+            if distance_to_lower <= threshold_distance or current_price < latest_5min['bb_bbl']:
                 short_trend_disqualified = True
-                disqualification_reasons.append("Price at/below lower Bollinger Band")
+                if current_price < latest_5min['bb_bbl']:
+                    disqualification_reasons.append(f"Price below lower Bollinger Band ({current_price:.2f} < {latest_5min['bb_bbl']:.2f})")
+                else:
+                    percent_to_lower = (distance_to_lower / band_width) * 100
+                    disqualification_reasons.append(f"Price near lower Bollinger Band ({percent_to_lower:.2f}% from bottom)")
+            
+            # 추가 체크: 볼린저 밴드 폭이 비정상적으로 좁은 상태에서의 돌파 (스퀴즈 후 확장 신호)
+            # 20개 캔들 중 현재 밴드 폭이 하위 10% 이내인 경우
+            recent_band_widths = []
+            for i in range(min(20, len(df_5min))):
+                idx = -i - 1
+                if idx >= -len(df_5min) and 'bb_bbh' in df_5min.iloc[idx] and 'bb_bbl' in df_5min.iloc[idx]:
+                    width = df_5min.iloc[idx]['bb_bbh'] - df_5min.iloc[idx]['bb_bbl']
+                    recent_band_widths.append(width)
+            
+            if recent_band_widths:
+                current_band_width = recent_band_widths[0]
+                sorted_widths = sorted(recent_band_widths)
+                width_percentile = sorted_widths.index(current_band_width) / len(sorted_widths) * 100
+                
+                # 밴드 폭이 좁아진 상태에서 돌파 위험 (폭이 하위 20% 이내)
+                if width_percentile < 20:
+                    # 밴드 중앙선에서 거리가 밴드 폭의 40% 이상이면 위험
+                    middle_to_price = abs(current_price - latest_5min['bb_bbm'])
+                    if middle_to_price > band_width * 0.4:
+                        if current_price > latest_5min['bb_bbm']:
+                            long_trend_disqualified = True
+                            disqualification_reasons.append(f"Price breaking out of tight Bollinger Band (width in lowest {width_percentile:.1f}%)")
+                        else:
+                            short_trend_disqualified = True
+                            disqualification_reasons.append(f"Price breaking out of tight Bollinger Band (width in lowest {width_percentile:.1f}%)")
     except Exception as e:
-        logger.error(f"Error checking Bollinger Bands: {e}")
+        logger.error(f"Error checking Bollinger Bands: {e}") 
     
     # 자격 박탈 사유가 있다면 로깅
     if disqualification_reasons:
