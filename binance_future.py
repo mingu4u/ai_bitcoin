@@ -3224,9 +3224,11 @@ class TradingDecision(BaseModel):
     pl_ratio: float
 
 
+
+
 def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     """
-    Evaluate trend strength using much stricter rule-based criteria
+    Evaluate trend strength using much stricter rule-based criteria with improved breakout detection
     
     Args:
         df_5min: 5-minute OHLCV DataFrame with indicators
@@ -3359,14 +3361,118 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     except Exception as e:
         logger.error(f"Error checking trend duration: {e}")
     
-    # 4. 볼린저 밴드 상/하단 초과 체크 - 변동성 기반 접근법
+    # 4. 볼린저 밴드 상/하단 초과 체크 - 최근 캔들 대비 상대적 변화 기반 돌파 감지
     try:
         if 'bb_bbh' in latest_5min and 'bb_bbl' in latest_5min and 'bb_bbm' in latest_5min:
             # 전체 밴드 폭 계산 (상단 - 하단)
             band_width = latest_5min['bb_bbh'] - latest_5min['bb_bbl']
             
-            # 밴드 폭의 일정 비율을 계산 (표준편차의 약 0.15배)
-            # 볼린저 밴드는 표준편차에 기반하므로, 이 방식이 고정 비율보다 변동성에 더 적응적
+            # 최근 캔들들의 움직임 패턴 분석 (지난 20개 캔들)
+            candle_analysis_window = min(20, len(df_5min) - 1)
+            
+            # 캔들 움직임 데이터 수집
+            candle_body_sizes = []       # 캔들 몸통 크기
+            candle_ranges = []           # 고가-저가 범위
+            candle_directions = []       # 캔들 방향 (1=상승, -1=하락)
+            close_to_close_changes = []  # 종가 간 변화
+            
+            for i in range(candle_analysis_window):
+                idx = -(i + 1)  # 최신 캔들부터 역순으로
+                
+                # 캔들 몸통 크기 (절대값)
+                body_size = abs(df_5min['close'].iloc[idx] - df_5min['open'].iloc[idx])
+                candle_body_sizes.append(body_size)
+                
+                # 캔들 전체 범위 (고가-저가)
+                candle_range = df_5min['high'].iloc[idx] - df_5min['low'].iloc[idx]
+                candle_ranges.append(candle_range)
+                
+                # 캔들 방향
+                candle_dir = 1 if df_5min['close'].iloc[idx] >= df_5min['open'].iloc[idx] else -1
+                candle_directions.append(candle_dir)
+                
+                # 이전 캔들과의 종가 차이 (첫 번째 캔들 제외)
+                if i > 0:
+                    close_change = df_5min['close'].iloc[idx] - df_5min['close'].iloc[idx+1]
+                    close_to_close_changes.append(close_change)
+            
+            # 최근 캔들들의 통계 계산
+            avg_body_size = sum(candle_body_sizes) / len(candle_body_sizes)
+            avg_range = sum(candle_ranges) / len(candle_ranges)
+            body_size_std = (sum((x - avg_body_size) ** 2 for x in candle_body_sizes) / len(candle_body_sizes)) ** 0.5
+            range_std = (sum((x - avg_range) ** 2 for x in candle_ranges) / len(candle_ranges)) ** 0.5
+            
+            # 최근 캔들들의 볼륨 분석
+            candle_volumes = [df_5min['volume'].iloc[-i-1] for i in range(candle_analysis_window) if 'volume' in df_5min.columns]
+            if candle_volumes:
+                avg_volume = sum(candle_volumes) / len(candle_volumes)
+                volume_std = (sum((x - avg_volume) ** 2 for x in candle_volumes) / len(candle_volumes)) ** 0.5
+            else:
+                avg_volume = 0
+                volume_std = 0
+                
+            # 최근 3개 캔들 분석
+            recent_bodies = candle_body_sizes[:3]
+            recent_ranges = candle_ranges[:3]
+            recent_directions = candle_directions[:3]
+            recent_volumes = candle_volumes[:3] if candle_volumes else []
+            
+            # 돌파 판단 로직 - 상대적 변화 기반
+            is_breakout = False
+            breakout_direction = 0  # 0=없음, 1=상향, -1=하향
+            breakout_reasons = []
+            
+            # 1. 최근 캔들이 평균보다 현저히 큰지 확인 (표준편차 이용)
+            if recent_bodies[0] > avg_body_size + 1.5 * body_size_std:
+                breakout_reasons.append(f"Recent candle body size ({recent_bodies[0]:.2f}) significantly larger than average ({avg_body_size:.2f} + {1.5 * body_size_std:.2f})")
+                
+            # 2. 최근 3개 캔들의 방향성 확인
+            recent_direction_sum = sum(recent_directions)
+            if abs(recent_direction_sum) >= 2:  # 3개 중 최소 2개 이상이 같은 방향
+                direction_str = "bullish" if recent_direction_sum > 0 else "bearish"
+                breakout_reasons.append(f"Consistent {direction_str} direction in recent candles")
+                breakout_direction = 1 if recent_direction_sum > 0 else -1
+            
+            # 3. 최근 종가 간 변화가 평균보다 큰지 확인
+            if close_to_close_changes:
+                avg_close_change = sum(abs(x) for x in close_to_close_changes) / len(close_to_close_changes)
+                recent_close_change = abs(df_5min['close'].iloc[-1] - df_5min['close'].iloc[-2])
+                
+                if recent_close_change > avg_close_change * 2:
+                    breakout_reasons.append(f"Recent close-to-close change ({recent_close_change:.2f}) much larger than average ({avg_close_change:.2f})")
+            
+            # 4. 볼륨 증가 확인
+            if recent_volumes:
+                recent_volume = recent_volumes[0]
+                if recent_volume > avg_volume + 1.5 * volume_std:
+                    breakout_reasons.append(f"Recent volume ({recent_volume:.2f}) significantly higher than average ({avg_volume:.2f} + {1.5 * volume_std:.2f})")
+            
+            # 5. 볼린저 밴드 확장/수축 확인
+            recent_band_widths = []
+            for i in range(min(10, len(df_5min))):
+                idx = -i - 1
+                if idx >= -len(df_5min) and 'bb_bbh' in df_5min.iloc[idx] and 'bb_bbl' in df_5min.iloc[idx]:
+                    width = df_5min.iloc[idx]['bb_bbh'] - df_5min.iloc[idx]['bb_bbl']
+                    recent_band_widths.append(width)
+            
+            if len(recent_band_widths) >= 5:
+                # 밴드 폭 변화 계산 (현재 vs 5캔들 전)
+                band_width_change_ratio = recent_band_widths[0] / recent_band_widths[4]
+                
+                if band_width_change_ratio > 1.2:  # 20% 이상 확장
+                    breakout_reasons.append(f"Bollinger Bands expanding ({(band_width_change_ratio-1)*100:.1f}% increase)")
+                elif band_width_change_ratio < 0.85:  # 15% 이상 수축
+                    # 밴드 중앙선에서 거리 확인
+                    middle_to_price_ratio = abs(current_price - latest_5min['bb_bbm']) / band_width
+                    if middle_to_price_ratio > 0.4:  # 중앙선에서 밴드 폭의 40% 이상 떨어짐
+                        breakout_reasons.append(f"Potential squeeze breakout (bands contracting, price moved away from middle)")
+            
+            # 최소 2개 이상의 이유가 있고, 방향성이 일치하면 돌파로 판단
+            if len(breakout_reasons) >= 2 and breakout_direction != 0:
+                is_breakout = True
+                logger.info(f"Breakout detected ({breakout_direction > 0 and 'bullish' or 'bearish'}) for reasons: {', '.join(breakout_reasons)}")
+            
+            # 밴드 폭의 일정 비율을 계산
             threshold_distance = band_width * 0.15
             
             # 상단 밴드와의 거리
@@ -3374,51 +3480,50 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
             # 하단 밴드와의 거리
             distance_to_lower = current_price - latest_5min['bb_bbl']
             
-            # 상단 밴드 근처 체크 (밴드 폭의 15% 이내)
+            # 횡보와 돌파를 구분하여 판단
             if distance_to_upper <= threshold_distance or current_price > latest_5min['bb_bbh']:
-                long_trend_disqualified = True
-                if current_price > latest_5min['bb_bbh']:
-                    disqualification_reasons.append(f"Price above upper Bollinger Band ({current_price:.2f} > {latest_5min['bb_bbh']:.2f})")
-                else:
-                    percent_to_upper = (distance_to_upper / band_width) * 100
-                    disqualification_reasons.append(f"Price near upper Bollinger Band ({percent_to_upper:.2f}% from top)")
-            
-            # 하단 밴드 근처 체크 (밴드 폭의 15% 이내)
-            if distance_to_lower <= threshold_distance or current_price < latest_5min['bb_bbl']:
-                short_trend_disqualified = True
-                if current_price < latest_5min['bb_bbl']:
-                    disqualification_reasons.append(f"Price below lower Bollinger Band ({current_price:.2f} < {latest_5min['bb_bbl']:.2f})")
-                else:
-                    percent_to_lower = (distance_to_lower / band_width) * 100
-                    disqualification_reasons.append(f"Price near lower Bollinger Band ({percent_to_lower:.2f}% from bottom)")
-            
-            # 추가 체크: 볼린저 밴드 폭이 비정상적으로 좁은 상태에서의 돌파 (스퀴즈 후 확장 신호)
-            # 20개 캔들 중 현재 밴드 폭이 하위 10% 이내인 경우
-            recent_band_widths = []
-            for i in range(min(20, len(df_5min))):
-                idx = -i - 1
-                if idx >= -len(df_5min) and 'bb_bbh' in df_5min.iloc[idx] and 'bb_bbl' in df_5min.iloc[idx]:
-                    width = df_5min.iloc[idx]['bb_bbh'] - df_5min.iloc[idx]['bb_bbl']
-                    recent_band_widths.append(width)
-            
-            if recent_band_widths:
-                current_band_width = recent_band_widths[0]
-                sorted_widths = sorted(recent_band_widths)
-                width_percentile = sorted_widths.index(current_band_width) / len(sorted_widths) * 100
-                
-                # 밴드 폭이 좁아진 상태에서 돌파 위험 (폭이 하위 20% 이내)
-                if width_percentile < 20:
-                    # 밴드 중앙선에서 거리가 밴드 폭의 40% 이상이면 위험
-                    middle_to_price = abs(current_price - latest_5min['bb_bbm'])
-                    if middle_to_price > band_width * 0.4:
-                        if current_price > latest_5min['bb_bbm']:
+                # 돌파로 판단되면 롱 포지션 진입 금지 해제
+                if is_breakout and breakout_direction > 0:  # 상향 돌파
+                    if current_price > latest_5min['bb_bbh']:
+                        logger.info("Price above upper Bollinger Band but considered valid bullish breakout")
+                        # 돌파로 인정하지만, 밴드 폭의 일정 비율 이상 벗어난 경우는 여전히 위험
+                        excessive_ratio = (current_price - latest_5min['bb_bbh']) / band_width
+                        if excessive_ratio > 0.5:  # 밴드 폭의 50% 이상 초과
                             long_trend_disqualified = True
-                            disqualification_reasons.append(f"Price breaking out of tight Bollinger Band (width in lowest {width_percentile:.1f}%)")
-                        else:
+                            disqualification_reasons.append(f"Price excessively above upper Bollinger Band ({excessive_ratio:.2f} band widths)")
+                    else:
+                        logger.info("Price near upper Bollinger Band with valid bullish breakout signals")
+                else:
+                    # 돌파가 아닌 경우 (횡보) - 기존 로직 적용
+                    long_trend_disqualified = True
+                    if current_price > latest_5min['bb_bbh']:
+                        disqualification_reasons.append(f"Price above upper Bollinger Band without breakout signals")
+                    else:
+                        percent_to_upper = (distance_to_upper / band_width) * 100
+                        disqualification_reasons.append(f"Price near upper Bollinger Band ({percent_to_upper:.2f}% from top) without breakout signals")
+            
+            if distance_to_lower <= threshold_distance or current_price < latest_5min['bb_bbl']:
+                # 돌파로 판단되면 숏 포지션 진입 금지 해제
+                if is_breakout and breakout_direction < 0:  # 하향 돌파
+                    if current_price < latest_5min['bb_bbl']:
+                        logger.info("Price below lower Bollinger Band but considered valid bearish breakout")
+                        # 돌파로 인정하지만, 밴드 폭의 일정 비율 이상 벗어난 경우는 여전히 위험
+                        excessive_ratio = (latest_5min['bb_bbl'] - current_price) / band_width
+                        if excessive_ratio > 0.5:  # 밴드 폭의 50% 이상 초과
                             short_trend_disqualified = True
-                            disqualification_reasons.append(f"Price breaking out of tight Bollinger Band (width in lowest {width_percentile:.1f}%)")
+                            disqualification_reasons.append(f"Price excessively below lower Bollinger Band ({excessive_ratio:.2f} band widths)")
+                    else:
+                        logger.info("Price near lower Bollinger Band with valid bearish breakout signals")
+                else:
+                    # 돌파가 아닌 경우 (횡보) - 기존 로직 적용
+                    short_trend_disqualified = True
+                    if current_price < latest_5min['bb_bbl']:
+                        disqualification_reasons.append(f"Price below lower Bollinger Band without breakout signals")
+                    else:
+                        percent_to_lower = (distance_to_lower / band_width) * 100
+                        disqualification_reasons.append(f"Price near lower Bollinger Band ({percent_to_lower:.2f}% from bottom) without breakout signals")
     except Exception as e:
-        logger.error(f"Error checking Bollinger Bands: {e}") 
+        logger.error(f"Error checking Bollinger Bands with relative change breakout logic: {e}")
     
     # 자격 박탈 사유가 있다면 로깅
     if disqualification_reasons:
@@ -4052,6 +4157,45 @@ def ai_trading():
     except Exception as e:
         logger.error(f"Error assessing market overheating: {e}")
 
+    # 추가: 진입 조건 검증 함수
+    def verify_entry_conditions(signals_data, trend_strength_result, decision, current_position_side):
+        # 롱 포지션 진입 조건 검증
+        if decision == "buy" and current_position_side is None:
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 10
+            utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 10
+            volume_valid = signals_data.get("VolumeOsc_Current", -999) > 0
+            trend_valid = trend_strength_result.get("long_trend_strong", False)
+            
+            # 모든 조건이 충족되는지 확인
+            all_conditions_met = blackflag_valid and utbot_valid and volume_valid and trend_valid
+            
+            if not all_conditions_met:
+                logger.warning(f"롱 진입 조건 검증 실패: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}")
+            
+            return all_conditions_met
+        
+        # 숏 포지션 진입 조건 검증
+        elif decision == "sell" and current_position_side is None:
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 10
+            utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 10
+            volume_valid = signals_data.get("VolumeOsc_Current", -999) > 0
+            trend_valid = trend_strength_result.get("short_trend_strong", False)
+            
+            # 모든 조건이 충족되는지 확인
+            all_conditions_met = blackflag_valid and utbot_valid and volume_valid and trend_valid
+            
+            if not all_conditions_met:
+                logger.warning(f"숏 진입 조건 검증 실패: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}")
+            
+            return all_conditions_met
+        
+        # 포지션 청산(exit) 조건은 이미 should_exit 변수로 검증됨
+        elif (decision == "sell" and current_position_side == "long") or (decision == "buy" and current_position_side == "short"):
+            return True
+        
+        # 다른 모든 경우 (e.g., "hold")
+        return True
+
     ### AI Decision Making
     try:
         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -4288,6 +4432,15 @@ When in doubt, preserve capital - "hold" is often the safest decision. All key i
             except Exception as e:
                 logger.error(f"Error parsing AI response: {e}")
                 return
+
+            # 여기에 추가: 진입 조건 검증
+            if not verify_entry_conditions(signals_data, trend_strength_result, result.decision, position_side):
+                logger.warning(f"AI 결정 '{result.decision}'이 모든 진입 조건을 충족하지 않음. 'hold'로 변경됩니다.")
+                original_decision = result.decision
+                original_reason = result.reason
+                result.decision = "hold"
+                result.percentage = 0
+                result.reason = f"Entry conditions not fully met for {original_decision} - HOLD for capital preservation. Original reason: {original_reason}"
 
             logger.info(f"### AI Decision: {result.decision.upper()} ###")
             logger.info(f"### Reason: {result.reason} ###")
