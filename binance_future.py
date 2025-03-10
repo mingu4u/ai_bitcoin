@@ -1204,28 +1204,30 @@ class BinanceFuturesTrader:
                 sl_price = current_price * 1.002  # 0.2% 위로 설정
 
         return tp_price, sl_price  
-
+    
     def get_active_ai_positions(self):
-        """현재 활성화된 모든 AI 포지션 ID 조회"""
+        """현재 활성화된 AI 포지션 ID만 조회"""
         try:
             with sqlite3.connect('bitcoin_trades.db') as conn:
                 c = conn.cursor()
+                # 가장 최근의 진입 거래만 유효하게 고려하고, 이후 청산된 기록이 없는 것만 선택
                 c.execute("""
-                    SELECT order_id, decision 
-                    FROM trades 
-                    WHERE trade_type = 'AI' 
-                    AND decision != 'hold'
-                    AND timestamp >= (
-                        SELECT COALESCE(
-                            (SELECT timestamp 
-                            FROM trades 
-                            WHERE reason LIKE '%Close%' 
-                            ORDER BY timestamp DESC 
-                            LIMIT 1),
-                            '1970-01-01'  -- 청산 기록이 없는 경우 가장 오래된 날짜 사용
-                        )
+                    WITH latest_entry AS (
+                        SELECT order_id, decision, MAX(timestamp) as entry_time
+                        FROM trades 
+                        WHERE trade_type = 'AI' 
+                        AND decision IN ('buy', 'sell')
+                        GROUP BY decision
                     )
-                    ORDER BY timestamp DESC
+                    SELECT le.order_id, le.decision 
+                    FROM latest_entry le
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM trades 
+                        WHERE reason LIKE '%Close%' 
+                        AND timestamp > le.entry_time
+                    )
+                    ORDER BY entry_time DESC
+                    LIMIT 1
                 """)
                 return c.fetchall()
         except Exception as e:
