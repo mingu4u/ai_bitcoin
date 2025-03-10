@@ -3224,15 +3224,15 @@ class TradingDecision(BaseModel):
     pl_ratio: float
 
 
-def assess_trend_strength(df_5min, df_hourly, df_4h, current_price):
+def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     """
     Evaluate trend strength using much stricter rule-based criteria
     
     Args:
         df_5min: 5-minute OHLCV DataFrame with indicators
         df_hourly: 1-hour OHLCV DataFrame with indicators
-        df_4h: 4-hour OHLCV DataFrame with indicators
         current_price: Current BTC price
+        df_4h: 4-hour OHLCV DataFrame with indicators (optional)
         
     Returns:
         dict: Simple boolean results for long and short trend strength
@@ -3790,7 +3790,6 @@ def assess_exit_signals(df_5min, signals_data, position_side):
     return result
 
 
-
 ### 메인 AI 트레이딩 로직
 def ai_trading():
     """Main AI trading function with pre-calculated trend strength and exit signals"""
@@ -3933,7 +3932,7 @@ def ai_trading():
         
     # 1. Assess trend strength (TREND STRENGTH CHECK)
     try:
-        trend_strength_result = assess_trend_strength(df_5min, df_hourly, current_price)
+        trend_strength_result = assess_trend_strength(df_5min, df_hourly, current_price, df_4h)
         if isinstance(trend_strength_result, dict):
             long_trend_strong = trend_strength_result.get("long_trend_strong", False)
             short_trend_strong = trend_strength_result.get("short_trend_strong", False)
