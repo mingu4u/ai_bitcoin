@@ -493,8 +493,8 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
             self.signals["BlackFlag"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 15캔들 이상 지난 신호는 None 처리
-            if self.signals["BlackFlag"]["candles_ago"] > 15:
+            # 20캔들 이상 지난 신호는 None 처리 (15->20 변경)
+            if self.signals["BlackFlag"]["candles_ago"] > 20:
                 self.signals["BlackFlag"] = {
                     "signal": None,
                     "candles_ago": None,
@@ -507,13 +507,13 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["UTBot"]["timestamp"])
             self.signals["UTBot"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 15캔들 이상 지난 신호는 None 처리
-            if self.signals["UTBot"]["candles_ago"] > 15:
+            # 20캔들 이상 지난 신호는 None 처리 (15->20 변경)
+            if self.signals["UTBot"]["candles_ago"] > 20:
                 self.signals["UTBot"] = {
                     "signal": None,
                     "candles_ago": None,
                     "timestamp": None
-                }
+                } 
     
     def _calculate_candles_ago(self, signal_time, current_time):
         """
@@ -4486,11 +4486,42 @@ def ai_trading():
 
     # 추가: 진입 조건 검증 함수
     # 수정: Volume Oscillator 조건 완화
-    def verify_entry_conditions(signals_data, trend_strength_result, decision, current_position_side):
+    def verify_entry_conditions(signals_data, trend_strength_result, decision, current_position_side, df_5min, entry_price):
+        """
+        진입 조건 검증 함수 - 수정된 버전
+        
+        Args:
+            signals_data: 트레이딩 신호 데이터
+            trend_strength_result: 트렌드 강도 분석 결과
+            decision: AI 결정 ('buy', 'sell', 'hold')
+            current_position_side: 현재 포지션 방향 ('long', 'short', None)
+            df_5min: 5분 캔들 데이터프레임
+            entry_price: 현재 가격
+        
+        Returns:
+            bool: 진입 조건 충족 여부
+        """
         # 롱 포지션 진입 조건 검증
         if decision == "buy" and current_position_side is None:
-            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 10
-            utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 10
+            # 신호 유효성 확인 (캔들 수 20으로 확장)
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 20
+            utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 20
+            
+            # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
+            price_change_pct = 0
+            signal_price = None
+            
+            # 첫 번째 신호 찾기
+            first_signal_candles_ago = min(
+                signals_data.get("BlackFlag_CandlesAgo", 999) if signals_data.get("BlackFlag_Signal") == "Buy" else 999,
+                signals_data.get("UTBot_CandlesAgo", 999) if signals_data.get("UTBot_Signal") == "Buy" else 999
+            )
+            
+            # 유효한 첫 신호가 있으면 가격 변화 계산
+            if first_signal_candles_ago < 999 and first_signal_candles_ago < len(df_5min):
+                idx = -1 - first_signal_candles_ago  # 신호가 발생한 캔들의 인덱스
+                signal_price = df_5min['close'].iloc[idx]
+                price_change_pct = (entry_price - signal_price) / signal_price * 100
             
             # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
             strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("long_trend_strong", False)
@@ -4500,18 +4531,41 @@ def ai_trading():
             
             trend_valid = trend_strength_result.get("long_trend_strong", False)
             
-            # 모든 조건이 충족되는지 확인 - Volume 조건이 완화됨
-            all_conditions_met = blackflag_valid and utbot_valid and volume_valid and trend_valid
+            # 가격 변화 조건 (1% 이상 상승하면 진입하지 않음)
+            price_valid = price_change_pct < 1.0
+            
+            # 추가 로깅
+            logger.info(f"롱 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}")
+            
+            # 모든 조건이 충족되는지 확인
+            all_conditions_met = blackflag_valid and utbot_valid and volume_valid and trend_valid and price_valid
             
             if not all_conditions_met:
-                logger.warning(f"롱 진입 조건 검증 실패: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}")
+                logger.warning(f"롱 진입 조건 검증 실패: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}")
             
             return all_conditions_met
         
         # 숏 포지션 진입 조건 검증
         elif decision == "sell" and current_position_side is None:
-            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 10
-            utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 10
+            # 신호 유효성 확인 (캔들 수 20으로 확장)
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 20
+            utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 20
+            
+            # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
+            price_change_pct = 0
+            signal_price = None
+            
+            # 첫 번째 신호 찾기
+            first_signal_candles_ago = min(
+                signals_data.get("BlackFlag_CandlesAgo", 999) if signals_data.get("BlackFlag_Signal") == "Sell" else 999,
+                signals_data.get("UTBot_CandlesAgo", 999) if signals_data.get("UTBot_Signal") == "Sell" else 999
+            )
+            
+            # 유효한 첫 신호가 있으면 가격 변화 계산
+            if first_signal_candles_ago < 999 and first_signal_candles_ago < len(df_5min):
+                idx = -1 - first_signal_candles_ago  # 신호가 발생한 캔들의 인덱스
+                signal_price = df_5min['close'].iloc[idx]
+                price_change_pct = (signal_price - entry_price) / signal_price * 100
             
             # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
             strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("short_trend_strong", False)
@@ -4521,11 +4575,17 @@ def ai_trading():
             
             trend_valid = trend_strength_result.get("short_trend_strong", False)
             
-            # 모든 조건이 충족되는지 확인 - Volume 조건이 완화됨
-            all_conditions_met = blackflag_valid and utbot_valid and volume_valid and trend_valid
+            # 가격 변화 조건 (1% 이상 하락하면 진입하지 않음)
+            price_valid = price_change_pct < 1.0
+            
+            # 추가 로깅
+            logger.info(f"숏 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}")
+            
+            # 모든 조건이 충족되는지 확인
+            all_conditions_met = blackflag_valid and utbot_valid and volume_valid and trend_valid and price_valid
             
             if not all_conditions_met:
-                logger.warning(f"숏 진입 조건 검증 실패: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}")
+                logger.warning(f"숏 진입 조건 검증 실패: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}")
             
             return all_conditions_met
         
@@ -4534,7 +4594,9 @@ def ai_trading():
             return True
         
         # 다른 모든 경우 (e.g., "hold")
-        return True  
+        return True   
+            
+        
 
     ### AI Decision Making
     try:
@@ -4674,14 +4736,14 @@ The data below must be considered in your analysis.
 For a valid PRIMARY entry, ALL of the following must be true:
 
 **For Long Entry:**  
-1. BlackFlag FTS: Must show a BUY signal within the last 10 candles
-2. UT Bot Alerts: Must display a BUY alert within the last 10 candles
+1. BlackFlag FTS: Must show a BUY signal within the last 20 candles
+2. UT Bot Alerts: Must display a BUY alert within the last 20 candles
 3. Volume Oscillator: Should generally be POSITIVE, but can be moderately negative (-10 or higher) if other signals are strong and aligned
 4. Trend Strength: Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"})
 
 **For Short Entry:**  
-1. BlackFlag FTS: Must show a SELL signal within the last 10 candles
-2. UT Bot Alerts: Must display a SELL alert within the last 10 candles
+1. BlackFlag FTS: Must show a SELL signal within the last 20 candles
+2. UT Bot Alerts: Must display a SELL alert within the last 20 candles
 3. Volume Oscillator: Should generally be POSITIVE, but can be moderately negative (-10 or higher) if other signals are strong and aligned
 4. Trend Strength: Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"})
 
@@ -4774,7 +4836,8 @@ When in doubt, preserve capital - "hold" is often the safest decision. All key i
                 return
 
             # 여기에 추가: 진입 조건 검증
-            if not verify_entry_conditions(signals_data, trend_strength_result, result.decision, position_side):
+            # ai_trading 함수 내 verify_entry_conditions 호출 부분 변경
+            if not verify_entry_conditions(signals_data, trend_strength_result, result.decision, position_side, df_5min, current_price):
                 logger.warning(f"AI 결정 '{result.decision}'이 모든 진입 조건을 충족하지 않음. 'hold'로 변경됩니다.")
                 original_decision = result.decision
                 original_reason = result.reason
