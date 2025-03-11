@@ -3764,18 +3764,18 @@ def assess_exit_signals(df_5min, signals_data, position_side):
         if volume_osc_current is not None and isinstance(volume_osc_history, list) and len(volume_osc_history) >= 3:
             for i in range(min(5, len(volume_osc_history))):  # 최근 5개만 확인
                 idx = len(volume_osc_history) - 1 - i
-                if idx >= 0 and volume_osc_history[idx] is not None and float(volume_osc_history[idx]) < -5:
+                if idx >= 0 and volume_osc_history[idx] is not None and float(volume_osc_history[idx]) < -20:
                     consecutive_negative += 1
                 else:
                     break  # 연속성이 깨지면 중단
                     
-        # 3개 이상 연속으로 상당히 음수(-5 미만)인 경우에만 유효한 종료 신호로 간주
+        # 3개 이상 연속으로 상당히 음수(-20 미만)인 경우에만 유효한 종료 신호로 간주
         if consecutive_negative >= 3:
-            exit_signals.append(f"Volume Oscillator consistently negative (below -5) for {consecutive_negative} consecutive candles")
+            exit_signals.append(f"Volume Oscillator consistently negative (below -20) for {consecutive_negative} consecutive candles")
             exit_signal_weights.append(0.7)  # 중간-높은 가중치
-        # 현재 값이 매우 낮은 경우 (-15 미만)는 즉시 경고
-        elif volume_osc_current is not None and float(volume_osc_current) < -15:
-            exit_signals.append(f"Volume Oscillator severely negative (below -15): {volume_osc_current}")
+        # 현재 값이 매우 낮은 경우 (-30 미만)는 즉시 경고
+        elif volume_osc_current is not None and float(volume_osc_current) < -30:
+            exit_signals.append(f"Volume Oscillator severely negative (below -30): {volume_osc_current}")
             exit_signal_weights.append(0.6)  # 중간 가중치
     except Exception as e:
         logger.error(f"Error checking Volume Oscillator: {e}")
