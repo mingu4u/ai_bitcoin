@@ -3824,9 +3824,9 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
         except Exception as e:
             logger.error(f"Error in multi-timeframe alignment check: {e}")
     
-    # Final assessment: require only 2 criteria for Bitcoin (reduced from 3)
-    long_trend_is_strong = (not long_trend_disqualified) and (len(long_criteria) >= 2)
-    short_trend_is_strong = (not short_trend_disqualified) and (len(short_criteria) >= 2)
+    # Final assessment: require 3 criteria for Bitcoin 
+    long_trend_is_strong = (not long_trend_disqualified) and (len(long_criteria) >= 3)
+    short_trend_is_strong = (not short_trend_disqualified) and (len(short_criteria) >= 3)
     
     result = {
         "long_trend_strong": long_trend_is_strong,
