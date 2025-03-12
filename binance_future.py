@@ -3227,23 +3227,23 @@ class TradingDecision(BaseModel):
 
 def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     """
-    빠른 트렌드 감지가 가능하도록 개선된 트렌드 강도 평가 함수
+    비트코인의 특성에 맞게 개선된 트렌드 강도 평가 함수
     
     Args:
-        df_5min: 5분 OHLCV 데이터프레임 (기술적 지표 포함)
-        df_hourly: 1시간 OHLCV 데이터프레임 (기술적 지표 포함)
+        df_5min: 5분 OHLCV 데이터프레임 (지표 포함)
+        df_hourly: 1시간 OHLCV 데이터프레임 (지표 포함)
         current_price: 현재 BTC 가격
-        df_4h: 4시간 OHLCV 데이터프레임 (기술적 지표 포함, 선택적)
+        df_4h: 4시간 OHLCV 데이터프레임 (지표 포함, 선택사항)
         
     Returns:
-        dict: 롱/숏 트렌드 강도 결과 및 상세 지표
+        dict: 롱/숏 트렌드 강도 평가 결과
     """
     # 최신 지표 값 가져오기
     latest_5min = df_5min.iloc[-1]
     latest_hourly = df_hourly.iloc[-1]
     latest_4h = df_4h.iloc[-1] if df_4h is not None else None
     
-    # 기준 체크 결과 초기화
+    # 평가 기준 결과 초기화
     long_criteria = []
     short_criteria = []
     
@@ -3252,138 +3252,134 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     short_trend_disqualified = False
     disqualification_reasons = []
     
-    # ======== 개선 1: 극단적 가격 레벨 체크 완화 ========
+    # 1. 극단적인 가격 레벨 확인 - 비트코인의 높은 변동성에 맞게 수정
     try:
-        # 1시간 차트 극단치 체크
+        # 1시간 차트 극단 확인
         hourly_high = df_hourly['high'].max()
         hourly_low = df_hourly['low'].min()
         hourly_range = hourly_high - hourly_low
         
-        # 상단 극단치 체크 (상위 2%로 완화, 이전 3%)
-        if (hourly_high - current_price) / hourly_range < 0.02:
-            # 상승 모멘텀 확인
-            recent_candles = df_5min.iloc[-3:].copy()
-            bullish_momentum = sum(1 for i in range(len(recent_candles)) if recent_candles['close'].iloc[i] > recent_candles['open'].iloc[i])
-            
-            # 최소 1개 이상의 상승 캔들이면 허용 (이전엔 2개 필요)
-            if bullish_momentum < 1:
-                long_trend_disqualified = True
-                disqualification_reasons.append(f"Price near hourly high without momentum ({((hourly_high - current_price) / hourly_range * 100):.2f}% from top)")
+        # 상단 극단 확인 (신규: 볼린저 밴드와 연계)
+        if ('bb_bbh' in latest_hourly and 
+            current_price > latest_hourly['bb_bbh'] * 1.005 and 
+            latest_hourly['rsi'] > 75):
+            long_trend_disqualified = True
+            disqualification_reasons.append(f"가격이 1시간 상단 밴드를 5% 이상 돌파 & RSI > 75")
         
-        # 하단 극단치 체크 (하위 2%로 완화, 이전 3%)
-        if (current_price - hourly_low) / hourly_range < 0.02:
-            # 하락 모멘텀 확인
-            recent_candles = df_5min.iloc[-3:].copy()
-            bearish_momentum = sum(1 for i in range(len(recent_candles)) if recent_candles['close'].iloc[i] < recent_candles['open'].iloc[i])
-            
-            # 최소 1개 이상의 하락 캔들이면 허용 (이전엔 2개 필요)
-            if bearish_momentum < 1:
-                short_trend_disqualified = True
-                disqualification_reasons.append(f"Price near hourly low without momentum ({((current_price - hourly_low) / hourly_range * 100):.2f}% from bottom)")
+        # 하단 극단 확인 (신규: 볼린저 밴드와 연계)
+        if ('bb_bbl' in latest_hourly and 
+            current_price < latest_hourly['bb_bbl'] * 0.995 and 
+            latest_hourly['rsi'] < 25):
+            short_trend_disqualified = True
+            disqualification_reasons.append(f"가격이 1시간 하단 밴드를 5% 이상 하회 & RSI < 25")
         
-        # 4시간 차트 극단치 체크 (옵션)
+        # 4시간 차트 극단 확인 - 비트코인의 상승 경향을 고려하여 비대칭 적용
         if df_4h is not None:
             four_hour_high = df_4h['high'].max()
             four_hour_low = df_4h['low'].min()
             four_hour_range = four_hour_high - four_hour_low
             
-            # 상단 극단치 체크 (상위 7%로 완화, 이전 5%)
-            if (four_hour_high - current_price) / four_hour_range < 0.07:
-                # RSI가 정말 과매수인 경우만 제한 (75→80)
-                if latest_hourly['rsi'] > 80:
-                    long_trend_disqualified = True
-                    disqualification_reasons.append(f"Price near 4h high with extreme RSI ({((four_hour_high - current_price) / four_hour_range * 100):.2f}% from top)")
+            # 상단 극단 확인 (상단 기준 7% - 비트코인의 상승 잠재력 감안)
+            if ('bb_bbh' in latest_4h and 
+                current_price > latest_4h['bb_bbh'] * 1.01 and
+                latest_4h['rsi'] > 78):
+                long_trend_disqualified = True
+                disqualification_reasons.append(f"가격이 4시간 상단 밴드를 1% 이상 돌파 & RSI > 78")
             
-            # 하단 극단치 체크 (하위 7%로 완화, 이전 5%)
-            if (current_price - four_hour_low) / four_hour_range < 0.07:
-                # RSI가 정말 과매도인 경우만 제한 (25→20)
-                if latest_hourly['rsi'] < 20:
-                    short_trend_disqualified = True
-                    disqualification_reasons.append(f"Price near 4h low with extreme RSI ({((current_price - four_hour_low) / four_hour_range * 100):.2f}% from bottom)")
+            # 하단 극단 확인 (하단 기준 5% - 비트코인의 더 급격한 하락 특성 반영)
+            if ('bb_bbl' in latest_4h and 
+                current_price < latest_4h['bb_bbl'] * 0.99 and
+                latest_4h['rsi'] < 22):
+                short_trend_disqualified = True
+                disqualification_reasons.append(f"가격이 4시간 하단 밴드를 1% 이상 하회 & RSI < 22")
     except Exception as e:
-        logger.error(f"Error checking price extremes: {e}")
+        logger.error(f"가격 극단치 확인 중 오류: {e}")
     
-    # ======== 개선 2: RSI 과매수/과매도 기준 완화 ========
+    # 2. RSI 과매수/과매도 확인 - 비트코인의 극단적 움직임을 허용하도록 수정
     try:
-        # 1시간 RSI 체크
+        # 1시간 RSI 확인 (컨텍스트 고려)
         hourly_rsi = latest_hourly['rsi']
         
-        # 과매수 체크 (75→80으로 상향 조정)
-        if hourly_rsi > 80:
-            # RSI가 계속 상승 중인지 확인
+        # 과매수 확인 (RSI > 78, 이전 70에서 상향)
+        if hourly_rsi > 78:
+            # 상승 모멘텀 확인 (제시된 데이터에서 강한 상승 경향 반영)
             if len(df_hourly) > 2:
                 rsi_diff = hourly_rsi - df_hourly['rsi'].iloc[-2]
-                # RSI가 약해지는 경우만 제한
-                if rsi_diff < 0.5:  # 이전 1.0에서 0.5로 완화
+                # RSI가 약해질 때만 비적격으로 처리 (중요: 3으로 증가, 이전 1에서 상향)
+                if rsi_diff < 3.0:
                     long_trend_disqualified = True
-                    disqualification_reasons.append(f"Hourly RSI extremely overbought and weakening ({hourly_rsi:.2f}, change: {rsi_diff:.2f})")
+                    disqualification_reasons.append(f"1시간 RSI 과매수 및 약화 ({hourly_rsi:.2f}, 변화: {rsi_diff:.2f})")
         
-        # 과매도 체크 (25→20으로 하향 조정)
-        if hourly_rsi < 20:
-            # RSI가 계속 하락 중인지 확인
+        # 과매도 확인 (RSI < 22, 이전 25에서 하향)
+        if hourly_rsi < 22:
+            # 하락 모멘텀 확인
             if len(df_hourly) > 2:
                 rsi_diff = hourly_rsi - df_hourly['rsi'].iloc[-2]
-                # RSI가 강해지는 경우만 제한
-                if rsi_diff > -0.5:  # 이전 -1.0에서 -0.5로 완화
+                # RSI가 강해질 때만 비적격으로 처리 (중요: -3으로 감소, 이전 -1에서 하향)
+                if rsi_diff > -3.0:
                     short_trend_disqualified = True
-                    disqualification_reasons.append(f"Hourly RSI extremely oversold and strengthening ({hourly_rsi:.2f}, change: {rsi_diff:.2f})")
+                    disqualification_reasons.append(f"1시간 RSI 과매도 및 강화 ({hourly_rsi:.2f}, 변화: {rsi_diff:.2f})")
         
-        # 4시간 RSI 체크
+        # 4시간 RSI 확인 (비트코인의 변동성 고려하여 기준 조정)
         if df_4h is not None and 'rsi' in latest_4h:
             four_hour_rsi = latest_4h['rsi']
             
-            # 4시간 RSI 과매수 임계값 (80→85로 상향)
-            if four_hour_rsi > 85:
+            # 4시간 RSI 과매수 임계값 증가 (비트코인의 강한 상승 고려)
+            if four_hour_rsi > 80 and four_hour_rsi < df_4h['rsi'].iloc[-2]:
                 long_trend_disqualified = True
-                disqualification_reasons.append(f"4h RSI extremely overbought ({four_hour_rsi:.2f})")
+                disqualification_reasons.append(f"4시간 RSI 강한 과매수 ({four_hour_rsi:.2f}) 및 하락 시작")
             
-            # 4시간 RSI 과매도 임계값 (20→15로 하향)
-            if four_hour_rsi < 15:
+            # 4시간 RSI 과매도 임계값 감소 (급격한 하락 고려)
+            if four_hour_rsi < 20 and four_hour_rsi > df_4h['rsi'].iloc[-2]:
                 short_trend_disqualified = True
-                disqualification_reasons.append(f"4h RSI extremely oversold ({four_hour_rsi:.2f})")
+                disqualification_reasons.append(f"4시간 RSI 강한 과매도 ({four_hour_rsi:.2f}) 및 상승 시작")
     except Exception as e:
-        logger.error(f"Error checking RSI extremes: {e}")
+        logger.error(f"RSI 극단치 확인 중 오류: {e}")
     
-    # ======== 개선 3: 트렌드 지속시간 검사 완화 ========
+    # 3. 연장된 트렌드 지속시간 확인 - 비트코인의 강한 트렌드 인정
     try:
+        # 비트코인 시장의 특성에 맞게 마지막 15개 캔들 분석
         if 'ema_12' in df_5min.columns or 'sma_20' in df_5min.columns:
-            # 30 캔들 검사 (이전 25에서 증가)
-            last_30_candles = df_5min.iloc[-30:].copy()
+            last_15_candles = df_5min.iloc[-15:].copy()
             
             # 비율 계산
-            bullish_count = sum(last_30_candles['close'] > last_30_candles['open'])
-            bearish_count = sum(last_30_candles['close'] < last_30_candles['open'])
+            bullish_count = sum(last_15_candles['close'] > last_15_candles['open'])
+            bearish_count = sum(last_15_candles['close'] < last_15_candles['open'])
             
-            # 임계값 완화 (85%→90%)
-            if bullish_count / 30 >= 0.90:
-                # 볼륨 프로필 확인
-                if 'volume' in df_5min.columns:
+            # 비트코인의 강한 트렌드를 고려하여 기준 상향 (85% → 90%)
+            if bullish_count / 15 >= 0.90:
+                # 볼륨 프로필 확인 - 볼륨이 감소하고 MACD 약화될 때만 비적격으로
+                if 'volume' in df_5min.columns and 'macd' in df_5min.columns:
                     recent_volume = df_5min['volume'].iloc[-3:].mean()
                     avg_volume = df_5min['volume'].iloc[-15:].mean()
-                    # 볼륨 감소가 심한 경우만 제한 (80%→70%)
-                    if recent_volume < avg_volume * 0.7:
+                    macd_diff = df_5min['macd'].iloc[-1] - df_5min['macd'].iloc[-2]
+                    
+                    # 볼륨 감소 + MACD 약화 조합의 경우만 비적격
+                    if recent_volume < avg_volume * 0.7 and macd_diff < 0:
                         long_trend_disqualified = True
-                        disqualification_reasons.append(f"Extended uptrend ({bullish_count}/30 bullish candles) with significantly declining volume")
+                        disqualification_reasons.append(f"연장된 상승 트렌드 ({bullish_count}/15 상승 캔들), 볼륨 감소 및 MACD 약화")
             
-            if bearish_count / 30 >= 0.90:
-                # 볼륨 프로필 확인
-                if 'volume' in df_5min.columns:
+            if bearish_count / 15 >= 0.90:
+                # 볼륨 프로필 확인 - 볼륨이 감소하고 MACD 약화될 때만 비적격으로
+                if 'volume' in df_5min.columns and 'macd' in df_5min.columns:
                     recent_volume = df_5min['volume'].iloc[-3:].mean()
                     avg_volume = df_5min['volume'].iloc[-15:].mean()
-                    # 볼륨 감소가 심한 경우만 제한 (80%→70%)
-                    if recent_volume < avg_volume * 0.7:
+                    macd_diff = df_5min['macd'].iloc[-1] - df_5min['macd'].iloc[-2]
+                    
+                    # 볼륨 감소 + MACD 약화 조합의 경우만 비적격
+                    if recent_volume < avg_volume * 0.7 and macd_diff > 0:
                         short_trend_disqualified = True
-                        disqualification_reasons.append(f"Extended downtrend ({bearish_count}/30 bearish candles) with significantly declining volume")
+                        disqualification_reasons.append(f"연장된 하락 트렌드 ({bearish_count}/15 하락 캔들), 볼륨 감소 및 MACD 약화")
             
-            # 연속 캔들 체크 - 더 관대하게
+            # 연속 캔들 확인 - 비트코인의 보다 강한 트렌드를 허용
             consecutive_bullish = 0
             consecutive_bearish = 0
             max_consecutive_bullish = 0
             max_consecutive_bearish = 0
             
-            for i in range(30):
-                if i < len(last_30_candles):
-                    if last_30_candles['close'].iloc[i] > last_30_candles['open'].iloc[i]:
+            for i in range(15):
+                if i < len(last_15_candles):
+                    if last_15_candles['close'].iloc[i] > last_15_candles['open'].iloc[i]:
                         consecutive_bullish += 1
                         consecutive_bearish = 0
                     else:
@@ -3393,42 +3389,64 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                     max_consecutive_bullish = max(max_consecutive_bullish, consecutive_bullish)
                     max_consecutive_bearish = max(max_consecutive_bearish, consecutive_bearish)
             
-            # 임계값 상향 (10→12)
-            if max_consecutive_bullish >= 12:
+            # 이례적으로 극단적인 연속 캔들만 고려 (12→15로 증가)
+            if max_consecutive_bullish >= 15:
                 long_trend_disqualified = True
-                disqualification_reasons.append(f"Extended consecutive bullish candles ({max_consecutive_bullish})")
+                disqualification_reasons.append(f"15+ 연속 상승 캔들 감지 ({max_consecutive_bullish})")
                 
-            if max_consecutive_bearish >= 12:
+            if max_consecutive_bearish >= 15:
                 short_trend_disqualified = True
-                disqualification_reasons.append(f"Extended consecutive bearish candles ({max_consecutive_bearish})")
+                disqualification_reasons.append(f"15+ 연속 하락 캔들 감지 ({max_consecutive_bearish})")
     except Exception as e:
-        logger.error(f"Error checking trend duration: {e}")
+        logger.error(f"트렌드 지속 시간 확인 중 오류: {e}")
     
-    # ======== 개선 4: 볼린저 밴드 분석 완전 개정 ========
+    # 비적격 사유가 있으면 로깅
+    if disqualification_reasons:
+        logger.info(f"트렌드 비적격 사유: {disqualification_reasons}")
+    
+    # 비트코인 데이터에서 캔들 사이에 강한 이동을 더 잘 감지하기 위한 추가 확인
+    # 캔들 폭 확인 (최근 3개 캔들)
     try:
+        recent_candles = df_5min.tail(3)
+        avg_candle_range = (recent_candles['high'] - recent_candles['low']).mean()
+        latest_candle_range = recent_candles['high'].iloc[-1] - recent_candles['low'].iloc[-1]
+        
+        # 최근 가격 움직임의 속도 확인
+        price_velocity = abs(recent_candles['close'].iloc[-1] - recent_candles['close'].iloc[-3]) / avg_candle_range
+        
+        # 강한 상승 모멘텀 (비트코인의 특성에 맞게 조정)
+        if price_velocity > 1.8 and recent_candles['close'].iloc[-1] > recent_candles['close'].iloc[-3] and recent_candles['close'].iloc[-1] > recent_candles['open'].iloc[-1]:
+            long_criteria.append(True)
+            logger.info(f"강한 상승 모멘텀 감지: 가격 속도 = {price_velocity:.2f} (임계값 1.8)")
+        
+        # 강한 하락 모멘텀 (비트코인의 특성에 맞게 조정)
+        if price_velocity > 1.8 and recent_candles['close'].iloc[-1] < recent_candles['close'].iloc[-3] and recent_candles['close'].iloc[-1] < recent_candles['open'].iloc[-1]:
+            short_criteria.append(True)
+            logger.info(f"강한 하락 모멘텀 감지: 가격 속도 = {price_velocity:.2f} (임계값 1.8)")
+
         if 'bb_bbh' in latest_5min and 'bb_bbl' in latest_5min and 'bb_bbm' in latest_5min:
             # 밴드 폭 및 기타 속성 계산
             band_width = latest_5min['bb_bbh'] - latest_5min['bb_bbl']
             
-            # 최근 캔들 브레이크아웃 패턴 분석
+            # 최근 캔들 분석
             candle_analysis_window = min(20, len(df_5min) - 1)
             
-            # ==== 브레이크아웃 감지 로직 개선 ====
+            # ==== 개선된 브레이크아웃 감지 로직 ====
             
-            # A. 브레이크아웃 분석 데이터 수집
+            # A. 브레이크아웃 분석용 데이터 수집
             candle_body_sizes = []       # 캔들 몸통 크기
             candle_ranges = []           # 고가-저가 범위
             candle_directions = []       # 캔들 방향 (1=상승, -1=하락)
             close_to_close_changes = []  # 종가-종가 변화
             
             for i in range(candle_analysis_window):
-                idx = -(i + 1)  # 최신 캔들 우선
+                idx = -(i + 1)  # 가장 최근 캔들부터
                 
-                # 캔들 몸통 크기 (절대값)
+                # 몸통 크기 (절대값)
                 body_size = abs(df_5min['close'].iloc[idx] - df_5min['open'].iloc[idx])
                 candle_body_sizes.append(body_size)
                 
-                # 캔들 전체 범위 (고가-저가)
+                # 캔들 범위 (고가-저가)
                 candle_range = df_5min['high'].iloc[idx] - df_5min['low'].iloc[idx]
                 candle_ranges.append(candle_range)
                 
@@ -3436,7 +3454,7 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                 candle_dir = 1 if df_5min['close'].iloc[idx] >= df_5min['open'].iloc[idx] else -1
                 candle_directions.append(candle_dir)
                 
-                # 종가 변화 (첫 캔들 제외)
+                # 종가-종가 변화 (첫 캔들 제외)
                 if i > 0:
                     close_change = df_5min['close'].iloc[idx] - df_5min['close'].iloc[idx+1]
                     close_to_close_changes.append(close_change)
@@ -3460,37 +3478,40 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
             recent_directions = candle_directions[:3]
             recent_volumes = candle_volumes[:3] if has_volume_data else []
             
-            # D. 브레이크아웃 판별 로직 - 개선
+            # D. 브레이크아웃 판단 로직 (개선된 컨텍스트)
             is_breakout = False
             breakout_direction = 0  # 0=없음, 1=상승, -1=하락
             breakout_reasons = []
             
-            # 체크 1: 최근 캔들 크기 이상치 (임계값 완화)
-            if recent_bodies[0] > avg_body_size + 1.3 * body_size_std:  # 1.5에서 1.3으로 완화
-                breakout_reasons.append(f"Large recent candle body ({recent_bodies[0]:.2f} vs avg {avg_body_size:.2f})")
+            # 확인 1: 최근 캔들 크기 이상치
+            # 비트코인의 빠른 가격 변화 고려 - 1.5 → 1.3으로 완화
+            if recent_bodies[0] > avg_body_size + 1.3 * body_size_std:
+                breakout_reasons.append(f"이례적으로 큰 최근 캔들 몸통 ({recent_bodies[0]:.2f} vs 평균 {avg_body_size:.2f})")
                 
-            # 체크 2: 방향 일관성
+            # 확인 2: 방향 일관성
             recent_direction_sum = sum(recent_directions)
-            if abs(recent_direction_sum) >= 2:  # 3개 중 최소 2개 캔들이 같은 방향
-                direction_str = "bullish" if recent_direction_sum > 0 else "bearish"
-                breakout_reasons.append(f"Consistent {direction_str} direction in recent candles")
+            if abs(recent_direction_sum) >= 2:  # 최소 3개 중 2개 캔들이 같은 방향
+                direction_str = "상승" if recent_direction_sum > 0 else "하락"
+                breakout_reasons.append(f"최근 캔들에서 일관된 {direction_str} 방향")
                 breakout_direction = 1 if recent_direction_sum > 0 else -1
             
-            # 체크 3: 최근 종가 변화 이상치 (임계값 완화)
+            # 확인 3: 최근 종가 변화 이상치
             if close_to_close_changes:
                 avg_close_change = sum(abs(x) for x in close_to_close_changes) / len(close_to_close_changes)
                 recent_close_change = abs(df_5min['close'].iloc[-1] - df_5min['close'].iloc[-2])
                 
-                if recent_close_change > avg_close_change * 1.6:  # 1.8에서 1.6으로 완화
-                    breakout_reasons.append(f"Large price movement ({recent_close_change:.2f} vs avg {avg_close_change:.2f})")
+                # 비트코인의 급격한 가격 변화 고려 - 1.8 → 1.6으로 완화
+                if recent_close_change > avg_close_change * 1.6:
+                    breakout_reasons.append(f"큰 폭의 가격 이동 ({recent_close_change:.2f} vs 평균 {avg_close_change:.2f})")
             
-            # 체크 4: 볼륨 급증 (임계값 완화)
+            # 확인 4: 볼륨 급증 (데이터 있는 경우)
             if has_volume_data and recent_volumes:
                 recent_volume = recent_volumes[0]
-                if recent_volume > avg_volume + 1.0 * volume_std:  # 1.2에서 1.0으로 완화
-                    breakout_reasons.append(f"Volume surge ({recent_volume:.2f} vs avg {avg_volume:.2f})")
+                # 비트코인의 빠른 거래량 변화 고려 - 1.2 → 1.1로 완화
+                if recent_volume > avg_volume + 1.1 * volume_std:
+                    breakout_reasons.append(f"볼륨 급증 ({recent_volume:.2f} vs 평균 {avg_volume:.2f})")
             
-            # 체크 5: 볼린저 밴드 확장/수축
+            # 확인 5: 볼린저 밴드 확장/수축
             recent_band_widths = []
             for i in range(min(10, len(df_5min))):
                 idx = -i - 1
@@ -3502,23 +3523,27 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                 # 밴드 폭 변화율 계산
                 band_width_change_ratio = recent_band_widths[0] / recent_band_widths[4]
                 
-                if band_width_change_ratio > 1.12:  # 1.15에서 1.12로 완화
-                    breakout_reasons.append(f"Bollinger Band expansion ({(band_width_change_ratio-1)*100:.1f}% increase)")
-                elif band_width_change_ratio < 0.92:  # 0.9에서 0.92로 완화
-                    # 중앙선으로부터 거리
+                # 비트코인의 빠른 밴드 확장 고려 - 1.15 → 1.12로 완화
+                if band_width_change_ratio > 1.12:
+                    breakout_reasons.append(f"볼린저 밴드 확장 ({(band_width_change_ratio-1)*100:.1f}% 증가)")
+                # 비트코인의 빠른 밴드 수축 고려 - 0.9 → 0.92로 완화
+                elif band_width_change_ratio < 0.92:
+                    # 중앙선에서 가격 거리
                     middle_to_price_ratio = abs(current_price - latest_5min['bb_bbm']) / band_width
-                    if middle_to_price_ratio > 0.32:  # 0.35에서 0.32로 완화
-                        breakout_reasons.append(f"Potential squeeze breakout (bands contracting, price moved away from middle)")
+                    # 비트코인의 빠른 밴드 이탈 고려 - 0.35 → 0.32로 완화
+                    if middle_to_price_ratio > 0.32:
+                        breakout_reasons.append(f"잠재적 스퀴즈 브레이크아웃 (밴드 수축 중, 가격이 중앙에서 이탈)")
             
-            # 종합 브레이크아웃 분석 결과
-            if len(breakout_reasons) >= 2 and breakout_direction != 0:
+            # 통합 브레이크아웃 분석 결과
+            # 비트코인의 빠른 브레이크아웃 고려 - 필요 이유 수 2→1로 완화
+            if len(breakout_reasons) >= 1 and breakout_direction != 0:
                 is_breakout = True
-                logger.info(f"Breakout detected ({breakout_direction > 0 and 'bullish' or 'bearish'}) for reasons: {', '.join(breakout_reasons)}")
+                logger.info(f"브레이크아웃 감지 ({breakout_direction > 0 and '상승' or '하락'}) - 이유: {', '.join(breakout_reasons)}")
             
-            # ==== 볼린저 밴드 경계 분석 (경계값 완화) ====
+            # ==== 컨텍스트를 고려한 볼린저 밴드 경계 분석 ====
             
-            # 임계값 계산 - 완화된 버전
-            threshold_distance = band_width * 0.16  # 0.18에서 0.16으로 완화
+            # 거리 임계값 계산 - 비트코인의 높은 변동성 고려
+            threshold_distance = band_width * 0.2  # 0.18 → 0.2로 증가
             
             # 거리 계산
             distance_to_upper = latest_5min['bb_bbh'] - current_price
@@ -3526,258 +3551,249 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
             
             # 상단 밴드 분석
             if distance_to_upper <= threshold_distance or current_price > latest_5min['bb_bbh']:
-                # 유효 브레이크아웃이 감지되면 상단 밴드를 넘어도 허용
+                # 유효한 브레이크아웃이 감지된 경우, 상단 밴드 위에 있어도 비적격으로 처리하지 않음
                 if is_breakout and breakout_direction > 0:  # 상승 브레이크아웃
                     if current_price > latest_5min['bb_bbh']:
-                        logger.info("Price above upper Bollinger Band but considered valid bullish breakout")
-                        # 매우 극단적으로 확장된 경우만 제한
+                        logger.info("가격이 상단 볼린저 밴드 위지만 유효한 상승 브레이크아웃으로 간주")
+                        # 극단적으로 확장된 경우만 비적격 처리
+                        # 비트코인의 강한 돌파 허용 - 0.6 → 0.7로 증가
                         excessive_ratio = (current_price - latest_5min['bb_bbh']) / band_width
-                        if excessive_ratio > 0.65:  # 0.6에서 0.65로 완화
+                        if excessive_ratio > 0.7:
                             long_trend_disqualified = True
-                            disqualification_reasons.append(f"Price excessively above upper BB ({excessive_ratio:.2f} band widths)")
+                            disqualification_reasons.append(f"가격이 상단 BB를 과도하게 초과 ({excessive_ratio:.2f} 밴드 폭)")
                     else:
-                        logger.info("Price near upper Bollinger Band with valid bullish breakout signals")
+                        logger.info("가격이 상단 볼린저 밴드 부근에 있으며, 유효한 상승 브레이크아웃 신호 감지")
                 else:
-                    # 브레이크아웃이 아닌 경우 - 모멘텀 및 컨텍스트 확인
-                    # 암호화폐: 여러 캔들이 밴드 상단을 초과하는지 확인
+                    # 브레이크아웃 아님 - 모멘텀과 컨텍스트 확인
+                    # 비트코인의 경우: 밴드 위에서 여러 캔들 동안 머물 수 있는지 확인
                     above_band_count = 0
                     for i in range(min(3, len(df_5min))):
                         if i < len(df_5min) and df_5min['close'].iloc[-i-1] > df_5min['bb_bbh'].iloc[-i-1]:
                             above_band_count += 1
                     
-                    # 가격이 계속 밴드 위에 있고 계속 상승 중이라면 유효한 추세일 수도 있음
+                    # 가격이 일관되게 밴드 위에 있고 여전히 상승 중인 경우
                     if above_band_count >= 2 and df_5min['close'].iloc[-1] > df_5min['close'].iloc[-2]:
                         # 볼륨이 여전히 강한지 확인
-                        if has_volume_data and recent_volumes[0] > avg_volume * 0.9:  # 완화된 볼륨 요구사항
-                            # 제한하지 않음 - 암호화폐에서는 강한 모멘텀일 수 있음
-                            logger.info(f"Price above band for {above_band_count} candles with increasing price and adequate volume - valid trend continuation")
+                        if has_volume_data and recent_volumes[0] > avg_volume:
+                            # 비적격으로 처리하지 않음 - 비트코인의 강한 모멘텀일 수 있음
+                            logger.info(f"가격이 {above_band_count}개 캔들 동안 밴드 위에 있고 가격 상승 및 강한 볼륨 - 유효한 추세 지속")
                         else:
                             long_trend_disqualified = True
-                            disqualification_reasons.append(f"Price above upper BB for {above_band_count} candles without sufficient volume")
+                            disqualification_reasons.append(f"가격이 {above_band_count}개 캔들 동안 밴드 위에 있지만 강한 볼륨 없음")
                     else:
                         long_trend_disqualified = True
                         if current_price > latest_5min['bb_bbh']:
-                            disqualification_reasons.append("Price above upper Bollinger Band without breakout signals")
+                            disqualification_reasons.append("가격이 상단 볼린저 밴드 위에 있지만 브레이크아웃 신호 없음")
                         else:
                             percent_to_upper = (distance_to_upper / band_width) * 100
-                            disqualification_reasons.append(f"Price near upper BB ({percent_to_upper:.2f}% from top) without breakout signals")
+                            disqualification_reasons.append(f"가격이 상단 BB 부근 (상단에서 {percent_to_upper:.2f}%) 이지만 브레이크아웃 신호 없음")
             
-            # 하단 밴드 분석
+            # 하단 밴드 분석 (위와 동일한 로직 구조)
             if distance_to_lower <= threshold_distance or current_price < latest_5min['bb_bbl']:
-                # 유효 브레이크아웃이 감지되면 하단 밴드를 넘어도 허용
+                # 유효한 브레이크아웃이 감지된 경우, 하단 밴드 아래에 있어도 비적격으로 처리하지 않음
                 if is_breakout and breakout_direction < 0:  # 하락 브레이크아웃
                     if current_price < latest_5min['bb_bbl']:
-                        logger.info("Price below lower Bollinger Band but considered valid bearish breakout")
-                        # 매우 극단적으로 확장된 경우만 제한
+                        logger.info("가격이 하단 볼린저 밴드 아래지만 유효한 하락 브레이크아웃으로 간주")
+                        # 극단적으로 확장된 경우만 비적격 처리
+                        # 비트코인의 강한 하락 허용 - 0.6 → 0.7로 증가
                         excessive_ratio = (latest_5min['bb_bbl'] - current_price) / band_width
-                        if excessive_ratio > 0.65:  # 0.6에서 0.65로 완화
+                        if excessive_ratio > 0.7:
                             short_trend_disqualified = True
-                            disqualification_reasons.append(f"Price excessively below lower BB ({excessive_ratio:.2f} band widths)")
+                            disqualification_reasons.append(f"가격이 하단 BB 아래로 과도하게 이탈 ({excessive_ratio:.2f} 밴드 폭)")
                     else:
-                        logger.info("Price near lower Bollinger Band with valid bearish breakout signals")
+                        logger.info("가격이 하단 볼린저 밴드 부근에 있으며, 유효한 하락 브레이크아웃 신호 감지")
                 else:
-                    # 브레이크아웃이 아닌 경우 - 모멘텀 및 컨텍스트 확인
-                    # 암호화폐: 여러 캔들이 밴드 하단을 초과하는지 확인
+                    # 브레이크아웃 아님 - 모멘텀과 컨텍스트 확인
+                    # 비트코인의 경우: 밴드 아래에서 여러 캔들 동안 머물 수 있는지 확인
                     below_band_count = 0
                     for i in range(min(3, len(df_5min))):
                         if i < len(df_5min) and df_5min['close'].iloc[-i-1] < df_5min['bb_bbl'].iloc[-i-1]:
                             below_band_count += 1
                     
-                    # 가격이 계속 밴드 아래에 있고 계속 하락 중이라면 유효한 추세일 수도 있음
+                    # 가격이 일관되게 밴드 아래에 있고 여전히 하락 중인 경우
                     if below_band_count >= 2 and df_5min['close'].iloc[-1] < df_5min['close'].iloc[-2]:
                         # 볼륨이 여전히 강한지 확인
-                        if has_volume_data and recent_volumes[0] > avg_volume * 0.9:  # 완화된 볼륨 요구사항
-                            # 제한하지 않음 - 암호화폐에서는 강한 모멘텀일 수 있음
-                            logger.info(f"Price below band for {below_band_count} candles with decreasing price and adequate volume - valid trend continuation")
+                        if has_volume_data and recent_volumes[0] > avg_volume:
+                            # 비적격으로 처리하지 않음 - 비트코인의 강한 모멘텀일 수 있음
+                            logger.info(f"가격이 {below_band_count}개 캔들 동안 밴드 아래에 있고 가격 하락 및 강한 볼륨 - 유효한 추세 지속")
                         else:
                             short_trend_disqualified = True
-                            disqualification_reasons.append(f"Price below lower BB for {below_band_count} candles without sufficient volume")
+                            disqualification_reasons.append(f"가격이 {below_band_count}개 캔들 동안 밴드 아래에 있지만 강한 볼륨 없음")
                     else:
                         short_trend_disqualified = True
                         if current_price < latest_5min['bb_bbl']:
-                            disqualification_reasons.append("Price below lower Bollinger Band without breakout signals")
+                            disqualification_reasons.append("가격이 하단 볼린저 밴드 아래에 있지만 브레이크아웃 신호 없음")
                         else:
                             percent_to_lower = (distance_to_lower / band_width) * 100
-                            disqualification_reasons.append(f"Price near lower BB ({percent_to_lower:.2f}% from bottom) without breakout signals")
+                            disqualification_reasons.append(f"가격이 하단 BB 부근 (하단에서 {percent_to_lower:.2f}%) 이지만 브레이크아웃 신호 없음")
     except Exception as e:
-        logger.error(f"Error checking Bollinger Bands with improved breakout logic: {e}")
+        logger.error(f"트렌드 지속 시간 확인 중 오류: {e}")
     
-    # 제한 사유 로깅
-    if disqualification_reasons:
-        logger.info(f"Trend disqualification reasons: {disqualification_reasons}")
-    
-    # 포지티브 기준은 제한되지 않은 경우에만 확인
+    # 긍정적 기준 확인 - 비적격이 아닌 경우만 실행
     if not long_trend_disqualified or not short_trend_disqualified:
-        # ======== 개선 5: EMA 위치 체크 보완 (기준 1) ========
+        # 5분 차트에서 EMA 위치 확인 (기준 1)
         try:
-            ema20 = latest_5min.get('ema20', latest_5min.get('sma_20', 0)) 
-            ema50 = latest_5min.get('ema50', 0)
+            ema12 = latest_5min.get('ema_12', 0)
+            sma20 = latest_5min.get('sma_20', 0)
             
-            if ema20 > 0 and ema50 > 0:
-                # 롱 기준 - 완화된 임계값
-                if current_price > ema20 and current_price > ema50 and ema20 > ema50:
-                    if (current_price - ema20) / ema20 > 0.0008:  # 0.001에서 0.0008로 완화
+            if ema12 > 0 and sma20 > 0:
+                # 롱 기준 - 비트코인의 빠른 움직임을 고려해 완화된 임계값
+                if current_price > ema12 and current_price > sma20 and ema12 > sma20:
+                    # 0.001 → 0.0007로 완화
+                    if (current_price - ema12) / ema12 > 0.0007:
                         long_criteria.append(True)
                 
-                # 숏 기준 - 완화된 임계값
-                if current_price < ema20 and current_price < ema50 and ema20 < ema50:
-                    if (ema20 - current_price) / ema20 > 0.0008:  # 0.001에서 0.0008로 완화
+                # 숏 기준
+                if current_price < ema12 and current_price < sma20 and ema12 < sma20:
+                    # 0.001 → 0.0007로 완화
+                    if (ema12 - current_price) / ema12 > 0.0007:
                         short_criteria.append(True)
         except Exception as e:
-            logger.error(f"Error in EMA check: {e}")
+            logger.error(f"EMA 확인 중 오류: {e}")
         
-        # ======== 개선 6: 연속 캔들 방향 체크 완화 (기준 2) ========
+        # 연속 캔들 방향 확인 (기준 2) - 비트코인의 빠른 움직임에 맞게 수정
         try:
-            # 최근 4개 캔들 확인 (변경 없음)
-            recent_candles = df_5min.iloc[-4:].copy()
+            # 최근 4개 캔들 가져오기 (이전 4개에서 완화)
+            recent_candles = df_5min.iloc[-3:].copy()
             
-            # 롱: 4개 중 3개 불리시 캔들 필요 (변경 없음)
+            # 롱: 3개 캔들 중 2개 이상 상승 캔들 (4/5→2/3로 완화)
             bullish_count = sum(recent_candles['close'] > recent_candles['open'])
-            if bullish_count >= 3 and recent_candles['close'].iloc[-1] > recent_candles['close'].iloc[-3]:
-                # 가장 최근 캔들은 불리시여야 함 + 최소 0.06% 상승 (0.08%에서 완화)
+            if bullish_count >= 2 and recent_candles['close'].iloc[-1] > recent_candles['close'].iloc[-2]:
+                # 최근 캔들이 상승이고 최소 0.05% 상승 (0.08%→0.05%로 완화)
                 if (recent_candles['close'].iloc[-1] > recent_candles['open'].iloc[-1] and
-                    (recent_candles['close'].iloc[-1] - recent_candles['open'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.0006):  # 0.0008에서 0.0006으로 완화
+                    (recent_candles['close'].iloc[-1] - recent_candles['open'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.0005):
                     long_criteria.append(True)
             
-            # 숏: 4개 중 3개 베어리시 캔들 필요 (변경 없음)
+            # 숏: 3개 캔들 중 2개 이상 하락 캔들 (4/5→2/3로 완화)
             bearish_count = sum(recent_candles['close'] < recent_candles['open'])
-            if bearish_count >= 3 and recent_candles['close'].iloc[-1] < recent_candles['close'].iloc[-3]:
-                # 가장 최근 캔들은 베어리시여야 함 + 최소 0.06% 하락 (0.08%에서 완화)
+            if bearish_count >= 2 and recent_candles['close'].iloc[-1] < recent_candles['close'].iloc[-2]:
+                # 최근 캔들이 하락이고 최소 0.05% 하락 (0.08%→0.05%로 완화)
                 if (recent_candles['close'].iloc[-1] < recent_candles['open'].iloc[-1] and
-                    (recent_candles['open'].iloc[-1] - recent_candles['close'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.0006):  # 0.0008에서 0.0006으로 완화
+                    (recent_candles['open'].iloc[-1] - recent_candles['close'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.0005):
                     short_criteria.append(True)
         except Exception as e:
-            logger.error(f"Error in consecutive candle check: {e}")
+            logger.error(f"연속 캔들 확인 중 오류: {e}")
         
-        # ======== 개선 7: MACD 히스토그램 방향 체크 완화 (기준 3) ========
+        # MACD 히스토그램 방향 확인 (기준 3) - 비트코인의 빠른 움직임에 맞게 수정
         try:
             if 'macd_diff' in df_5min.columns:
-                recent_macd = df_5min['macd_diff'].iloc[-4:].values  # 변경 없음
+                recent_macd = df_5min['macd_diff'].iloc[-3:].values
                 
-                # 롱: MACD 히스토그램 2+ 캔들 증가 (변경 없음)
-                if (recent_macd[-1] > 0 and 
+                # 롱: MACD 히스토그램 2+ 캔들 증가 (3→2로 완화)
+                if (len(recent_macd) >= 3 and
+                    recent_macd[-1] > 0 and 
                     recent_macd[-1] > recent_macd[-2] and
-                    recent_macd[-2] > recent_macd[-3] and 
-                    abs(recent_macd[-1]) > 0.5):  # 0.6에서 0.5로 완화
+                    # 절대값 임계치 - 0.6 → 0.4로 완화 (비트코인의 빠른 신호 포착)
+                    abs(recent_macd[-1]) > 0.4):
                     long_criteria.append(True)
                 
-                # 숏: MACD 히스토그램 2+ 캔들 감소 (변경 없음)
-                if (recent_macd[-1] < 0 and 
+                # 숏: MACD 히스토그램 2+ 캔들 감소 (3→2로 완화)
+                if (len(recent_macd) >= 3 and
+                    recent_macd[-1] < 0 and 
                     recent_macd[-1] < recent_macd[-2] and
-                    recent_macd[-2] < recent_macd[-3] and 
-                    abs(recent_macd[-1]) > 0.5):  # 0.6에서 0.5로 완화
+                    # 절대값 임계치 - 0.6 → 0.4로 완화 (비트코인의 빠른 신호 포착)
+                    abs(recent_macd[-1]) > 0.4):
                     short_criteria.append(True)
-                    
-                # ======== 추가 8: 초기 MACD 크로스 감지 추가 ========
-                # MACD 크로스 감지 (새로운 신호)
-                if 'macd' in df_5min.columns and 'macd_signal' in df_5min.columns:
-                    # 불리시 크로스 (MACD 상향 돌파)
-                    if (df_5min['macd'].iloc[-2] < df_5min['macd_signal'].iloc[-2] and 
-                        df_5min['macd'].iloc[-1] > df_5min['macd_signal'].iloc[-1]):
-                        if df_5min['macd'].iloc[-1] > df_5min['macd'].iloc[-2]:  # 방향 확인
-                            long_criteria.append(True)
-                            logger.info("Bullish MACD cross detected")
-                    
-                    # 베어리시 크로스 (MACD 하향 돌파)
-                    if (df_5min['macd'].iloc[-2] > df_5min['macd_signal'].iloc[-2] and 
-                        df_5min['macd'].iloc[-1] < df_5min['macd_signal'].iloc[-1]):
-                        if df_5min['macd'].iloc[-1] < df_5min['macd'].iloc[-2]:  # 방향 확인
-                            short_criteria.append(True)
-                            logger.info("Bearish MACD cross detected")
         except Exception as e:
-            logger.error(f"Error in MACD check: {e}")
+            logger.error(f"MACD 확인 중 오류: {e}")
         
-        # ======== 개선 9: 고점/저점 패턴 분석 완화 (기준 4) ========
+        # 고점과 저점 패턴 확인 (기준 4)
         try:
-            # 18 캔들 분석 (20에서 18로 축소 - 더 빠른 반응)
-            last_18_candles = df_5min.iloc[-18:].copy()
+            # 15개 캔들 분석 (20→15로 단축, 비트코인의 빠른 움직임 고려)
+            last_15_candles = df_5min.iloc[-15:].copy()
             
             # 스윙 고점과 저점 식별
             highs = []
             lows = []
             
-            for i in range(1, len(last_18_candles) - 1):
+            for i in range(1, len(last_15_candles) - 1):
                 # 스윙 고점
-                if last_18_candles['high'].iloc[i] > last_18_candles['high'].iloc[i-1] and \
-                   last_18_candles['high'].iloc[i] > last_18_candles['high'].iloc[i+1]:
-                    highs.append(last_18_candles['high'].iloc[i])
+                if last_15_candles['high'].iloc[i] > last_15_candles['high'].iloc[i-1] and \
+                   last_15_candles['high'].iloc[i] > last_15_candles['high'].iloc[i+1]:
+                    highs.append(last_15_candles['high'].iloc[i])
                 
                 # 스윙 저점
-                if last_18_candles['low'].iloc[i] < last_18_candles['low'].iloc[i-1] and \
-                   last_18_candles['low'].iloc[i] < last_18_candles['low'].iloc[i+1]:
-                    lows.append(last_18_candles['low'].iloc[i])
+                if last_15_candles['low'].iloc[i] < last_15_candles['low'].iloc[i-1] and \
+                   last_15_candles['low'].iloc[i] < last_15_candles['low'].iloc[i+1]:
+                    lows.append(last_15_candles['low'].iloc[i])
             
-            # 최소 3개 스윙 포인트 필요 (4에서 3으로 완화)
+            # 최소 3개 스윙 포인트 필요 (4→3으로 완화)
             if len(highs) >= 3 and len(lows) >= 3:
-                # 롱 기준: 상승 고점 및 상승 저점, 0.05% 최소 차이 (0.08%에서 완화)
-                higher_highs = all(highs[-1] > h * 1.0005 for h in highs[:-1])
-                higher_lows = all(lows[i] > lows[i-1] * 1.0005 for i in range(1, len(lows)))
+                # 롱 기준: 높아지는 고점과 저점 (0.08% → 0.06%로 완화)
+                higher_highs = all(highs[-1] > h * 1.0006 for h in highs[:-1])
+                higher_lows = all(lows[i] > lows[i-1] * 1.0006 for i in range(1, len(lows)))
                 
                 if higher_highs and higher_lows:
                     long_criteria.append(True)
             
-                # 숏 기준: 하락 고점 및 하락 저점, 0.05% 최소 차이 (0.08%에서 완화)
-                lower_highs = all(highs[i] < highs[i-1] * 0.9995 for i in range(1, len(highs)))
-                lower_lows = all(lows[-1] < l * 0.9995 for l in lows[:-1])
+                # 숏 기준: 낮아지는 고점과 저점 (0.08% → 0.06%로 완화)
+                lower_highs = all(highs[i] < highs[i-1] * 0.9994 for i in range(1, len(highs)))
+                lower_lows = all(lows[-1] < l * 0.9994 for l in lows[:-1])
                 
                 if lower_highs and lower_lows:
                     short_criteria.append(True)
         except Exception as e:
-            logger.error(f"Error in price structure check: {e}")
+            logger.error(f"가격 구조 확인 중 오류: {e}")
         
-        # ======== 개선 10: 1시간 타임프레임 ADX 검사 완화 (기준 5) ========
+        # 1시간 타임프레임 추세 확인 (기준 5) - ADX
         try:
             hourly_adx = latest_hourly['adx']
             hourly_di_plus = latest_hourly['di_plus']
             hourly_di_minus = latest_hourly['di_minus']
             
-            # 롱: ADX > 22 (완화, 이전 25) + DI+ > DI-
-            if hourly_adx > 22 and hourly_di_plus > hourly_di_minus:
-                # 차이 임계값 완화 (6→5)
+            # 롱: ADX > 21 (25→21로 완화) & DI+ > DI-
+            if hourly_adx > 21 and hourly_di_plus > hourly_di_minus:
+                # 차이 임계값 (8→5로 완화)
                 if hourly_di_plus - hourly_di_minus > 5:
                     long_criteria.append(True)
             
-            # 숏: ADX > 22 (완화, 이전 25) + DI- > DI+
-            if hourly_adx > 22 and hourly_di_minus > hourly_di_plus:
-                # 차이 임계값 완화 (6→5)
+            # 숏: ADX > 21 (25→21로 완화) & DI- > DI+
+            if hourly_adx > 21 and hourly_di_minus > hourly_di_plus:
+                # 차이 임계값 (8→5로 완화)
                 if hourly_di_minus - hourly_di_plus > 5:
                     short_criteria.append(True)
         except Exception as e:
-            logger.error(f"Error in hourly ADX check: {e}")
+            logger.error(f"1시간 ADX 확인 중 오류: {e}")
         
-        # ======== 개선 11: 4시간 차트 MACD 방향 체크 완화 (기준 6) ========
+        # 4시간 차트 MACD 방향 확인 (기준 6) - 비트코인의 빠른 진입을 위해 완화
         try:
             if df_4h is not None and 'macd' in df_4h.columns and 'macd_signal' in df_4h.columns:
-                # 4시간 MACD 방향 체크
+                # 4시간 MACD 방향 확인
                 four_hour_macd = df_4h['macd'].iloc[-3:].values
                 four_hour_macd_signal = df_4h['macd_signal'].iloc[-3:].values
                 
-                # 롱: MACD 크로스 또는 불리시 컨버전스
-                macd_cross_bullish = (four_hour_macd[-2] < four_hour_macd_signal[-2] and 
+                # 롱: MACD 시그널선 위로 교차 또는 약세로부터 강세로 전환
+                macd_cross_bullish = (len(four_hour_macd) >= 2 and 
+                                     four_hour_macd[-2] < four_hour_macd_signal[-2] and 
                                      four_hour_macd[-1] > four_hour_macd_signal[-1])
-                macd_bullish_conv = (four_hour_macd[-1] < 0 and  # 여전히 음수지만
-                                    four_hour_macd[-1] > four_hour_macd[-2] and  # 2+ 바 상승
+                macd_bullish_conv = (len(four_hour_macd) >= 3 and 
+                                    four_hour_macd[-1] < 0 and  # 여전히 음수이지만
+                                    four_hour_macd[-1] > four_hour_macd[-2] and  # 2+ 캔들 상승
                                     four_hour_macd[-2] > four_hour_macd[-3])
                 
-                if macd_cross_bullish or (macd_bullish_conv and four_hour_macd[-1] > -6):  # 임계값 완화 (-5→-6)
+                # 제로 크로싱 임계값 - 비트코인의 빠른 움직임 고려 -5 → -7로 완화
+                if macd_cross_bullish or (macd_bullish_conv and four_hour_macd[-1] > -7):
                     long_criteria.append(True)
                 
-                # 숏: MACD 크로스 또는 베어리시 컨버전스
-                macd_cross_bearish = (four_hour_macd[-2] > four_hour_macd_signal[-2] and 
+                # 숏: MACD 시그널선 아래로 교차 또는 강세로부터 약세로 전환
+                macd_cross_bearish = (len(four_hour_macd) >= 2 and
+                                     four_hour_macd[-2] > four_hour_macd_signal[-2] and 
                                      four_hour_macd[-1] < four_hour_macd_signal[-1])
-                macd_bearish_conv = (four_hour_macd[-1] > 0 and  # 여전히 양수지만
-                                    four_hour_macd[-1] < four_hour_macd[-2] and  # 2+ 바 하락
+                macd_bearish_conv = (len(four_hour_macd) >= 3 and
+                                    four_hour_macd[-1] > 0 and  # 여전히 양수이지만
+                                    four_hour_macd[-1] < four_hour_macd[-2] and  # 2+ 캔들 하락
                                     four_hour_macd[-2] < four_hour_macd[-3])
                 
-                if macd_cross_bearish or (macd_bearish_conv and four_hour_macd[-1] < 6):  # 임계값 완화 (5→6)
+                # 제로 크로싱 임계값 - 비트코인의 빠른 움직임 고려 5 → 7로 완화
+                if macd_cross_bearish or (macd_bearish_conv and four_hour_macd[-1] < 7):
                     short_criteria.append(True)
         except Exception as e:
-            logger.error(f"Error in 4h MACD check: {e}")
+            logger.error(f"4시간 MACD 확인 중 오류: {e}")
         
-        # ======== 개선 12: 볼륨 프로필 감지 확장 (기준 7) ========
+        # 새로 추가: 볼륨 프로필 확인 (기준 7) - 비트코인 시장에 맞게 조정
         try:
             if 'volume' in df_5min.columns:
-                # 최근 볼륨 데이터 가져오기
+                # 최근 볼륨 데이터
                 recent_5_volume = df_5min['volume'].iloc[-5:].values
                 recent_10_volume = df_5min['volume'].iloc[-10:].values
                 
@@ -3790,194 +3806,106 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                 bullish_candles = sum(1 for i in range(len(recent_3_candles)) if recent_3_candles['close'].iloc[i] > recent_3_candles['open'].iloc[i])
                 bearish_candles = sum(1 for i in range(len(recent_3_candles)) if recent_3_candles['close'].iloc[i] < recent_3_candles['open'].iloc[i])
                 
-                # 롱: 볼륨 증가와 불리시 캔들
-                if avg_5_volume > avg_10_volume * 1.05 and bullish_candles >= 2:  # 1.1에서 1.05로 완화
-                    # 불리시/베어리시 볼륨 계산
+                # 롱: 볼륨 증가 + 상승 캔들
+                # 비트코인의 빠른 볼륨 증가 고려 - 1.1 → 1.07로 완화
+                if avg_5_volume > avg_10_volume * 1.07 and bullish_candles >= 2:
+                    # 볼륨 가중 평균 상승 대 하락 볼륨
                     bullish_volume = sum(df_5min['volume'].iloc[-i-1] for i in range(5) 
                                         if df_5min['close'].iloc[-i-1] > df_5min['open'].iloc[-i-1])
                     bearish_volume = sum(df_5min['volume'].iloc[-i-1] for i in range(5) 
                                         if df_5min['close'].iloc[-i-1] < df_5min['open'].iloc[-i-1])
                     
-                    if bullish_volume > bearish_volume * 0.8:  # 완화된 조건 (1→0.8)
+                    if bullish_volume > bearish_volume:
                         long_criteria.append(True)
                 
-                # 숏: 볼륨 증가와 베어리시 캔들
-                if avg_5_volume > avg_10_volume * 1.05 and bearish_candles >= 2:  # 1.1에서 1.05로 완화
-                    # 불리시/베어리시 볼륨 계산
+                # 숏: 볼륨 증가 + 하락 캔들
+                if avg_5_volume > avg_10_volume * 1.07 and bearish_candles >= 2:
+                    # 볼륨 가중 평균 상승 대 하락 볼륨
                     bullish_volume = sum(df_5min['volume'].iloc[-i-1] for i in range(5) 
                                         if df_5min['close'].iloc[-i-1] > df_5min['open'].iloc[-i-1])
                     bearish_volume = sum(df_5min['volume'].iloc[-i-1] for i in range(5) 
                                         if df_5min['close'].iloc[-i-1] < df_5min['open'].iloc[-i-1])
                     
-                    if bearish_volume > bullish_volume * 0.8:  # 완화된 조건 (1→0.8)
+                    if bearish_volume > bullish_volume:
                         short_criteria.append(True)
-                        
-                # ======== 추가 13: 볼륨 및 가격 급증 감지 추가 ========
-                # 볼륨 급증 및 가격 이동 분석
-                if len(df_5min) >= 10:
-                    # 마지막 캔들에서 볼륨 급증 확인
-                    last_volume = df_5min['volume'].iloc[-1]
-                    avg_9_volume = df_5min['volume'].iloc[-10:-1].mean()
-                    
-                    # 마지막 캔들의 몸통 크기 및 방향 확인
-                    last_candle = df_5min.iloc[-1]
-                    last_body_size = abs(last_candle['close'] - last_candle['open'])
-                    last_avg_body_size = df_5min.iloc[-10:-1].apply(lambda x: abs(x['close'] - x['open']), axis=1).mean()
-                    is_bullish = last_candle['close'] > last_candle['open']
-                    
-                    # 볼륨 급증 (2배 이상) 및 큰 몸통 (1.5배 이상)
-                    if last_volume > avg_9_volume * 2 and last_body_size > last_avg_body_size * 1.5:
-                        if is_bullish:
-                            long_criteria.append(True)
-                            logger.info(f"Volume surge detected with large bullish candle: V={last_volume/avg_9_volume:.1f}x, Body={last_body_size/last_avg_body_size:.1f}x")
-                        else:
-                            short_criteria.append(True)
-                            logger.info(f"Volume surge detected with large bearish candle: V={last_volume/avg_9_volume:.1f}x, Body={last_body_size/last_avg_body_size:.1f}x")
         except Exception as e:
-            logger.error(f"Error in volume profile check: {e}")
+            logger.error(f"볼륨 프로필 확인 중 오류: {e}")
         
-        # ======== 개선 14: 멀티타임프레임 모멘텀 정렬 추가 (기준 8) ========
+        # 새로 추가: 멀티타임프레임 모멘텀 정렬 (기준 8) - 비트코인에 맞게
         try:
-            # 모든 타임프레임에서 RSI 모멘텀 정렬 확인
+            # RSI로 타임프레임 간 모멘텀 정렬 확인
             if 'rsi' in latest_5min and 'rsi' in latest_hourly:
-                # 롱 트렌드
-                if latest_5min['rsi'] > 45 and latest_hourly['rsi'] > 45:  # 50→45로 완화
-                    # 강한 불리시 모멘텀 (두 타임프레임 일치)
-                    if latest_5min['rsi'] > latest_5min.get('rsi_prev', 0) and latest_hourly['rsi'] > 42:  # 45→42로 완화
+                # 롱 추세
+                if latest_5min['rsi'] > 50 and latest_hourly['rsi'] > 50:
+                    # 비트코인의 빠른 움직임 - 이전 캔들과 비교하지 않고, 1시간 RSI 기준 완화
+                    if latest_hourly['rsi'] > 45:
                         long_criteria.append(True)
                 
-                # 숏 트렌드
-                if latest_5min['rsi'] < 55 and latest_hourly['rsi'] < 55:  # 50→55로 완화
-                    # 강한 베어리시 모멘텀 (두 타임프레임 일치)
-                    if latest_5min['rsi'] < latest_5min.get('rsi_prev', 100) and latest_hourly['rsi'] < 58:  # 55→58로 완화
+                # 숏 추세
+                if latest_5min['rsi'] < 50 and latest_hourly['rsi'] < 50:
+                    # 비트코인의 빠른 움직임 - 이전 캔들과 비교하지 않고, 1시간 RSI 기준 완화
+                    if latest_hourly['rsi'] < 55:
                         short_criteria.append(True)
                 
-                # 4시간 모멘텀 (추가 신호)
+                # 4시간 모멘텀 확인
                 if df_4h is not None and 'rsi' in latest_4h:
-                    # 강한 불리시 정렬
-                    if latest_5min['rsi'] > 45 and latest_hourly['rsi'] > 45 and latest_4h['rsi'] > 45:  # 50→45로 완화
-                        long_criteria.append(True)  # 멀티타임프레임 정렬에 추가 포인트
+                    # 강한 상승 정렬 - 비트코인의 변동성 고려 50 → 48로 완화
+                    if latest_5min['rsi'] > 50 and latest_hourly['rsi'] > 50 and latest_4h['rsi'] > 48:
+                        long_criteria.append(True)  # 멀티타임프레임 정렬 점수 추가
                     
-                    # 강한 베어리시 정렬
-                    if latest_5min['rsi'] < 55 and latest_hourly['rsi'] < 55 and latest_4h['rsi'] < 55:  # 50→55로 완화
-                        short_criteria.append(True)  # 멀티타임프레임 정렬에 추가 포인트
-                        
-                # ======== 추가 15: RSI 다이버전스 분석 추가 ========
-                # 5분 차트에서 RSI 다이버전스 분석
-                last_15_candles = df_5min.iloc[-15:].copy()
-                
-                # 가격 및 RSI 피크/트로프 찾기
-                price_peaks = []
-                price_troughs = []
-                rsi_peaks = []
-                rsi_troughs = []
-                
-                for i in range(1, len(last_15_candles)-1):
-                    # 가격 피크
-                    if last_15_candles['high'].iloc[i] > last_15_candles['high'].iloc[i-1] and \
-                       last_15_candles['high'].iloc[i] > last_15_candles['high'].iloc[i+1]:
-                        price_peaks.append((i, last_15_candles['high'].iloc[i]))
-                    
-                    # 가격 트로프
-                    if last_15_candles['low'].iloc[i] < last_15_candles['low'].iloc[i-1] and \
-                       last_15_candles['low'].iloc[i] < last_15_candles['low'].iloc[i+1]:
-                        price_troughs.append((i, last_15_candles['low'].iloc[i]))
-                    
-                    # RSI 피크
-                    if last_15_candles['rsi'].iloc[i] > last_15_candles['rsi'].iloc[i-1] and \
-                       last_15_candles['rsi'].iloc[i] > last_15_candles['rsi'].iloc[i+1]:
-                        rsi_peaks.append((i, last_15_candles['rsi'].iloc[i]))
-                    
-                    # RSI 트로프
-                    if last_15_candles['rsi'].iloc[i] < last_15_candles['rsi'].iloc[i-1] and \
-                       last_15_candles['rsi'].iloc[i] < last_15_candles['rsi'].iloc[i+1]:
-                        rsi_troughs.append((i, last_15_candles['rsi'].iloc[i]))
-                
-                # 불리시 다이버전스 확인 (가격 저점 하락, RSI 저점 상승)
-                if len(price_troughs) >= 2 and len(rsi_troughs) >= 2:
-                    recent_price_troughs = sorted(price_troughs, key=lambda x: x[0])[-2:]
-                    recent_rsi_troughs = sorted(rsi_troughs, key=lambda x: x[0])[-2:]
-                    
-                    if recent_price_troughs[1][1] < recent_price_troughs[0][1] and \
-                       recent_rsi_troughs[1][1] > recent_rsi_troughs[0][1]:
-                        # 불리시 다이버전스 - 바닥 형성 잠재력
-                        long_criteria.append(True)
-                        logger.info("Bullish RSI divergence detected")
-                
-                # 베어리시 다이버전스 확인 (가격 고점 상승, RSI 고점 하락)
-                if len(price_peaks) >= 2 and len(rsi_peaks) >= 2:
-                    recent_price_peaks = sorted(price_peaks, key=lambda x: x[0])[-2:]
-                    recent_rsi_peaks = sorted(rsi_peaks, key=lambda x: x[0])[-2:]
-                    
-                    if recent_price_peaks[1][1] > recent_price_peaks[0][1] and \
-                       recent_rsi_peaks[1][1] < recent_rsi_peaks[0][1]:
-                        # 베어리시 다이버전스 - 상단 형성 잠재력
-                        short_criteria.append(True)
-                        logger.info("Bearish RSI divergence detected")
+                    # 강한 하락 정렬 - 비트코인의 변동성 고려 50 → 52로 완화
+                    if latest_5min['rsi'] < 50 and latest_hourly['rsi'] < 50 and latest_4h['rsi'] < 52:
+                        short_criteria.append(True)  # 멀티타임프레임 정렬 점수 추가
         except Exception as e:
-            logger.error(f"Error in multi-timeframe alignment check: {e}")
+            logger.error(f"멀티타임프레임 정렬 확인 중 오류: {e}")
         
-        # ======== 추가 16: 브레이크아웃 감지 로직 추가 ========
+        # 새로 추가: 볼린저 밴드 폭 확인 (비트코인 특화)
         try:
-            # 5분 차트에서의 브레이크아웃 감지
-            if len(df_5min) >= 20:
-                # A. 주요 서포트/레지스턴스 레벨 계산
-                last_20_candles = df_5min.iloc[-20:].copy()
+            if 'bb_bbh' in latest_5min and 'bb_bbl' in latest_5min and 'bb_bbm' in latest_5min:
+                # 현재 밴드 폭 계산
+                current_band_width = latest_5min['bb_bbh'] - latest_5min['bb_bbl']
                 
-                # 볼륨 프로필 계산 (볼륨 가중치 가격 레벨)
-                price_levels = {}
-                for i in range(len(last_20_candles)):
-                    # 각 캔들의 가격 범위를 10개 구간으로 나눔
-                    candle_range = last_20_candles['high'].iloc[i] - last_20_candles['low'].iloc[i]
-                    step = candle_range / 10
-                    candle_volume = last_20_candles['volume'].iloc[i]
-                    
-                    # 각 구간에 볼륨 분배
-                    for j in range(10):
-                        price_level = last_20_candles['low'].iloc[i] + j * step
-                        price_level_rounded = round(price_level, 1)  # 소수점 1자리로 반올림
+                # 최근 20개 캔들의 밴드 폭 평균
+                if len(df_5min) >= 20:
+                    band_widths = [(df_5min['bb_bbh'].iloc[-i] - df_5min['bb_bbl'].iloc[-i]) 
+                                 for i in range(1, 21) if 'bb_bbh' in df_5min.iloc[-i] and 'bb_bbl' in df_5min.iloc[-i]]
+                    if band_widths:
+                        avg_band_width = sum(band_widths) / len(band_widths)
                         
-                        if price_level_rounded in price_levels:
-                            price_levels[price_level_rounded] += candle_volume / 10
-                        else:
-                            price_levels[price_level_rounded] = candle_volume / 10
-                
-                # 상위 볼륨 가격대 선별 (상위 20%)
-                sorted_levels = sorted(price_levels.items(), key=lambda x: x[1], reverse=True)
-                top_levels = sorted_levels[:int(len(sorted_levels) * 0.2)]
-                top_prices = [level[0] for level in top_levels]
-                
-                # B. 주요 레벨 돌파 확인
-                # 현재 가격 및 이전 가격
-                current_close = df_5min['close'].iloc[-1]
-                previous_close = df_5min['close'].iloc[-2]
-                
-                # 상향 돌파 확인
-                for level in top_prices:
-                    # 이전 종가가 레벨 아래, 현재 종가가 레벨 위 = 상향 돌파
-                    if previous_close < level and current_close > level:
-                        # 볼륨 확인 (평균 대비)
-                        if df_5min['volume'].iloc[-1] > df_5min['volume'].iloc[-10:].mean() * 1.1:
-                            long_criteria.append(True)
-                            logger.info(f"Price broke above key level {level} with volume")
-                
-                # 하향 돌파 확인
-                for level in top_prices:
-                    # 이전 종가가 레벨 위, 현재 종가가 레벨 아래 = 하향 돌파
-                    if previous_close > level and current_close < level:
-                        # 볼륨 확인 (평균 대비)
-                        if df_5min['volume'].iloc[-1] > df_5min['volume'].iloc[-10:].mean() * 1.1:
-                            short_criteria.append(True)
-                            logger.info(f"Price broke below key level {level} with volume")
+                        # 밴드 폭이 좁아지고 있는지 확인 (스퀴즈 전)
+                        if current_band_width < avg_band_width * 0.9:
+                            # 가격이 중앙선에 가까워지고 있음 (잠재적 발사 준비)
+                            price_to_mid = abs(current_price - latest_5min['bb_bbm'])
+                            if price_to_mid < current_band_width * 0.2:
+                                logger.info("볼린저 밴드 스퀴즈 상태 감지 - 브레이크아웃 가능성 높음")
+                                # 최근 3캔들의 방향을 확인하여 방향 결정
+                                recent_direction = sum(1 if df_5min['close'].iloc[-i] > df_5min['open'].iloc[-i] else -1 
+                                                      for i in range(1, 4))
+                                if recent_direction > 0:
+                                    long_criteria.append(True)
+                                elif recent_direction < 0:
+                                    short_criteria.append(True)
         except Exception as e:
-            logger.error(f"Error in breakout detection: {e}")
+            logger.error(f"볼린저 밴드 폭 확인 중 오류: {e}")
+        
+        # 새로 추가: 비트코인 특성 반영한 ADX 확인
+        try:
+            # ADX 임계값 - 비트코인의 빠른 움직임에 맞게 감소 (20이상)
+            if latest_5min['adx'] > 20:
+                # +DI > -DI이고, 가격이 상승 중이면 상승 추세
+                if latest_5min['di_plus'] > latest_5min['di_minus'] and latest_5min['close'] > latest_5min['open']:
+                    long_criteria.append(True)
+                
+                # -DI > +DI이고, 가격이 하락 중이면 하락 추세
+                if latest_5min['di_minus'] > latest_5min['di_plus'] and latest_5min['close'] < latest_5min['open']:
+                    short_criteria.append(True)
+        except Exception as e:
+            logger.error(f"ADX 확인 중 오류: {e}")
     
-    # ======== 최종 평가: 빠른 트렌드 인식을 위해 기준 완화 ========
-    # 비트코인의 경우 2개 기준 충족으로 완화 (3→2)
+    # 최종 평가: 비트코인에 대해 필요한 기준 개수 감소 (3 → 2)
     long_trend_is_strong = (not long_trend_disqualified) and (len(long_criteria) >= 2)
     short_trend_is_strong = (not short_trend_disqualified) and (len(short_criteria) >= 2)
     
-    # 결과 객체
     result = {
         "long_trend_strong": long_trend_is_strong,
         "short_trend_strong": short_trend_is_strong,
@@ -3987,184 +3915,103 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
         "short_disqualified": short_trend_disqualified,
         "disqualification_reasons": disqualification_reasons
     }
-    
-    # 로깅
-    logger.info(f"Trend strength assessment result: {result}")
+    logger.info(f"트렌드 강도 평가 결과: {result}")
     return result
+
+# 2. assess_exit_signals 함수 최적화
 
 def assess_exit_signals(df_5min, signals_data, position_side):
     """
-    신중한 청산 신호 분석을 위한 개선된 함수
+    강력한 규칙 기반 출구 신호 평가 - 비트코인 시장에 최적화
     
     Args:
         df_5min: 5분 OHLCV 데이터프레임 (지표 포함)
-        signals_data: 차트 분석에서 나온 신호 데이터
-        position_side: 현재 포지션 방향 ('long', 'short', None)
+        signals_data: 차트 분석에서 얻은 신호 데이터 딕셔너리
+        position_side: 현재 포지션 방향 ('long', 'short', 또는 None)
         
     Returns:
-        dict: 청산 평가 결과 객체
+        dict: 출구 평가 결과를 담은 딕셔너리
     """
-    # 시작 시 로깅
-    logger.info(f"Starting exit signal assessment for position_side: {position_side}")
+    # 시작 로깅
+    logger.info(f"포지션 방향 {position_side}에 대한 출구 신호 평가 시작")
     
-    # 포지션이 없으면 청산 필요 없음
+    # 포지션이 없으면 출구가 필요 없음
     if not position_side:
-        logger.info("No position to exit")
+        logger.info("열린 포지션 없음 - 출구 필요 없음")
         return {"should_exit": False, "exit_signals": []}
         
     exit_signals = []
-    exit_signal_weights = []  # 각 종료 신호에 가중치 부여
+    exit_signal_weights = []  # 각 출구 신호에 가중치 부여
     
-    # ======== 개선 1: 핵심 신호 반전 감지 강화 ========
+    # 1. 두 핵심 신호가 모두 반전되었는지 확인 (강화된 조건)
     try:
-        # 신호 반전 및 나이 조건 강화
+        # 비트코인의 빠른 움직임을 고려하여 캔들 기준 수정 (3→4)
         if position_side == 'long':
-            # BlackFlag 신호만 먼저 체크
-            bf_reversed = signals_data.get("BlackFlag_Signal") == "Sell"
-            bf_recent = signals_data.get("BlackFlag_CandlesAgo", 999) <= 4  # 3→4로 완화
+            bf_reversed = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 4
+            ut_reversed = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 4
             
-            # UTBot 신호 체크
-            ut_reversed = signals_data.get("UTBot_Signal") == "Sell"
-            ut_recent = signals_data.get("UTBot_CandlesAgo", 999) <= 4  # 3→4로 완화
-            
-            # 신호 조합 검사
-            if bf_reversed and ut_reversed:
-                if bf_recent and ut_recent:
-                    # 두 신호 모두 반전되고 최근인 경우 - 강한 신호
-                    exit_signals.append("Both BlackFlag and UTBot signals recently reversed to Sell (within 4 candles)")
-                    exit_signal_weights.append(1.0)  # 높은 가중치
-                elif bf_recent:
-                    # BlackFlag만 최근에 반전된 경우
-                    exit_signals.append("Recent BlackFlag FTS signal reversed to Sell (within 4 candles)")
-                    exit_signal_weights.append(0.7)  # 중간-높은 가중치
-                elif ut_recent:
-                    # UTBot만 최근에 반전된 경우
-                    exit_signals.append("Recent UTBot signal reversed to Sell (within 4 candles)")
-                    exit_signal_weights.append(0.6)  # 중간 가중치
-                else:
-                    # 두 신호 모두 반전되었지만 오래된 경우 - 약한 신호
-                    exit_signals.append("Both BlackFlag and UTBot signals reversed to Sell (older signals)")
-                    exit_signal_weights.append(0.4)  # 낮은 가중치
-            elif bf_reversed and bf_recent:
-                # BlackFlag만 반전되고 최근인 경우
-                exit_signals.append("Only BlackFlag signal reversed to Sell (within 4 candles)")
-                exit_signal_weights.append(0.5)  # 중간 가중치
-            elif ut_reversed and ut_recent:
-                # UTBot만 반전되고 최근인 경우
-                exit_signals.append("Only UTBot signal reversed to Sell (within 4 candles)")
-                exit_signal_weights.append(0.4)  # 낮은-중간 가중치
+            if bf_reversed and ut_reversed:  # 두 신호 모두 반전되고 최근인 경우
+                exit_signals.append("BlackFlag 및 UTBot 신호가 최근에 Sell로 반전됨 (4 캔들 이내)")
+                exit_signal_weights.append(1.0)  # 높은 가중치
+            elif bf_reversed and signals_data.get("BlackFlag_CandlesAgo", 999) <= 1:  # BlackFlag만 반전되었지만 매우 최근인 경우
+                exit_signals.append("최근 BlackFlag FTS 신호가 Sell로 반전됨 (1 캔들 이내)")
+                exit_signal_weights.append(0.75)  # 중간-높은 가중치 (0.7→0.75로 상향)
+            elif ut_reversed and signals_data.get("UTBot_CandlesAgo", 999) <= 1:  # UTBot만 반전되었지만 매우 최근인 경우
+                exit_signals.append("최근 UTBot 신호가 Sell로 반전됨 (1 캔들 이내)")
+                exit_signal_weights.append(0.65)  # 중간 가중치 (0.6→0.65로 상향)
                 
         elif position_side == 'short':
-            # BlackFlag 신호만 먼저 체크
-            bf_reversed = signals_data.get("BlackFlag_Signal") == "Buy"
-            bf_recent = signals_data.get("BlackFlag_CandlesAgo", 999) <= 4  # 3→4로 완화
+            bf_reversed = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 4
+            ut_reversed = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 4
             
-            # UTBot 신호 체크
-            ut_reversed = signals_data.get("UTBot_Signal") == "Buy"
-            ut_recent = signals_data.get("UTBot_CandlesAgo", 999) <= 4  # 3→4로 완화
-            
-            # 신호 조합 검사
-            if bf_reversed and ut_reversed:
-                if bf_recent and ut_recent:
-                    # 두 신호 모두 반전되고 최근인 경우 - 강한 신호
-                    exit_signals.append("Both BlackFlag and UTBot signals recently reversed to Buy (within 4 candles)")
-                    exit_signal_weights.append(1.0)  # 높은 가중치
-                elif bf_recent:
-                    # BlackFlag만 최근에 반전된 경우
-                    exit_signals.append("Recent BlackFlag FTS signal reversed to Buy (within 4 candles)")
-                    exit_signal_weights.append(0.7)  # 중간-높은 가중치
-                elif ut_recent:
-                    # UTBot만 최근에 반전된 경우
-                    exit_signals.append("Recent UTBot signal reversed to Buy (within 4 candles)")
-                    exit_signal_weights.append(0.6)  # 중간 가중치
-                else:
-                    # 두 신호 모두 반전되었지만 오래된 경우 - 약한 신호
-                    exit_signals.append("Both BlackFlag and UTBot signals reversed to Buy (older signals)")
-                    exit_signal_weights.append(0.4)  # 낮은 가중치
-            elif bf_reversed and bf_recent:
-                # BlackFlag만 반전되고 최근인 경우
-                exit_signals.append("Only BlackFlag signal reversed to Buy (within 4 candles)")
-                exit_signal_weights.append(0.5)  # 중간 가중치
-            elif ut_reversed and ut_recent:
-                # UTBot만 반전되고 최근인 경우
-                exit_signals.append("Only UTBot signal reversed to Buy (within 4 candles)")
-                exit_signal_weights.append(0.4)  # 낮은-중간 가중치
+            if bf_reversed and ut_reversed:  # 두 신호 모두 반전되고 최근인 경우
+                exit_signals.append("BlackFlag 및 UTBot 신호가 최근에 Buy로 반전됨 (4 캔들 이내)")
+                exit_signal_weights.append(1.0)  # 높은 가중치
+            elif bf_reversed and signals_data.get("BlackFlag_CandlesAgo", 999) <= 1:  # BlackFlag만 반전되었지만 매우 최근인 경우
+                exit_signals.append("최근 BlackFlag FTS 신호가 Buy로 반전됨 (1 캔들 이내)")
+                exit_signal_weights.append(0.75)  # 중간-높은 가중치 (0.7→0.75로 상향)
+            elif ut_reversed and signals_data.get("UTBot_CandlesAgo", 999) <= 1:  # UTBot만 반전되었지만 매우 최근인 경우
+                exit_signals.append("최근 UTBot 신호가 Buy로 반전됨 (1 캔들 이내)")
+                exit_signal_weights.append(0.65)  # 중간 가중치 (0.6→0.65로 상향)
     except Exception as e:
-        logger.error(f"Error checking core signal reversal: {e}")
+        logger.error(f"핵심 신호 반전 확인 중 오류: {e}")
     
-    # ======== 개선 2: Volume Oscillator 패턴 분석 강화 ========
+    # 2. Volume Oscillator가 0% 아래로 떨어지는지 확인 - 강화: 연속적인 음수 패턴 확인 (더 엄격한 기준으로)
     try:
         volume_osc_current = signals_data.get("VolumeOsc_Current")
         volume_osc_history = signals_data.get("VolumeOsc_History", [])
         
-        # 연속적인 패턴 분석 강화
-        if volume_osc_current is not None and isinstance(volume_osc_history, list) and len(volume_osc_history) >= 3:
-            # 최신 값부터 확인
-            
-            # 롱 포지션에서 주의해야 할 패턴 (심각한 음수 또는 급격한 하락)
-            if position_side == 'long':
-                # 1. 극단적인 음수 값 (-30 이하)
-                if volume_osc_current is not None and float(volume_osc_current) < -30:
-                    exit_signals.append(f"Volume Oscillator severely negative: {volume_osc_current}")
-                    exit_signal_weights.append(0.7)  # 중간-높은 가중치
-                
-                # 2. 3개 이상 연속 음수 패턴
-                consecutive_negative = 0
-                for i in range(min(5, len(volume_osc_history))):
-                    idx = len(volume_osc_history) - 1 - i
-                    if idx >= 0 and volume_osc_history[idx] is not None and float(volume_osc_history[idx]) < -20:
-                        consecutive_negative += 1
-                    else:
-                        break  # 연속성 깨짐
-                        
-                if consecutive_negative >= 3:
-                    exit_signals.append(f"Volume Oscillator consistently negative (<-20) for {consecutive_negative} consecutive candles")
-                    exit_signal_weights.append(0.6)  # 중간 가중치
-                
-                # 3. 급격한 하락 패턴 (새로운 패턴 추가)
-                if volume_osc_history[-3] is not None and volume_osc_history[-1] is not None:
-                    decline = float(volume_osc_history[-3]) - float(volume_osc_history[-1])
-                    if decline > 25 and float(volume_osc_history[-1]) < 0:  # 지난 3캔들 동안 25+ 포인트 하락 및 음수
-                        exit_signals.append(f"Volume Oscillator sharp decline: -{decline:.1f} points in 3 candles")
-                        exit_signal_weights.append(0.65)  # 중간-높은 가중치
-            
-            # 숏 포지션에서 주의해야 할 패턴 (급격한 상승 또는 높은 값)
-            elif position_side == 'short':
-                # 1. 매우 높은 양수 값 (30 이상)
-                if volume_osc_current is not None and float(volume_osc_current) > 30:
-                    exit_signals.append(f"Volume Oscillator strongly positive: {volume_osc_current}")
-                    exit_signal_weights.append(0.7)  # 중간-높은 가중치
-                
-                # 2. 3개 이상 연속 양수 패턴
-                consecutive_positive = 0
-                for i in range(min(5, len(volume_osc_history))):
-                    idx = len(volume_osc_history) - 1 - i
-                    if idx >= 0 and volume_osc_history[idx] is not None and float(volume_osc_history[idx]) > 20:
-                        consecutive_positive += 1
-                    else:
-                        break  # 연속성 깨짐
-                        
-                if consecutive_positive >= 3:
-                    exit_signals.append(f"Volume Oscillator consistently positive (>20) for {consecutive_positive} consecutive candles")
-                    exit_signal_weights.append(0.6)  # 중간 가중치
-                
-                # 3. 급격한 상승 패턴 (새로운 패턴 추가)
-                if volume_osc_history[-3] is not None and volume_osc_history[-1] is not None:
-                    increase = float(volume_osc_history[-1]) - float(volume_osc_history[-3])
-                    if increase > 25 and float(volume_osc_history[-1]) > 0:  # 지난 3캔들 동안 25+ 포인트 상승 및 양수
-                        exit_signals.append(f"Volume Oscillator sharp increase: +{increase:.1f} points in 3 candles")
-                        exit_signal_weights.append(0.65)  # 중간-높은 가중치
-    except Exception as e:
-        logger.error(f"Error checking Volume Oscillator: {e}")
-    
-    # ======== 개선 3: 명확한 다이버전스 감지 강화 ========
-    try:
-        # 최근 10개 캔들로 확장 (8→10)
-        recent_df = df_5min.iloc[-10:].copy()
+        # 최소 3개 이상의 연속된 음수 값이 있는지 확인 (현재 포함)
+        consecutive_negative = 0
         
-        # ===== 롱 포지션에서의 베어리시 다이버전스 감지 =====
+        # 비트코인의 빠른 움직임 고려해 기준 조정 (-20 → -18)
+        if volume_osc_current is not None and isinstance(volume_osc_history, list) and len(volume_osc_history) >= 3:
+            for i in range(min(5, len(volume_osc_history))):  # 최근 5개만 확인
+                idx = len(volume_osc_history) - 1 - i
+                if idx >= 0 and volume_osc_history[idx] is not None and float(volume_osc_history[idx]) < -18:
+                    consecutive_negative += 1
+                else:
+                    break  # 연속성이 깨지면 중단
+                    
+        # 3개 이상 연속으로 상당히 음수 (-18 미만)인 경우에만 유효한 출구 신호로 간주
+        if consecutive_negative >= 3:
+            exit_signals.append(f"Volume Oscillator가 연속적으로 음수 (-18 미만): {consecutive_negative}개 연속 캔들")
+            exit_signal_weights.append(0.75)  # 중간-높은 가중치 (0.7→0.75로 상향)
+        # 현재 값이 매우 낮은 경우 (-30 → -28로 완화)
+        elif volume_osc_current is not None and float(volume_osc_current) < -28:
+            exit_signals.append(f"Volume Oscillator 심각한 음수 (-28 미만): {volume_osc_current}")
+            exit_signal_weights.append(0.65)  # 중간 가중치 (0.6→0.65로 상향)
+    except Exception as e:
+        logger.error(f"Volume Oscillator 확인 중 오류: {e}")
+    
+    # 3. RSI 또는 MACD에서 강한 다이버전스 확인 - 강화: 더 명확한 다이버전스 패턴 식별
+    try:
+        # 다이버전스 체크를 위해 최근 8개 캔들 가져오기
+        recent_df = df_5min.iloc[-8:].copy()
+        
+        # 롱 포지션에서의 베어리시 다이버전스 감지
         if position_side == 'long':
-            # === 가격과 RSI 다이버전스 ===
+            # 더 정교한 다이버전스 패턴 - 최소 2개의 피크 포인트 필요
             # 가격 피크 찾기
             price_peaks = []
             for i in range(1, len(recent_df) - 1):
@@ -4177,25 +4024,19 @@ def assess_exit_signals(df_5min, signals_data, position_side):
                 if recent_df['rsi'].iloc[i] > recent_df['rsi'].iloc[i-1] and recent_df['rsi'].iloc[i] > recent_df['rsi'].iloc[i+1]:
                     rsi_peaks.append((i, recent_df['rsi'].iloc[i]))
             
-            # 최소 두 개의 피크가 있는지 확인 + 가장 최근 피크가 최근 3개 캔들에 있는지 확인
+            # 유효한 피크가 최소 2개 있는지 확인
             if len(price_peaks) >= 2 and len(rsi_peaks) >= 2:
-                # 마지막 두 피크 선택
-                price_peaks.sort(key=lambda x: x[0])
-                rsi_peaks.sort(key=lambda x: x[0])
+                # 최근 두 개의 가격 피크와 RSI 피크 비교
+                price_peak1, price_peak2 = price_peaks[-2:]
+                rsi_peak1, rsi_peak2 = rsi_peaks[-2:]
                 
-                price_peak1, price_peak2 = price_peaks[-2], price_peaks[-1]
-                rsi_peak1, rsi_peak2 = rsi_peaks[-2], rsi_peaks[-1]
-                
-                # 피크가 최근에 있는지 확인
-                latest_peak_is_recent = price_peak2[0] > len(recent_df) - 4 and rsi_peak2[0] > len(recent_df) - 4
-                
-                # 가격은 상승하는데 RSI는 하락하는 명확한 다이버전스 (0.3% 이상 가격 상승)
-                if (price_peak2[1] > price_peak1[1] * 1.003) and (rsi_peak2[1] < rsi_peak1[1] * 0.97):
-                    weight = 0.8 if latest_peak_is_recent else 0.6  # 최근 피크면 가중치 높임
-                    exit_signals.append(f"Clear bearish RSI divergence detected{'(RECENT)' if latest_peak_is_recent else ''}")
-                    exit_signal_weights.append(weight)
+                # 비트코인 시장에 맞게 기준 조정 (1.003 → 1.002, 0.97 → 0.975)
+                # 가격은 더 높은 고점을 만들고 RSI는 더 낮은 고점을 만드는지 확인 (명확한 다이버전스)
+                if (price_peak2[1] > price_peak1[1] * 1.002) and (rsi_peak2[1] < rsi_peak1[1] * 0.975):
+                    exit_signals.append("롱 포지션에서 명확한 RSI 베어리시 다이버전스 감지 (가격은 더 높은 고점, RSI는 더 낮은 고점)")
+                    exit_signal_weights.append(0.85)  # 높은 가중치 (0.8→0.85로 상향)
             
-            # === 가격과 MACD 다이버전스 ===
+            # MACD 다이버전스 - 더 강화된 조건
             if 'macd' in recent_df.columns:
                 # MACD 피크 찾기
                 macd_peaks = []
@@ -4203,27 +4044,21 @@ def assess_exit_signals(df_5min, signals_data, position_side):
                     if recent_df['macd'].iloc[i] > recent_df['macd'].iloc[i-1] and recent_df['macd'].iloc[i] > recent_df['macd'].iloc[i+1]:
                         macd_peaks.append((i, recent_df['macd'].iloc[i]))
                 
-                # 최소 두 개의 피크가 있는지 확인
+                # 유효한 피크가 최소 2개 있는지 확인
                 if len(price_peaks) >= 2 and len(macd_peaks) >= 2:
-                    # 마지막 두 피크 선택
-                    macd_peaks.sort(key=lambda x: x[0])
-                    price_peaks.sort(key=lambda x: x[0])
+                    # 최근 두 개의 가격 피크와 MACD 피크 비교
+                    price_peak1, price_peak2 = price_peaks[-2:]
+                    macd_peak1, macd_peak2 = macd_peaks[-2:]
                     
-                    price_peak1, price_peak2 = price_peaks[-2], price_peaks[-1]
-                    macd_peak1, macd_peak2 = macd_peaks[-2], macd_peaks[-1]
-                    
-                    # 피크가 최근에 있는지 확인
-                    latest_peak_is_recent = price_peak2[0] > len(recent_df) - 4 and macd_peak2[0] > len(recent_df) - 4
-                    
-                    # 가격은 상승하는데 MACD는 하락하는 명확한 다이버전스 (0.3% 이상 가격 상승)
-                    if (price_peak2[1] > price_peak1[1] * 1.003) and (macd_peak2[1] < macd_peak1[1] * 0.97):
-                        weight = 0.8 if latest_peak_is_recent else 0.6  # 최근 피크면 가중치 높임
-                        exit_signals.append(f"Clear bearish MACD divergence detected{'(RECENT)' if latest_peak_is_recent else ''}")
-                        exit_signal_weights.append(weight)
+                    # 비트코인 시장에 맞게 기준 조정 (1.003 → 1.002, 0.97 → 0.975)
+                    # 가격은 더 높은 고점을 만들고 MACD는 더 낮은 고점을 만드는지 확인 (명확한 다이버전스)
+                    if (price_peak2[1] > price_peak1[1] * 1.002) and (macd_peak2[1] < macd_peak1[1] * 0.975):
+                        exit_signals.append("롱 포지션에서 명확한 MACD 베어리시 다이버전스 감지 (가격은 더 높은 고점, MACD는 더 낮은 고점)")
+                        exit_signal_weights.append(0.85)  # 높은 가중치 (0.8→0.85로 상향)
         
-        # ===== 숏 포지션에서의 불리시 다이버전스 감지 =====
+        # 숏 포지션에서의 불리시 다이버전스 감지
         elif position_side == 'short':
-            # === 가격과 RSI 다이버전스 ===
+            # 더 정교한 다이버전스 패턴 - 최소 2개의 저점 포인트 필요
             # 가격 저점 찾기
             price_troughs = []
             for i in range(1, len(recent_df) - 1):
@@ -4236,25 +4071,19 @@ def assess_exit_signals(df_5min, signals_data, position_side):
                 if recent_df['rsi'].iloc[i] < recent_df['rsi'].iloc[i-1] and recent_df['rsi'].iloc[i] < recent_df['rsi'].iloc[i+1]:
                     rsi_troughs.append((i, recent_df['rsi'].iloc[i]))
             
-            # 최소 두 개의 저점이 있는지 확인
+            # 유효한 저점이 최소 2개 있는지 확인
             if len(price_troughs) >= 2 and len(rsi_troughs) >= 2:
-                # 마지막 두 저점 선택
-                price_troughs.sort(key=lambda x: x[0])
-                rsi_troughs.sort(key=lambda x: x[0])
+                # 최근 두 개의 가격 저점과 RSI 저점 비교
+                price_trough1, price_trough2 = price_troughs[-2:]
+                rsi_trough1, rsi_trough2 = rsi_troughs[-2:]
                 
-                price_trough1, price_trough2 = price_troughs[-2], price_troughs[-1]
-                rsi_trough1, rsi_trough2 = rsi_troughs[-2], rsi_troughs[-1]
-                
-                # 저점이 최근에 있는지 확인
-                latest_trough_is_recent = price_trough2[0] > len(recent_df) - 4 and rsi_trough2[0] > len(recent_df) - 4
-                
-                # 가격은 하락하는데 RSI는 상승하는 명확한 다이버전스 (0.3% 이상 가격 하락)
-                if (price_trough2[1] < price_trough1[1] * 0.997) and (rsi_trough2[1] > rsi_trough1[1] * 1.03):
-                    weight = 0.8 if latest_trough_is_recent else 0.6  # 최근 저점이면 가중치 높임
-                    exit_signals.append(f"Clear bullish RSI divergence detected{'(RECENT)' if latest_trough_is_recent else ''}")
-                    exit_signal_weights.append(weight)
+                # 비트코인 시장에 맞게 기준 조정 (0.997 → 0.998, 1.03 → 1.025)
+                # 가격은 더 낮은 저점을 만들고 RSI는 더 높은 저점을 만드는지 확인 (명확한 다이버전스)
+                if (price_trough2[1] < price_trough1[1] * 0.998) and (rsi_trough2[1] > rsi_trough1[1] * 1.025):
+                    exit_signals.append("숏 포지션에서 명확한 RSI 불리시 다이버전스 감지 (가격은 더 낮은 저점, RSI는 더 높은 저점)")
+                    exit_signal_weights.append(0.85)  # 높은 가중치 (0.8→0.85로 상향)
             
-            # === 가격과 MACD 다이버전스 ===
+            # MACD 다이버전스 - 더 강화된 조건
             if 'macd' in recent_df.columns:
                 # MACD 저점 찾기
                 macd_troughs = []
@@ -4262,117 +4091,78 @@ def assess_exit_signals(df_5min, signals_data, position_side):
                     if recent_df['macd'].iloc[i] < recent_df['macd'].iloc[i-1] and recent_df['macd'].iloc[i] < recent_df['macd'].iloc[i+1]:
                         macd_troughs.append((i, recent_df['macd'].iloc[i]))
                 
-                # 최소 두 개의 저점이 있는지 확인
+                # 유효한 저점이 최소 2개 있는지 확인
                 if len(price_troughs) >= 2 and len(macd_troughs) >= 2:
-                    # 마지막 두 저점 선택
-                    price_troughs.sort(key=lambda x: x[0])
-                    macd_troughs.sort(key=lambda x: x[0])
+                    # 최근 두 개의 가격 저점과 MACD 저점 비교
+                    price_trough1, price_trough2 = price_troughs[-2:]
+                    macd_trough1, macd_trough2 = macd_troughs[-2:]
                     
-                    price_trough1, price_trough2 = price_troughs[-2], price_troughs[-1]
-                    macd_trough1, macd_trough2 = macd_troughs[-2], macd_troughs[-1]
-                    
-                    # 저점이 최근에 있는지 확인
-                    latest_trough_is_recent = price_trough2[0] > len(recent_df) - 4 and macd_trough2[0] > len(recent_df) - 4
-                    
-                    # 가격은 하락하는데 MACD는 상승하는 명확한 다이버전스 (0.3% 이상 가격 하락)
-                    if (price_trough2[1] < price_trough1[1] * 0.997) and (macd_trough2[1] > macd_trough1[1] * 1.03):
-                        weight = 0.8 if latest_trough_is_recent else 0.6  # 최근 저점이면 가중치 높임
-                        exit_signals.append(f"Clear bullish MACD divergence detected{'(RECENT)' if latest_trough_is_recent else ''}")
-                        exit_signal_weights.append(weight)
+                    # 비트코인 시장에 맞게 기준 조정 (0.997 → 0.998, 1.03 → 1.025)
+                    # 가격은 더 낮은 저점을 만들고 MACD는 더 높은 저점을 만드는지 확인 (명확한 다이버전스)
+                    if (price_trough2[1] < price_trough1[1] * 0.998) and (macd_trough2[1] > macd_trough1[1] * 1.025):
+                        exit_signals.append("숏 포지션에서 명확한 MACD 불리시 다이버전스 감지 (가격은 더 낮은 저점, MACD는 더 높은 저점)")
+                        exit_signal_weights.append(0.85)  # 높은 가중치 (0.8→0.85로 상향)
     except Exception as e:
-        logger.error(f"Error checking divergence: {e}")
+        logger.error(f"다이버전스 확인 중 오류: {e}")
     
-    # ======== 개선 4: 트렌드 전환 및 지지/저항 레벨 돌파 확인 ========
+    # 4. 트렌드 전환 및 지지/저항 레벨 돌파 확인 (더 엄격한 기준)
     try:
         latest = df_5min.iloc[-1]
         previous = df_5min.iloc[-2]
         
-        # A. 이동평균선 교차 확인 (명확한 교차 강화)
+        # A. 이동평균선 교차 확인 (강화: 단순 교차가 아닌 명확한 교차)
         if 'ema_12' in df_5min.columns and 'sma_20' in df_5min.columns:
-            # 롱 포지션 - EMA가 SMA 아래로 교차 (확인 강화)
+            # Long position - EMA가 SMA 아래로 교차 (with confirmation)
             if position_side == 'long':
-                # 최근 캔들 EMA/SMA 관계 확인
+                # 최근 5개 캔들 체크 (5→4로 감소, 비트코인의 빠른 움직임 고려)
                 cross_below_count = 0
-                for i in range(min(5, len(df_5min))):
+                for i in range(min(4, len(df_5min))):
                     idx = len(df_5min) - 1 - i
                     if df_5min['ema_12'].iloc[idx] < df_5min['sma_20'].iloc[idx]:
                         cross_below_count += 1
                 
-                # 최근 3캔들 이상에서 확인된 교차 (강한 신호)
-                if cross_below_count >= 3:
-                    # 추가 확인: 가격도 SMA 아래로 떨어졌는지
-                    if latest['close'] < latest['sma_20']:
-                        exit_signals.append(f"Strong EMA/SMA bearish cross with price below SMA ({cross_below_count} candles)")
-                        exit_signal_weights.append(0.8)  # 높은 가중치
-                    else:
-                        exit_signals.append(f"EMA crossed below SMA with confirmation ({cross_below_count} candles)")
-                        exit_signal_weights.append(0.7)  # 중간-높은 가중치
+                # 최소 3개 이상의 캔들에서 EMA가 SMA 아래에 있으면 명확한 교차로 간주 (3→2로 감소)
+                if cross_below_count >= 2:
+                    exit_signals.append(f"EMA12가 SMA20 아래로 교차 확인됨 ({cross_below_count} 캔들)")
+                    exit_signal_weights.append(0.75)  # 중간-높은 가중치 (0.7→0.75로 상향)
             
-            # 숏 포지션 - EMA가 SMA 위로 교차 (확인 강화)
+            # Short position - EMA가 SMA 위로 교차 (with confirmation)
             elif position_side == 'short':
-                # 최근 캔들 EMA/SMA 관계 확인
+                # 최근 5개 캔들 체크 (5→4로 감소, 비트코인의 빠른 움직임 고려)
                 cross_above_count = 0
-                for i in range(min(5, len(df_5min))):
+                for i in range(min(4, len(df_5min))):
                     idx = len(df_5min) - 1 - i
                     if df_5min['ema_12'].iloc[idx] > df_5min['sma_20'].iloc[idx]:
                         cross_above_count += 1
                 
-                # 최근 3캔들 이상에서 확인된 교차 (강한 신호)
-                if cross_above_count >= 3:
-                    # 추가 확인: 가격도 SMA 위로 올라갔는지
-                    if latest['close'] > latest['sma_20']:
-                        exit_signals.append(f"Strong EMA/SMA bullish cross with price above SMA ({cross_above_count} candles)")
-                        exit_signal_weights.append(0.8)  # 높은 가중치
-                    else:
-                        exit_signals.append(f"EMA crossed above SMA with confirmation ({cross_above_count} candles)")
-                        exit_signal_weights.append(0.7)  # 중간-높은 가중치
+                # 최소 3개 이상의 캔들에서 EMA가 SMA 위에 있으면 명확한 교차로 간주 (3→2로 감소)
+                if cross_above_count >= 2:
+                    exit_signals.append(f"EMA12가 SMA20 위로 교차 확인됨 ({cross_above_count} 캔들)")
+                    exit_signal_weights.append(0.75)  # 중간-높은 가중치 (0.7→0.75로 상향)
         
         # B. 주요 지지/저항 레벨 돌파 확인 (볼린저 밴드 + 피보나치 레벨 등)
-        # 롱 포지션 - 주요 지지선 하향 돌파
+        # Long position - 주요 지지선 하향 돌파
         if position_side == 'long' and 'bb_bbl' in latest:
-            if latest['close'] < latest['bb_bbl'] * 0.996:  # 0.4% 이상 명확한 돌파
-                exit_signals.append("Price broke significantly below lower Bollinger Band in long position")
-                exit_signal_weights.append(0.9)  # 매우 높은 가중치
-            elif latest['close'] < latest['bb_bbl']:  # 밴드 아래지만 약간만 돌파
-                # 연속 돌파 확인
-                consec_below = 0
-                for i in range(min(3, len(df_5min))):
-                    idx = len(df_5min) - 1 - i
-                    if df_5min['close'].iloc[idx] < df_5min['bb_bbl'].iloc[idx]:
-                        consec_below += 1
-                    else:
-                        break
-                
-                if consec_below >= 2:  # 2개 이상 연속 돌파
-                    exit_signals.append(f"Price below lower Bollinger Band for {consec_below} consecutive candles")
-                    exit_signal_weights.append(0.75)  # 중간-높은 가중치
+            # 비트코인의 빠른 움직임 고려 (0.998 → 0.999로 완화)
+            if latest['close'] < latest['bb_bbl'] * 0.999:
+                exit_signals.append("롱 포지션에서 가격이 하단 볼린저 밴드 아래로 크게 이탈")
+                exit_signal_weights.append(0.95)  # 매우 높은 가중치 (0.9→0.95로 상향)
         
-        # 숏 포지션 - 주요 저항선 상향 돌파
+        # Short position - 주요 저항선 상향 돌파
         elif position_side == 'short' and 'bb_bbh' in latest:
-            if latest['close'] > latest['bb_bbh'] * 1.004:  # 0.4% 이상 명확한 돌파
-                exit_signals.append("Price broke significantly above upper Bollinger Band in short position")
-                exit_signal_weights.append(0.9)  # 매우 높은 가중치
-            elif latest['close'] > latest['bb_bbh']:  # 밴드 위지만, 약간만 돌파
-                # 연속 돌파 확인
-                consec_above = 0
-                for i in range(min(3, len(df_5min))):
-                    idx = len(df_5min) - 1 - i
-                    if df_5min['close'].iloc[idx] > df_5min['bb_bbh'].iloc[idx]:
-                        consec_above += 1
-                    else:
-                        break
-                
-                if consec_above >= 2:  # 2개 이상 연속 돌파
-                    exit_signals.append(f"Price above upper Bollinger Band for {consec_above} consecutive candles")
-                    exit_signal_weights.append(0.75)  # 중간-높은 가중치
+            # 비트코인의 빠른 움직임 고려 (1.002 → 1.001로 완화)
+            if latest['close'] > latest['bb_bbh'] * 1.001:
+                exit_signals.append("숏 포지션에서 가격이 상단 볼린저 밴드 위로 크게 이탈")
+                exit_signal_weights.append(0.95)  # 매우 높은 가중치 (0.9→0.95로 상향)
         
-        # C. 캔들 패턴 분석 강화 - 강력한 반전 캔들 형성
+        # C. 캔들 패턴 분석 - 강력한 반전 캔들 형성
         # 최근 3개 캔들 분석
         last_3_candles = df_5min.iloc[-3:].copy()
         
-        # 롱 포지션 - 베어리시 반전 캔들
+        # Long position - 베어리시 반전 캔들
         if position_side == 'long':
-            # 강한 베어리시 캔들 확인 (몸통이 전체 범위의 65% 이상, 기존 70%에서 완화)
+            # 비트코인의 높은 변동성 고려 (0.7 → 0.65로 완화)
+            # 강한 베어리시 캔들 확인 (몸통이 전체 범위의 65% 이상)
             latest_body_ratio = abs(latest['close'] - latest['open']) / (latest['high'] - latest['low'])
             latest_is_bearish = latest['close'] < latest['open']
             
@@ -4381,22 +4171,13 @@ def assess_exit_signals(df_5min, signals_data, position_side):
                 prev_is_bullish = previous['close'] > previous['open']
                 
                 if prev_is_bullish:
-                    # 볼륨 확인 - 평균보다 높은 볼륨인지
-                    if 'volume' in df_5min.columns:
-                        avg_volume = df_5min['volume'].iloc[-10:-1].mean()
-                        if latest['volume'] > avg_volume * 1.5:  # 볼륨 급증
-                            exit_signals.append("Strong bearish reversal candle formed after bullish candle with high volume")
-                            exit_signal_weights.append(0.85)  # 높은 가중치
-                        else:
-                            exit_signals.append("Strong bearish reversal candle formed after bullish candle")
-                            exit_signal_weights.append(0.7)  # 중간-높은 가중치
-                    else:
-                        exit_signals.append("Strong bearish reversal candle formed after bullish candle")
-                        exit_signal_weights.append(0.7)  # 중간-높은 가중치
+                    exit_signals.append("롱 포지션에서 불리시 캔들 이후 강한 베어리시 반전 캔들 형성")
+                    exit_signal_weights.append(0.75)  # 중간-높은 가중치 (0.7→0.75로 상향)
         
-        # 숏 포지션 - 불리시 반전 캔들
+        # Short position - 불리시 반전 캔들
         elif position_side == 'short':
-            # 강한 불리시 캔들 확인 (몸통이 전체 범위의 65% 이상, 기존 70%에서 완화)
+            # 비트코인의 높은 변동성 고려 (0.7 → 0.65로 완화)
+            # 강한 불리시 캔들 확인 (몸통이 전체 범위의 65% 이상)
             latest_body_ratio = abs(latest['close'] - latest['open']) / (latest['high'] - latest['low'])
             latest_is_bullish = latest['close'] > latest['open']
             
@@ -4405,133 +4186,98 @@ def assess_exit_signals(df_5min, signals_data, position_side):
                 prev_is_bearish = previous['close'] < previous['open']
                 
                 if prev_is_bearish:
-                    # 볼륨 확인 - 평균보다 높은 볼륨인지
-                    if 'volume' in df_5min.columns:
-                        avg_volume = df_5min['volume'].iloc[-10:-1].mean()
-                        if latest['volume'] > avg_volume * 1.5:  # 볼륨 급증
-                            exit_signals.append("Strong bullish reversal candle formed after bearish candle with high volume")
-                            exit_signal_weights.append(0.85)  # 높은 가중치
-                        else:
-                            exit_signals.append("Strong bullish reversal candle formed after bearish candle")
-                            exit_signal_weights.append(0.7)  # 중간-높은 가중치
-                    else:
-                        exit_signals.append("Strong bullish reversal candle formed after bearish candle")
-                        exit_signal_weights.append(0.7)  # 중간-높은 가중치
+                    exit_signals.append("숏 포지션에서 베어리시 캔들 이후 강한 불리시 반전 캔들 형성")
+                    exit_signal_weights.append(0.75)  # 중간-높은 가중치 (0.7→0.75로 상향)
     except Exception as e:
-        logger.error(f"Error checking trend reversal and support/resistance levels: {e}")
+        logger.error(f"트렌드 반전 및 지지/저항 레벨 확인 중 오류: {e}")
     
-    # ======== 개선 5: 볼륨 프로필 분석 강화 ========
+    # 5. 볼륨 프로필 분석 - 볼륨 급증 확인
     try:
         if 'volume' in df_5min.columns:
             recent_volume = df_5min['volume'].iloc[-1]
             avg_volume = df_5min['volume'].iloc[-10:].mean()
             
-            # 볼륨 급증 임계값 완화 (3→2.5)
-            if recent_volume > avg_volume * 2.5:
-                # 캔들 방향 확인 (포지션 반대 방향인지)
-                candle_against_position = (position_side == 'long' and latest['close'] < latest['open']) or \
-                                         (position_side == 'short' and latest['close'] > latest['open'])
-                                     
-                if candle_against_position:
-                    exit_signals.append(f"High volume spike ({recent_volume/avg_volume:.1f}x average) against position direction")
-                    exit_signal_weights.append(0.8)  # 높은 가중치
-                else:
-                    # 볼륨은 급증했지만 반대 방향이 아닌 경우
-                    exit_signals.append(f"High volume spike ({recent_volume/avg_volume:.1f}x average) in current trend")
-                    exit_signal_weights.append(0.4)  # 낮은-중간 가중치
-            
-            # 추가: 볼륨 패턴 변화 감지
-            if len(df_5min) >= 15:
-                # 볼륨 추세 분석
-                vol_trend_5 = df_5min['volume'].iloc[-5:].mean()
-                vol_trend_10 = df_5min['volume'].iloc[-10:-5].mean()
-                vol_change_pct = (vol_trend_5 / vol_trend_10 - 1) * 100
-                
-                # 볼륨 추세 반전 감지
-                if position_side == 'long' and vol_trend_5 > vol_trend_10 * 1.3 and latest['close'] < latest['open']:
-                    # 롱 포지션에서 볼륨 증가 + 베어리시 캔들
-                    exit_signals.append(f"Volume trend increasing by {vol_change_pct:.1f}% with bearish price action")
-                    exit_signal_weights.append(0.6)  # 중간 가중치
-                elif position_side == 'short' and vol_trend_5 > vol_trend_10 * 1.3 and latest['close'] > latest['open']:
-                    # 숏 포지션에서 볼륨 증가 + 불리시 캔들
-                    exit_signals.append(f"Volume trend increasing by {vol_change_pct:.1f}% with bullish price action")
-                    exit_signal_weights.append(0.6)  # 중간 가중치
+            # 비트코인의 변동성 고려 (3배 → 2.8배로 완화)
+            # 볼륨이 평균의 2.8배 이상이고 캔들 방향이 포지션과 반대인 경우
+            if recent_volume > avg_volume * 2.8:
+                if (position_side == 'long' and latest['close'] < latest['open']) or \
+                   (position_side == 'short' and latest['close'] > latest['open']):
+                    exit_signals.append(f"포지션 방향과 반대되는 매우 높은 볼륨 스파이크 ({recent_volume/avg_volume:.1f}배)")
+                    exit_signal_weights.append(0.85)  # 높은 가중치 (0.8→0.85로 상향)
     except Exception as e:
-        logger.error(f"Error checking volume profile: {e}")
+        logger.error(f"볼륨 프로필 확인 중 오류: {e}")
     
-    # ======== 개선 6: 변동성 확인 (ATR 급증) ========
+    # 6. 변동성 확인 - ATR 급증
     try:
         if 'atr' in df_5min.columns:
             recent_atr = df_5min['atr'].iloc[-1]
             avg_atr = df_5min['atr'].iloc[-20:].mean()
             
-            # ATR 급증 임계값 낮춤 (2.5→2.2)
+            # 비트코인의 급격한 변동성 고려 (2.5배 → 2.2배로 완화)
+            # ATR이 평균의 2.2배 이상인 경우 (변동성 급증)
             if recent_atr > avg_atr * 2.2:
-                # 현재 캔들 방향 확인
-                if (position_side == 'long' and latest['close'] < latest['open']) or \
-                   (position_side == 'short' and latest['close'] > latest['open']):
-                    # 포지션 반대 방향으로의 변동성 급증
-                    exit_signals.append(f"Extreme volatility spike against position direction (ATR {recent_atr/avg_atr:.1f}x average)")
-                    exit_signal_weights.append(0.8)  # 높은 가중치
-                else:
-                    # 일반적인 변동성 급증
-                    exit_signals.append(f"Significant volatility increase detected (ATR {recent_atr/avg_atr:.1f}x average)")
-                    exit_signal_weights.append(0.6)  # 중간 가중치
+                exit_signals.append(f"극단적인 변동성 스파이크 감지 (ATR {recent_atr/avg_atr:.1f}배)")
+                exit_signal_weights.append(0.75)  # 중간-높은 가중치 (0.7→0.75로 상향)
     except Exception as e:
-        logger.error(f"Error checking volatility: {e}")
+        logger.error(f"변동성 확인 중 오류: {e}")
     
-    # ======== 개선 7: 극단적인 과매수/과매도 확인 (RSI) ========
+    # 7. 극단적인 과매수/과매도 확인 (RSI)
     try:
         if 'rsi' in df_5min.columns:
             rsi_value = df_5min['rsi'].iloc[-1]
             
-            # 롱 포지션 - RSI 과매도 (임계값 낮춤 20→18)
-            if position_side == 'long' and rsi_value <= 18:
+            # 비트코인의 극단적 움직임 고려 (조건 완화)
+            # Long position - RSI 과매도 (20→22로 완화)
+            if position_side == 'long' and rsi_value <= 22:
                 # 추가 확인: 이전 캔들들도 낮은 RSI인지
-                low_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-5:] if rsi <= 25)
+                # 비트코인의 빠른 움직임 고려 (25→28로 완화)
+                low_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-5:] if rsi <= 28)
                 
-                if low_rsi_count >= 3:  # 최소 3개 캔들에서 낮은 RSI 확인
-                    exit_signals.append(f"Extreme oversold conditions in RSI ({rsi_value:.1f}) persisting for {low_rsi_count} candles")
-                    exit_signal_weights.append(0.8)  # 높은 가중치
+                # 비트코인의 빠른 움직임 고려 (3→2로 완화)
+                if low_rsi_count >= 2:  # 최소 2개 캔들에서 낮은 RSI 확인
+                    exit_signals.append(f"RSI 극단적 과매도 상태 ({rsi_value:.1f}), {low_rsi_count}개 캔들 지속")
+                    exit_signal_weights.append(0.85)  # 높은 가중치 (0.8→0.85로 상향)
             
-            # 숏 포지션 - RSI 과매수 (임계값 조정 80→82)
-            elif position_side == 'short' and rsi_value >= 82:
+            # Short position - RSI 과매수 (80→78로 완화)
+            elif position_side == 'short' and rsi_value >= 78:
                 # 추가 확인: 이전 캔들들도 높은 RSI인지
-                high_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-5:] if rsi >= 75)
+                # 비트코인의 빠른 움직임 고려 (75→72로 완화)
+                high_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-5:] if rsi >= 72)
                 
-                if high_rsi_count >= 3:  # 최소 3개 캔들에서 높은 RSI 확인
-                    exit_signals.append(f"Extreme overbought conditions in RSI ({rsi_value:.1f}) persisting for {high_rsi_count} candles")
-                    exit_signal_weights.append(0.8)  # 높은 가중치
+                # 비트코인의 빠른 움직임 고려 (3→2로 완화)
+                if high_rsi_count >= 2:  # 최소 2개 캔들에서 높은 RSI 확인
+                    exit_signals.append(f"RSI 극단적 과매수 상태 ({rsi_value:.1f}), {high_rsi_count}개 캔들 지속")
+                    exit_signal_weights.append(0.85)  # 높은 가중치 (0.8→0.85로 상향)
     except Exception as e:
-        logger.error(f"Error checking RSI extremes: {e}")
+        logger.error(f"RSI 극단 확인 중 오류: {e}")
     
-    # ======== 개선 8: 멀티타임프레임 분석 - 상위 타임프레임 반전 신호 확인 ========
+    # 8. 멀티타임프레임 분석 - 상위 타임프레임 반전 신호 확인 (고급 분석)
     try:
         if 'hourly_reversal' in signals_data:
             if position_side == 'long' and signals_data['hourly_reversal'] == 'bearish':
-                # 1시간 차트에서 명확한 반전 패턴 확인
+                # 추가: 1시간 차트에서 명확한 반전 패턴 확인
                 hourly_confirmation = signals_data.get('hourly_confirmation', False)
                 
                 if hourly_confirmation:
-                    exit_signals.append("Confirmed bearish reversal on hourly chart with pattern confirmation")
-                    exit_signal_weights.append(0.9)  # 매우 높은 가중치
+                    exit_signals.append("1시간 차트에서 패턴 확인된 베어리시 반전")
+                    exit_signal_weights.append(0.95)  # 매우 높은 가중치 (0.9→0.95로 상향)
                 else:
-                    exit_signals.append("Bearish reversal signal on hourly chart")
-                    exit_signal_weights.append(0.8)  # 높은 가중치
+                    exit_signals.append("1시간 차트에서 베어리시 반전 신호")
+                    exit_signal_weights.append(0.85)  # 높은 가중치 (0.8→0.85로 상향)
             elif position_side == 'short' and signals_data['hourly_reversal'] == 'bullish':
-                # 1시간 차트에서 명확한 반전 패턴 확인
+                # 추가: 1시간 차트에서 명확한 반전 패턴 확인
                 hourly_confirmation = signals_data.get('hourly_confirmation', False)
                 
                 if hourly_confirmation:
-                    exit_signals.append("Confirmed bullish reversal on hourly chart with pattern confirmation")
-                    exit_signal_weights.append(0.9)  # 매우 높은 가중치
+                    exit_signals.append("1시간 차트에서 패턴 확인된 불리시 반전")
+                    exit_signal_weights.append(0.95)  # 매우 높은 가중치 (0.9→0.95로 상향)
                 else:
-                    exit_signals.append("Bullish reversal signal on hourly chart")
-                    exit_signal_weights.append(0.8)  # 높은 가중치
+                    exit_signals.append("1시간 차트에서 불리시 반전 신호")
+                    exit_signal_weights.append(0.85)  # 높은 가중치 (0.8→0.85로 상향)
     except Exception as e:
-        logger.error(f"Error checking hourly reversal: {e}")
+        logger.error(f"1시간 반전 확인 중 오류: {e}")
     
-    # ======== 새로 추가: 패턴 연속성 확인 - 여러 지표의 일관된 신호 분석 ========
+    # 9. 새로 추가: 패턴 연속성 확인 - 여러 지표의 일관된 신호 분석
     try:
         # 신호의 일관성 수준 계산
         consistent_bearish_signals = 0
@@ -4539,260 +4285,94 @@ def assess_exit_signals(df_5min, signals_data, position_side):
         
         # A. RSI 방향
         if 'rsi' in df_5min.columns:
+            # 비트코인의 급격한 움직임 고려 (-2→-1.8로 완화)
             rsi_direction = df_5min['rsi'].iloc[-1] - df_5min['rsi'].iloc[-2]
-            if rsi_direction < -2:  # RSI가 명확하게 하락 중
+            if rsi_direction < -1.8:  # RSI가 명확하게 하락 중
                 consistent_bearish_signals += 1
-            elif rsi_direction > 2:  # RSI가 명확하게 상승 중
+            # 비트코인의 급격한 움직임 고려 (2→1.8로 완화)
+            elif rsi_direction > 1.8:  # RSI가 명확하게 상승 중
                 consistent_bullish_signals += 1
         
         # B. MACD 방향
         if 'macd' in df_5min.columns and 'macd_signal' in df_5min.columns:
+            # 비트코인의 급격한 움직임 고려 (-0.2→-0.18로 완화)
             macd_direction = df_5min['macd'].iloc[-1] - df_5min['macd'].iloc[-2]
             macd_signal_cross = (df_5min['macd'].iloc[-2] > df_5min['macd_signal'].iloc[-2] and 
                                 df_5min['macd'].iloc[-1] < df_5min['macd_signal'].iloc[-1])  # 베어리시 크로스
             macd_signal_cross_bullish = (df_5min['macd'].iloc[-2] < df_5min['macd_signal'].iloc[-2] and 
                                         df_5min['macd'].iloc[-1] > df_5min['macd_signal'].iloc[-1])  # 불리시 크로스
             
-            if macd_direction < -0.2 or macd_signal_cross:  # MACD가 명확하게 하락 중이거나 베어리시 크로스
+            if macd_direction < -0.18 or macd_signal_cross:  # MACD가 명확하게 하락 중이거나 베어리시 크로스
                 consistent_bearish_signals += 1
-            elif macd_direction > 0.2 or macd_signal_cross_bullish:  # MACD가 명확하게 상승 중이거나 불리시 크로스
+            # 비트코인의 급격한 움직임 고려 (0.2→0.18로 완화)
+            elif macd_direction > 0.18 or macd_signal_cross_bullish:  # MACD가 명확하게 상승 중이거나 불리시 크로스
                 consistent_bullish_signals += 1
         
         # C. 볼린저 밴드 위치
         if 'bb_bbm' in df_5min.columns:
             price_to_bbm = latest['close'] - latest['bb_bbm']
-            if price_to_bbm < 0 and abs(price_to_bbm) > (latest['bb_bbh'] - latest['bb_bbl']) * 0.3:
-                # 가격이 중앙선보다 밴드 폭의 30% 이상 아래
+            # 비트코인의 빠른 움직임 고려 (0.3→0.27로 완화)
+            if price_to_bbm < 0 and abs(price_to_bbm) > (latest['bb_bbh'] - latest['bb_bbl']) * 0.27:
+                # 가격이 중앙선보다 밴드 폭의 27% 이상 아래
                 consistent_bearish_signals += 1
-            elif price_to_bbm > 0 and abs(price_to_bbm) > (latest['bb_bbh'] - latest['bb_bbl']) * 0.3:
-                # 가격이 중앙선보다 밴드 폭의 30% 이상 위
+            # 비트코인의 빠른 움직임 고려 (0.3→0.27로 완화)
+            elif price_to_bbm > 0 and abs(price_to_bbm) > (latest['bb_bbh'] - latest['bb_bbl']) * 0.27:
+                # 가격이 중앙선보다 밴드 폭의 27% 이상 위
                 consistent_bullish_signals += 1
         
-        # D. ADX & DI 방향
+        # D. ADX & DI 방향 (비트코인 시장에 맞게 ADX 임계값 25→23으로 완화)
         if 'adx' in df_5min.columns and 'di_plus' in df_5min.columns and 'di_minus' in df_5min.columns:
-            # ADX가 25 이상이고, -DI가 +DI보다 높은 경우 (강한 하락 트렌드)
-            if df_5min['adx'].iloc[-1] > 23 and df_5min['di_minus'].iloc[-1] > df_5min['di_plus'].iloc[-1]:  # 25→23으로 완화
+            # ADX가 23 이상이고, -DI가 +DI보다 높은 경우 (강한 하락 트렌드)
+            if df_5min['adx'].iloc[-1] > 23 and df_5min['di_minus'].iloc[-1] > df_5min['di_plus'].iloc[-1]:
                 consistent_bearish_signals += 1
-            # ADX가 25 이상이고, +DI가 -DI보다 높은 경우 (강한 상승 트렌드)
-            elif df_5min['adx'].iloc[-1] > 23 and df_5min['di_plus'].iloc[-1] > df_5min['di_minus'].iloc[-1]:  # 25→23으로 완화
+            # ADX가 23 이상이고, +DI가 -DI보다 높은 경우 (강한 상승 트렌드)
+            elif df_5min['adx'].iloc[-1] > 23 and df_5min['di_plus'].iloc[-1] > df_5min['di_minus'].iloc[-1]:
                 consistent_bullish_signals += 1
         
         # E. 볼륨 기반 지표
         if 'obv' in df_5min.columns:
-            obv_direction = df_5min['obv'].iloc[-1] - df_5min['obv'].iloc[-3]
+            # 비트코인의 빠른 움직임 고려 (3→2로 완화)
+            obv_direction = df_5min['obv'].iloc[-1] - df_5min['obv'].iloc[-2]
             if obv_direction < 0:  # OBV 하락 (매도 압력)
                 consistent_bearish_signals += 1
             elif obv_direction > 0:  # OBV 상승 (매수 압력)
                 consistent_bullish_signals += 1
         
-        # F. 추가: 최근 캔들 방향
-        recent_candles = df_5min.iloc[-3:].copy()
-        bullish_candles = sum(1 for i in range(len(recent_candles)) if recent_candles['close'].iloc[i] > recent_candles['open'].iloc[i])
-        bearish_candles = sum(1 for i in range(len(recent_candles)) if recent_candles['close'].iloc[i] < recent_candles['open'].iloc[i])
-        
-        if bearish_candles >= 2:  # 최근 3개 중 2개 이상 베어리시
-            consistent_bearish_signals += 1
-        elif bullish_candles >= 2:  # 최근 3개 중 2개 이상 불리시
-            consistent_bullish_signals += 1
-        
-        # 일관된 신호 분석 결과를 바탕으로 종료 신호 평가
-        if position_side == 'long' and consistent_bearish_signals >= 3:  # 3개 이상 일관된 베어리시 신호
-            exit_signals.append(f"{consistent_bearish_signals} consistent bearish signals detected across multiple indicators")
+        # 일관된 신호 분석 결과를 바탕으로 출구 신호 평가
+        # 비트코인의 빠른 움직임 고려 (3→2로 완화)
+        if position_side == 'long' and consistent_bearish_signals >= 2:
+            exit_signals.append(f"여러 지표에서 {consistent_bearish_signals}개의 일관된 베어리시 신호 감지")
             # 신호 수에 따라 가중치 증가
-            exit_signal_weights.append(min(0.6 + (consistent_bearish_signals - 3) * 0.05, 0.85))  # 최대 0.85 가중치
-        elif position_side == 'short' and consistent_bullish_signals >= 3:  # 3개 이상 일관된 불리시 신호
-            exit_signals.append(f"{consistent_bullish_signals} consistent bullish signals detected across multiple indicators")
+            # 가중치 상향 (0.7→0.75 기본, 단계 0.05→0.07로 증가)
+            exit_signal_weights.append(min(0.75 + (consistent_bearish_signals - 2) * 0.07, 0.95))
+        elif position_side == 'short' and consistent_bullish_signals >= 2:
+            exit_signals.append(f"여러 지표에서 {consistent_bullish_signals}개의 일관된 불리시 신호 감지")
             # 신호 수에 따라 가중치 증가
-            exit_signal_weights.append(min(0.6 + (consistent_bullish_signals - 3) * 0.05, 0.85))  # 최대 0.85 가중치
+            # 가중치 상향 (0.7→0.75 기본, 단계 0.05→0.07로 증가)
+            exit_signal_weights.append(min(0.75 + (consistent_bullish_signals - 2) * 0.07, 0.95))
     except Exception as e:
-        logger.error(f"Error checking pattern consistency: {e}")
-    
-    # ======== 새로 추가: 급격한 가격 변화 감지 ========
-    try:
-        # 최근 5캔들 이내 급격한 가격 변화 감지
-        if len(df_5min) >= 5:
-            price_5_ago = df_5min['close'].iloc[-5]
-            price_change_pct = (latest['close'] - price_5_ago) / price_5_ago * 100
-            
-            # 롱 포지션에서 급격한 가격 하락 (-2% 이상)
-            if position_side == 'long' and price_change_pct < -2:
-                exit_signals.append(f"Sharp price decline of {abs(price_change_pct):.2f}% in last 5 candles")
-                
-                # 하락 가속화 확인
-                recent_changes = [
-                    (df_5min['close'].iloc[i] - df_5min['close'].iloc[i-1]) / df_5min['close'].iloc[i-1] * 100
-                    for i in range(-1, -4, -1)
-                ]
-                
-                # 하락이 가속화되는지 확인 (최근 캔들이 더 크게 하락)
-                if recent_changes[0] < recent_changes[1] and recent_changes[0] < -0.3:
-                    exit_signal_weights.append(0.9)  # 매우 높은 가중치 (하락 가속화)
-                else:
-                    exit_signal_weights.append(0.75)  # 중간-높은 가중치
-            
-            # 숏 포지션에서 급격한 가격 상승 (2% 이상)
-            elif position_side == 'short' and price_change_pct > 2:
-                exit_signals.append(f"Sharp price increase of {price_change_pct:.2f}% in last 5 candles")
-                
-                # 상승 가속화 확인
-                recent_changes = [
-                    (df_5min['close'].iloc[i] - df_5min['close'].iloc[i-1]) / df_5min['close'].iloc[i-1] * 100
-                    for i in range(-1, -4, -1)
-                ]
-                
-                # 상승이 가속화되는지 확인 (최근 캔들이 더 크게 상승)
-                if recent_changes[0] > recent_changes[1] and recent_changes[0] > 0.3:
-                    exit_signal_weights.append(0.9)  # 매우 높은 가중치 (상승 가속화)
-                else:
-                    exit_signal_weights.append(0.75)  # 중간-높은 가중치
-    except Exception as e:
-        logger.error(f"Error checking rapid price changes: {e}")
-    
-    # ======== 새로 추가: 여러 지표의 교차 감지 ========
-    try:
-        # 여러 기술적 지표들의 교차 확인
-        if len(df_5min) >= 5:
-            # MACD와 Signal 라인 교차
-            if 'macd' in df_5min.columns and 'macd_signal' in df_5min.columns:
-                # 롱 포지션에서 베어리시 MACD 교차
-                if position_side == 'long':
-                    # MACD가 시그널 라인 아래로 교차
-                    if (df_5min['macd'].iloc[-2] > df_5min['macd_signal'].iloc[-2] and
-                        df_5min['macd'].iloc[-1] < df_5min['macd_signal'].iloc[-1]):
-                        # 추가 확인: MACD 값이 양수에서 음수로 변하는지
-                        if df_5min['macd'].iloc[-2] > 0 and df_5min['macd'].iloc[-1] < 0:
-                            exit_signals.append("Bearish MACD cross with sign change from positive to negative")
-                            exit_signal_weights.append(0.8)  # 높은 가중치
-                        else:
-                            exit_signals.append("Bearish MACD cross below signal line")
-                            exit_signal_weights.append(0.6)  # 중간 가중치
-                
-                # 숏 포지션에서 불리시 MACD 교차
-                elif position_side == 'short':
-                    # MACD가 시그널 라인 위로 교차
-                    if (df_5min['macd'].iloc[-2] < df_5min['macd_signal'].iloc[-2] and
-                        df_5min['macd'].iloc[-1] > df_5min['macd_signal'].iloc[-1]):
-                        # 추가 확인: MACD 값이 음수에서 양수로 변하는지
-                        if df_5min['macd'].iloc[-2] < 0 and df_5min['macd'].iloc[-1] > 0:
-                            exit_signals.append("Bullish MACD cross with sign change from negative to positive")
-                            exit_signal_weights.append(0.8)  # 높은 가중치
-                        else:
-                            exit_signals.append("Bullish MACD cross above signal line")
-                            exit_signal_weights.append(0.6)  # 중간 가중치
-            
-            # 스토캐스틱 교차 확인
-            if 'stoch_k' in df_5min.columns and 'stoch_d' in df_5min.columns:
-                # 롱 포지션에서 베어리시 스토캐스틱 교차
-                if position_side == 'long':
-                    # K선이 D선 아래로 교차
-                    if (df_5min['stoch_k'].iloc[-2] > df_5min['stoch_d'].iloc[-2] and
-                        df_5min['stoch_k'].iloc[-1] < df_5min['stoch_d'].iloc[-1]):
-                        # 추가 확인: 과매수 영역에서 발생
-                        if df_5min['stoch_k'].iloc[-2] > 80:
-                            exit_signals.append("Bearish Stochastic cross from overbought area")
-                            exit_signal_weights.append(0.75)  # 중간-높은 가중치
-                        else:
-                            exit_signals.append("Bearish Stochastic cross")
-                            exit_signal_weights.append(0.5)  # 중간 가중치
-                
-                # 숏 포지션에서 불리시 스토캐스틱 교차
-                elif position_side == 'short':
-                    # K선이 D선 위로 교차
-                    if (df_5min['stoch_k'].iloc[-2] < df_5min['stoch_d'].iloc[-2] and
-                        df_5min['stoch_k'].iloc[-1] > df_5min['stoch_d'].iloc[-1]):
-                        # 추가 확인: 과매도 영역에서 발생
-                        if df_5min['stoch_k'].iloc[-2] < 20:
-                            exit_signals.append("Bullish Stochastic cross from oversold area")
-                            exit_signal_weights.append(0.75)  # 중간-높은 가중치
-                        else:
-                            exit_signals.append("Bullish Stochastic cross")
-                            exit_signal_weights.append(0.5)  # 중간 가중치
-    except Exception as e:
-        logger.error(f"Error checking indicator crossovers: {e}")
-    
-    # ======== 새로 추가: 핵심 추세 반전 패턴 감지 ========
-    try:
-        if len(df_5min) >= 10:
-            # 최근 10개 캔들 분석
-            candles = df_5min.iloc[-10:].copy()
-            
-            # 1. 이중 바닥/이중 상단 패턴
-            # 롱 포지션에서 이중 상단 패턴 (베어리시)
-            if position_side == 'long':
-                # 최근 10개 캔들에서 두 개의 고점 찾기
-                highs = []
-                for i in range(1, 9):
-                    if candles['high'].iloc[i] > candles['high'].iloc[i-1] and candles['high'].iloc[i] > candles['high'].iloc[i+1]:
-                        highs.append((i, candles['high'].iloc[i]))
-                
-                # 최소 두 개의 고점이 있는지 확인
-                if len(highs) >= 2:
-                    # 마지막 두 고점 선택
-                    last_two_highs = sorted(highs, key=lambda x: x[0])[-2:]
-                    high1_idx, high1_val = last_two_highs[0]
-                    high2_idx, high2_val = last_two_highs[1]
-                    
-                    # 두 고점이 비슷한 높이인지 확인 (±0.5% 이내)
-                    if abs(high1_val - high2_val) / high1_val < 0.005:
-                        # 두 고점 사이에 저점이 있는지 확인
-                        min_between = min(candles['low'].iloc[high1_idx:high2_idx+1])
-                        
-                        # 고점과 저점의 차이가 유의미한지 확인 (최소 0.5%)
-                        if (high1_val - min_between) / min_between > 0.005:
-                            # 두 번째 고점 이후 가격이 하락했는지 확인
-                            if candles['close'].iloc[-1] < candles['close'].iloc[high2_idx]:
-                                exit_signals.append("Double top pattern detected with price decline")
-                                exit_signal_weights.append(0.85)  # 높은 가중치
-            
-            # 숏 포지션에서 이중 바닥 패턴 (불리시)
-            elif position_side == 'short':
-                # 최근 10개 캔들에서 두 개의 저점 찾기
-                lows = []
-                for i in range(1, 9):
-                    if candles['low'].iloc[i] < candles['low'].iloc[i-1] and candles['low'].iloc[i] < candles['low'].iloc[i+1]:
-                        lows.append((i, candles['low'].iloc[i]))
-                
-                # 최소 두 개의 저점이 있는지 확인
-                if len(lows) >= 2:
-                    # 마지막 두 저점 선택
-                    last_two_lows = sorted(lows, key=lambda x: x[0])[-2:]
-                    low1_idx, low1_val = last_two_lows[0]
-                    low2_idx, low2_val = last_two_lows[1]
-                    
-                    # 두 저점이 비슷한 높이인지 확인 (±0.5% 이내)
-                    if abs(low1_val - low2_val) / low1_val < 0.005:
-                        # 두 저점 사이에 고점이 있는지 확인
-                        max_between = max(candles['high'].iloc[low1_idx:low2_idx+1])
-                        
-                        # 저점과 고점의 차이가 유의미한지 확인 (최소 0.5%)
-                        if (max_between - low1_val) / low1_val > 0.005:
-                            # 두 번째 저점 이후 가격이 상승했는지 확인
-                            if candles['close'].iloc[-1] > candles['close'].iloc[low2_idx]:
-                                exit_signals.append("Double bottom pattern detected with price increase")
-                                exit_signal_weights.append(0.85)  # 높은 가중치
-    except Exception as e:
-        logger.error(f"Error checking reversal patterns: {e}")
+        logger.error(f"패턴 일관성 확인 중 오류: {e}")
     
     # 신호 가중치 합산하여 최종 결정
     exit_score = sum(exit_signal_weights)
     
-    # 신중한 청산: 최소 1.5 이상의 가중치 합산 점수 필요
-    should_exit = exit_score >= 1.5  # 임계값 유지
+    # 비트코인의 빠른 움직임을 고려하여 출구 임계값 조정 (1.7→1.5로 완화)
+    should_exit = exit_score >= 1.5
     
-    # 로그 출력
+    # 출구 신호가 있으면 로깅
     if exit_signals:
-        logger.info(f"Exit signals detected: {exit_signals} with weights: {exit_signal_weights}, total score: {exit_score}")
+        logger.info(f"출구 신호 감지: {exit_signals} - 가중치: {exit_signal_weights}, 총점: {exit_score}")
     
-    # 반환 객체
+    # 결과 반환
     result = {
         "should_exit": should_exit,
         "exit_signals": exit_signals,
         "exit_score": exit_score,
         "exit_signal_weights": exit_signal_weights
     }
-    
-    logger.info(f"Exit assessment result: {result}")
+    logger.info(f"출구 평가 결과: {result}")
     return result
+
 
 ### 메인 AI 트레이딩 로직
 def ai_trading():
@@ -5052,7 +4632,7 @@ def ai_trading():
             # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
             strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("long_trend_strong", False)
             volume_valid = signals_data.get("VolumeOsc_Current", -999) > 0 or (
-                strong_signals and signals_data.get("VolumeOsc_Current", -999) > -10
+                strong_signals and signals_data.get("VolumeOsc_Current", -999) > -15
             )
             
             trend_valid = trend_strength_result.get("long_trend_strong", False)
@@ -5174,21 +4754,23 @@ def ai_trading():
 
 You are a Bitcoin futures day trader on the 5-minute timeframe with leveraged positions. Your strategy uses pre-calculated core indicators and trend strength assessments. Capital preservation is paramount.
 
-## 1. CRITICAL: POSITION MANAGEMENT RULES
-⚠️ **POSITION MANAGEMENT RULES - READ FIRST** ⚠️
+## 1. CRITICAL: POSITION MANAGEMENT RULES ⚠️
+
+**POSITION MANAGEMENT RULES - READ FIRST**
 
 Before making ANY trading decision:
+
 1. **ALWAYS CHECK** current position in the Portfolio section:
    - "Current Position Side" will be "long", "short", or "none"
 
 2. **For EXIT decisions:**
-   - If current position is LONG → Must use "sell" command to exit
-   - If current position is SHORT → Must use "buy" command to exit
+   - If current position is LONG → Must use **"sell"** command to exit
+   - If current position is SHORT → Must use **"buy"** command to exit
    - If current position is NONE → No exit possible (consider entries only)
 
 3. **For ENTRY decisions:**
-   - To open LONG position → Use "buy" command
-   - To open SHORT position → Use "sell" command
+   - To open LONG position → Use **"buy"** command
+   - To open SHORT position → Use **"sell"** command
 
 ⚠️ Using the wrong command will INCREASE position risk instead of reducing it.
 
@@ -5196,46 +4778,47 @@ Before making ANY trading decision:
 
 The data below must be considered in your analysis.
 
-**[Market Data]**  
-• Current Price: {current_price:.2f} USDT  
+**[Market Data]**
+- Current Price: {current_price:.2f} USDT
 
 **Technical Indicators (5-min, 1-hour, 4-hour timeframes)**
-→ 5-Minute Chart Data:  
-- RSI(14): {df_5min['rsi'].iloc[-1]:.2f}  
-- MACD: {df_5min['macd'].iloc[-1]:.2f}  
-- Bollinger Bands (20):  
-  * Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}  
-  * Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}  
-  * Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}  
-- ATR: {df_5min['atr'].iloc[-1]:.2f}  
-- ADX: {df_5min['adx'].iloc[-1]:.2f}  
-- DI+: {df_5min['di_plus'].iloc[-1]:.2f}  
-- DI-: {df_5min['di_minus'].iloc[-1]:.2f}  
-- CMF: {df_5min['cmf'].iloc[-1]:.2f}  
 
-→ 1-Hour Chart Data:  
-- RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}  
-- MACD: {df_hourly['macd'].iloc[-1]:.2f}  
-- ADX: {df_hourly['adx'].iloc[-1]:.2f}  
-- DI+: {df_hourly['di_plus'].iloc[-1]:.2f}  
-- DI-: {df_hourly['di_minus'].iloc[-1]:.2f}  
-- CMF: {df_hourly['cmf'].iloc[-1]:.2f}  
+→ **5-Minute Chart Data:**
+- RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
+- MACD: {df_5min['macd'].iloc[-1]:.2f}
+- Bollinger Bands (20):
+  * Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}
+  * Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}
+  * Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
+- ATR: {df_5min['atr'].iloc[-1]:.2f}
+- ADX: {df_5min['adx'].iloc[-1]:.2f}
+- DI+: {df_5min['di_plus'].iloc[-1]:.2f}
+- DI-: {df_5min['di_minus'].iloc[-1]:.2f}
+- CMF: {df_5min['cmf'].iloc[-1]:.2f}
 
-→ 4-Hour Chart Data:  
-- RSI(14): {df_4h['rsi'].iloc[-1]:.2f}  
-- MACD: {df_4h['macd'].iloc[-1]:.2f}  
-- ADX: {df_4h['adx'].iloc[-1]:.2f}  
-- DI+: {df_4h['di_plus'].iloc[-1]:.2f}  
-- DI-: {df_4h['di_minus'].iloc[-1]:.2f}  
-- CMF: {df_4h['cmf'].iloc[-1]:.2f}  
+→ **1-Hour Chart Data:**
+- RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
+- MACD: {df_hourly['macd'].iloc[-1]:.2f}
+- ADX: {df_hourly['adx'].iloc[-1]:.2f}
+- DI+: {df_hourly['di_plus'].iloc[-1]:.2f}
+- DI-: {df_hourly['di_minus'].iloc[-1]:.2f}
+- CMF: {df_hourly['cmf'].iloc[-1]:.2f}
 
-**[Portfolio]**  
-• Total USDT Assets: {total_usdt:.1f}  
-• Free USDT Balance: {free_usdt:.1f}  
-• Used USDT Holdings: {used_usdt:.1f}  
-• BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT  
-• Current Position Side: {position_side}  ← "long", "short", or "none"  
-• Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
+→ **4-Hour Chart Data:**
+- RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
+- MACD: {df_4h['macd'].iloc[-1]:.2f}
+- ADX: {df_4h['adx'].iloc[-1]:.2f}
+- DI+: {df_4h['di_plus'].iloc[-1]:.2f}
+- DI-: {df_4h['di_minus'].iloc[-1]:.2f}
+- CMF: {df_4h['cmf'].iloc[-1]:.2f}
+
+**[Portfolio]**
+- Total USDT Assets: {total_usdt:.1f}
+- Free USDT Balance: {free_usdt:.1f}
+- Used USDT Holdings: {used_usdt:.1f}
+- BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT
+- Current Position Side: {position_side} ← "long", "short", or "none"
+- Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
 
 ## 3. Pre-Calculated Indicators and Signals
 
@@ -5261,27 +4844,36 @@ The data below must be considered in your analysis.
 
 For a valid PRIMARY entry, ALL of the following must be true:
 
-**For Long Entry:**  
-1. BlackFlag FTS: Must show a BUY signal within the last 20 candles
-2. UT Bot Alerts: Must display a BUY alert within the last 20 candles
-3. Volume Oscillator: Should generally be POSITIVE, but can be moderately negative (-10 or higher) if other signals are strong and aligned
-4. Trend Strength: Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"})
+**For Long Entry:**
+1. **BlackFlag FTS:** Must show a BUY signal within the last 20 candles.
+2. **UT Bot Alerts:** Must display a BUY alert within the last 20 candles.
+3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-10 or higher) if other signals are strong and aligned.
+4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"}).
 
-**For Short Entry:**  
-1. BlackFlag FTS: Must show a SELL signal within the last 20 candles
-2. UT Bot Alerts: Must display a SELL alert within the last 20 candles
-3. Volume Oscillator: Should generally be POSITIVE, but can be moderately negative (-10 or higher) if other signals are strong and aligned
-4. Trend Strength: Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"})
+**For Short Entry:**
+1. **BlackFlag FTS:** Must show a SELL signal within the last 20 candles.
+2. **UT Bot Alerts:** Must display a SELL alert within the last 20 candles.
+3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-10 or higher) if other signals are strong and aligned.
+4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"}).
 
 **Exit Rules:**
-1. If exit signals are detected (pre-calculated as {"YES" if should_exit else "NO"}), exit the current position
+1. If exit signals are detected (pre-calculated as {"YES" if should_exit else "NO"}), exit the current position immediately using the correct command (sell to exit long, buy to exit short).
 
 **Position Sizing Rules:**
-1. If market is overheated in the direction of entry, reduce position size by 50%
-2. Standard position sizes:
-   - Strong Signal: 100% of calculated size
-   - Moderate Signal: 60% of calculated size
-   - Weak Signal: 30% of calculated size
+1. If the market is overheated in the direction of entry, reduce position size by 50%.
+2. Standard position sizes based on signal strength:
+   - **Strong Signal:** 100% of calculated size.
+   - **Medium Signal:** 70% of calculated size. *(Increased from 60% to better capture movement.)*
+   - **Weak Signal:** 40% of calculated size. *(Adjusted from 30% for improved exposure on less sure signals.)*
+
+**Risk/Reward (PL Ratio) Guidelines (Bitcoin-Specific):**
+- **Strong Signal & Low Volatility:** Use a PL ratio of **1.7**
+- **Strong Signal & High Volatility:** Use a PL ratio of **1.3** (to secure quick profits at lower target prices)
+- **Medium Signal:** Use a PL ratio of **1.5**
+- **Weak Signal:** Use a PL ratio of **1.4**
+
+**Additional Guidelines:**
+- Always consider Bitcoin's rapid volatility alongside its long-term upward trend. This means while the market may be prone to swift moves, the overall bias can be bullish. Trade conservatively to preserve capital and adjust positions accordingly.
 
 ## 5. Response Format
 
@@ -5289,28 +4881,33 @@ Output a JSON object:
 
 ```json
 {{
-"decision": "buy" or "sell" or "hold",
-"percentage": integer (0-100),
-"stop_loss_price": float,
-"pl_ratio": float (1.3-2.0),
-"reason": "Concise rationale referencing signals & data"
+  "decision": "buy" or "sell" or "hold",
+  "percentage": integer (0-100),
+  "stop_loss_price": float,
+  "pl_ratio": float (1.3-2.0),
+  "reason": "Concise rationale referencing signals & data"
 }}
-```
 
-- **decision:** MUST FIRST CHECK CURRENT POSITION STATUS:
-  - To exit LONG position → Use "sell"
-  - To exit SHORT position → Use "buy"
-  - To open new LONG → Use "buy"
-  - To open new SHORT → Use "sell"
-  - No position + No valid entry → Use "hold"
+decision: MUST FIRST CHECK CURRENT POSITION STATUS:
 
-- **percentage:** Position size (0-100)
-- **stop_loss_price:** Based on strategy guidelines
-- **pl_ratio:** Based on signal strength (1.3-2.0)
-- **reason:** Include clear explanation with all relevant factors
+To exit a LONG position → Use "sell"
+To exit a SHORT position → Use "buy"
+To open a new LONG → Use "buy"
+To open a new SHORT → Use "sell"
+If there is no position and no valid entry signal → Use "hold"
+percentage: Position size (0-100) based on the adjusted sizing rules.
+
+stop_loss_price: As defined by the strategy (pre-calculated indicator).
+
+pl_ratio: Based on the signal strength and market volatility, following the Bitcoin-specific guidelines above.
+
+reason: Provide a clear explanation detailing which signals and data informed the decision.
 
 ## 6. Final Notes
-When in doubt, preserve capital - "hold" is often the safest decision. All key indicators have been pre-calculated for you. Focus on making a clear decision based on the provided data.
+
+When in doubt, preserve capital. Considering Bitcoin's rapid volatility paired with its long-term bullish trend, it is essential to balance aggressive entries with conservative management. "hold" is often the safest decision if the signals are not strongly aligned.
+
+All key indicators have been pre-calculated for you. Focus on making a clear decision based on the provided data and always trade within your risk parameters.
                         """
                     },
                     {
