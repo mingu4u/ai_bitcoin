@@ -4693,7 +4693,7 @@ def ai_trading():
             # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
             strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("short_trend_strong", False)
             volume_valid = signals_data.get("VolumeOsc_Current", -999) > 0 or (
-                strong_signals and signals_data.get("VolumeOsc_Current", -999) > -10
+                strong_signals and signals_data.get("VolumeOsc_Current", -999) > -15
             )
             
             trend_valid = trend_strength_result.get("short_trend_strong", False)
@@ -4864,13 +4864,13 @@ For a valid PRIMARY entry, ALL of the following must be true:
 **For Long Entry:**
 1. **BlackFlag FTS:** Must show a BUY signal within the last 20 candles.
 2. **UT Bot Alerts:** Must display a BUY alert within the last 20 candles.
-3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-10 or higher) if other signals are strong and aligned.
+3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"}).
 
 **For Short Entry:**
 1. **BlackFlag FTS:** Must show a SELL signal within the last 20 candles.
 2. **UT Bot Alerts:** Must display a SELL alert within the last 20 candles.
-3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-10 or higher) if other signals are strong and aligned.
+3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"}).
 
 **Exit Rules:**
