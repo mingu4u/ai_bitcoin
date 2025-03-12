@@ -2936,7 +2936,7 @@ def generate_reflection(trades_df, current_market_data):
     
     try:
         client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
+            base_url="https://openrouter.ai/api/v1/chat/completions",
             api_key=os.getenv("OPENROUTER_API_KEY"))
         if not client.api_key:
             logger.error("OpenAI API key is missing or invalid.")
@@ -4705,7 +4705,7 @@ def ai_trading():
     ### AI Decision Making
     try:
         client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
+            base_url="https://openrouter.ai/api/v1/chat/completions",
             api_key=os.getenv("OPENROUTER_API_KEY"))
         if not client.api_key:
             logger.error("OpenAI API key is missing or invalid.")
