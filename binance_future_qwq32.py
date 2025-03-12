@@ -2947,14 +2947,10 @@ def generate_reflection(trades_df, current_market_data):
             model="qwen/qwq-32b:free",
             messages=[
                 {
-                    "role": "system",
-                    "content": """
-                        You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance and current market conditions to generate specific, actionable insights and recommendations that can improve future trading decisions made by the Trading AI. Your analysis should focus on enhancing trading performance by providing clear feedback on past trades, identifying areas of improvement, and suggesting precise adjustments to the trading strategy, based solely on the data provided.
-                        """
-                },
-                {
                     "role": "user",
                     "content": f"""
+                        You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance and current market conditions to generate specific, actionable insights and recommendations that can improve future trading decisions made by the Trading AI. Your analysis should focus on enhancing trading performance by providing clear feedback on past trades, identifying areas of improvement, and suggesting precise adjustments to the trading strategy, based solely on the data provided.
+
                         Please analyze the following trading performance data and provide a structured analysis to improve future trading decisions.
 
                         **Input Data:**
