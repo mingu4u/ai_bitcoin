@@ -402,9 +402,58 @@ class SignalTracker:
         if current_time is None:
             current_time = datetime.now()
         
-        # BlackFlag FTS 업데이트 (새로운 신호가 있을 때만)
+        # UTBot Alerts 업데이트 - 중요한 변경: 신호가 None인 경우에도 항상 업데이트
+        utbot = analysis_result.get("UTBot", {})
+        utbot_signal = utbot.get("alert_signal", "None")
+        
+        # 새로운 신호 여부와 관계없이 항상 최신 분석 결과로 업데이트
+        if utbot_signal == "None":
+            # 신호가 없는 경우, 현재 데이터를 None으로 설정
+            self.signals["UTBot"] = {
+                "signal": None,
+                "candles_ago": None,
+                "timestamp": None
+            }
+            print(f"UTBot 신호 업데이트: None (차트에서 신호 사라짐)")
+        elif utbot.get("alert_time"):  # 유효한 신호가 있는 경우만 시간 처리
+            try:
+                # alert_time이 HH:MM 형식이라고 가정
+                signal_time_str = utbot.get("alert_time", "").strip()
+                if signal_time_str:
+                    # 시간 파싱
+                    hour, minute = map(int, signal_time_str.split(':'))
+                    
+                    # 현재 날짜에 시간 적용
+                    signal_time = current_time.replace(hour=hour, minute=minute)
+                    
+                    # 만약 계산된 시간이 현재 시간보다 미래라면 어제 날짜로 조정
+                    if signal_time > current_time:
+                        signal_time = signal_time - timedelta(days=1)
+                    
+                    # 기존 로직과 동일하게 처리
+                    self.signals["UTBot"] = {
+                        "signal": utbot_signal,
+                        "candles_ago": self._calculate_candles_ago(signal_time, current_time),
+                        "timestamp": signal_time.isoformat()
+                    }
+                    print(f"UTBot 신호 업데이트: {utbot_signal}, {signal_time_str}")
+            except Exception as e:
+                print(f"UTBot 시간 파싱 오류: {e}, 원본 시간: {utbot.get('alert_time')}")
+        
+        # BlackFlag 업데이트도 동일한 방식으로 수정
         blackflag = analysis_result.get("BlackFlag", {})
-        if blackflag.get("flip_detected") != "none" and blackflag.get("flip_time"):
+        blackflag_flip = blackflag.get("flip_detected", "none")
+        
+        if blackflag_flip == "none":
+            # 신호가 없는 경우, 현재 데이터를 None으로 설정
+            self.signals["BlackFlag"] = {
+                "signal": None,
+                "candles_ago": None,
+                "timestamp": None,
+                "stop_loss_price": None
+            }
+            print(f"BlackFlag 신호 업데이트: None (차트에서 신호 사라짐)")
+        elif blackflag.get("flip_time"):  # 유효한 신호가 있는 경우만 시간 처리
             try:
                 # flip_time이 HH:MM 형식이라고 가정
                 signal_time_str = blackflag.get("flip_time", "").strip()
@@ -420,51 +469,19 @@ class SignalTracker:
                         signal_time = signal_time - timedelta(days=1)
                     
                     # BlackFlag 신호 방향 매핑
-                    signal_direction = "Buy" if blackflag.get("flip_detected") == "long" else "Sell"
+                    signal_direction = "Buy" if blackflag_flip == "long" else "Sell"
                     
-                    # 기존 신호가 없거나 새로운 신호가 더 최근인 경우만 업데이트
-                    if (self.signals["BlackFlag"]["timestamp"] is None or 
-                        signal_time > datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])):
-                        self.signals["BlackFlag"] = {
-                            "signal": signal_direction,
-                            "candles_ago": self._calculate_candles_ago(signal_time, current_time),
-                            "timestamp": signal_time.isoformat(),
-                            "stop_loss_price": blackflag.get("stop_loss_price")
-                        }
-                        print(f"BlackFlag 신호 업데이트: {signal_direction}, {signal_time_str}, SL: {blackflag.get('stop_loss_price')}")
+                    self.signals["BlackFlag"] = {
+                        "signal": signal_direction,
+                        "candles_ago": self._calculate_candles_ago(signal_time, current_time),
+                        "timestamp": signal_time.isoformat(),
+                        "stop_loss_price": blackflag.get("stop_loss_price")
+                    }
+                    print(f"BlackFlag 신호 업데이트: {signal_direction}, {signal_time_str}, SL: {blackflag.get('stop_loss_price')}")
             except Exception as e:
                 print(f"BlackFlag 시간 파싱 오류: {e}, 원본 시간: {blackflag.get('flip_time')}")
         
-        # UT Bot Alerts 업데이트 (새로운 신호가 있을 때만)
-        utbot = analysis_result.get("UTBot", {})
-        if utbot.get("alert_signal") != "None" and utbot.get("alert_time"):
-            try:
-                # alert_time이 HH:MM 형식이라고 가정
-                signal_time_str = utbot.get("alert_time", "").strip()
-                if signal_time_str:
-                    # 시간 파싱
-                    hour, minute = map(int, signal_time_str.split(':'))
-                    
-                    # 현재 날짜에 시간 적용
-                    signal_time = current_time.replace(hour=hour, minute=minute)
-                    
-                    # 만약 계산된 시간이 현재 시간보다 미래라면 어제 날짜로 조정
-                    if signal_time > current_time:
-                        signal_time = signal_time - timedelta(days=1)
-                    
-                    # 기존 신호가 없거나 새로운 신호가 더 최근인 경우만 업데이트
-                    if (self.signals["UTBot"]["timestamp"] is None or 
-                        signal_time > datetime.fromisoformat(self.signals["UTBot"]["timestamp"])):
-                        self.signals["UTBot"] = {
-                            "signal": utbot.get("alert_signal"),
-                            "candles_ago": self._calculate_candles_ago(signal_time, current_time),
-                            "timestamp": signal_time.isoformat()
-                        }
-                        print(f"UTBot 신호 업데이트: {utbot.get('alert_signal')}, {signal_time_str}")
-            except Exception as e:
-                print(f"UTBot 시간 파싱 오류: {e}, 원본 시간: {utbot.get('alert_time')}")
-        
-        # Volume Oscillator 업데이트 (항상 업데이트, FIFO 방식)
+        # Volume Oscillator 업데이트 (기존 로직과 동일)
         vol_osc_value = analysis_result.get("VolumeOsc")
         if vol_osc_value is not None:
             # 값을 왼쪽으로 시프트하고 새 값을 추가
@@ -481,7 +498,7 @@ class SignalTracker:
         self.update_candles_ago(current_time)
         
         # 캐시 저장
-        self.save_cache()
+        self.save_cache() 
     
     def update_candles_ago(self, current_time=None):
         """현재 시간 기준으로 신호 발생 후 경과한 캔들 수 업데이트"""
