@@ -46,7 +46,7 @@ import psutil
 class WebDriverManager:
     _instance = None
     _last_created = None
-    _max_lifetime = 900  # 15분 (초 단위) - 드라이버 최대 수명
+    _max_lifetime = 600  # 10분 (초 단위) - 드라이버 최대 수명
     
     @classmethod
     def get_driver(cls, force_new=False):
@@ -1673,8 +1673,8 @@ class BinanceFuturesTrader:
     # market_order_with_tp_sl 함수 수정 - monitor_and_adjust_sl 함수에서 SL 업데이트 이슈 해결
     def market_order_with_tp_sl(self, side: str, buy_amount: float, pl_ratio: float, sl_price: float):
         """
-        시장가 주문과 TP/SL 설정을 처리하는 함수 - 중복 SL 생성 버그 수정
-
+        시장가 주문과 TP/SL 설정을 처리하는 함수 - 중복 SL 생성 버그 수정 및 모니터링 유지 기능 추가
+        
         Args:
             side (str): 'buy' 또는 'sell'
             buy_amount (float): 주문 금액 (USDT)
@@ -1796,6 +1796,7 @@ class BinanceFuturesTrader:
         tp_order = None
         sl_order = None
         is_full_reduction = False
+        retain_existing_sl_monitor = False  # 새로 추가: 기존 모니터링 함수 유지 여부
 
         try:
             # 현재 열린 주문 조회
@@ -1808,8 +1809,19 @@ class BinanceFuturesTrader:
             if current_position and position_side:
                 # A. 같은 방향 추가 진입
                 if side == position_side:
-                    if sl_orders:
-                        cancel_orders(sl_orders)
+                    # 중요 변경: SL 주문은 취소하지 않고 유지
+                    # 또한 기존 모니터링 함수도 유지하도록 플래그 설정
+                    retain_existing_sl_monitor = True
+                    self.logger.info("같은 방향 추가 진입: 기존 SL 모니터링 유지")
+                    
+                    # 기존 SL 가격 정보 저장 (모니터링 함수에서 참조)
+                    if len(sl_orders) > 0:
+                        self.logger.info(f"기존 SL 주문 존재: {len(sl_orders)}개")
+                        # SL 주문 정보 로깅 (참조용)
+                        for sl in sl_orders:
+                            self.logger.info(f"기존 SL 주문 정보: ID={sl['id']}, 가격={sl['info'].get('stopPrice', '?')}")
+                    else:
+                        self.logger.warning("같은 방향 추가 진입이지만 기존 SL 주문 없음")
 
                 # B. 반대 방향 축소
                 elif ((position_side == 'long' and side == 'sell') or 
@@ -1826,6 +1838,8 @@ class BinanceFuturesTrader:
                         # 부분 청산 시 기존 TP/SL 유지
                         tp_order = None
                         sl_order = None
+                        # 기존 모니터링 함수도 유지
+                        retain_existing_sl_monitor = True
             else:
                 # C. 신규 진입
                 # 기존 TP/SL 주문이 있다면 모두 취소
@@ -1863,18 +1877,22 @@ class BinanceFuturesTrader:
                         }
                     )
 
-                # SL은 무조건 새로 생성
-                sl_order = self.exchange.create_order(
-                    symbol=self.symbol,
-                    type='STOP_MARKET',
-                    side=tp_side,
-                    amount=quantity,
-                    params={
-                        'stopPrice': sl_price,
-                        'closePosition': True,
-                        'clientOrderId': f"sl_{order['id']}"
-                    }
-                )
+                # 새로운 SL 주문 생성은 다음 조건에서만 수행:
+                # 1. 신규 진입
+                # 2. 같은 방향 추가 진입이지만 기존 SL 주문이 없는 경우
+                if not current_position or (side == position_side and not sl_orders):
+                    sl_order = self.exchange.create_order(
+                        symbol=self.symbol,
+                        type='STOP_MARKET',
+                        side=tp_side,
+                        amount=quantity,
+                        params={
+                            'stopPrice': sl_price,
+                            'closePosition': True,
+                            'clientOrderId': f"sl_{order['id']}"
+                        }
+                    )
+                    self.logger.info(f"새 SL 주문 생성: ID={sl_order['id']}, 가격={sl_price}")
 
             # 주문 성공 여부 확인
             if not order:
@@ -1906,102 +1924,99 @@ class BinanceFuturesTrader:
 
             return None
 
-        # 5. 트레일링 스탑로스 모니터링 함수 정의 - 개선된 버전 (수익률 조건 충족 시에만 SL 업데이트)
+        # 5. 트레일링 스탑로스 모니터링 함수 개선 - 추가 진입과 기존 모니터링 유지 로직 추가
+        # 글로벌 변수를 참조하기 위한 nonlocal 사용
         def monitor_and_adjust_sl():
             """
             트레일링 스탑로스를 모니터링하고 필요시 업데이트하는 함수
             - 수정: 수익률이 TRAILING_THRESHOLD(0.4%) 이상일 때만 스탑로스 업데이트
-            - 호출 즉시 SL 생성하지 않고 조건 충족 시에만 기존 SL 업데이트
+            - 수정: 같은 방향 추가 진입 시에도 모니터링 유지
             """
             try:
                 positions_ = self.exchange.fetch_positions([self.symbol])
                 current_pos = next((p for p in positions_ if float(p.get('contracts', 0) or 0) != 0), None)
 
                 if not current_pos:
+                    self.logger.info("포지션이 더 이상 존재하지 않음 - 모니터링 중단")
                     return None
 
                 current_market_price = self.exchange.fetch_ticker(self.symbol)['last']
                 position_size = float(current_pos['contracts'])
                 pos_side = current_pos['side']
 
+                # 새 SL 체크를 위해 현재 열린 주문 조회
+                open_orders_ = self.exchange.fetch_open_orders(self.symbol)
+                existing_sl = [o for o in open_orders_ if o.get('clientOrderId','').startswith('sl_')]
+                
+                if not existing_sl:
+                    self.logger.warning("No existing SL order found for trailing update")
+                    return None
+                    
+                # 기존 SL 가격 가져오기 - 전체 SL 주문 중 첫 번째 사용
+                current_sl_price = float(existing_sl[0]['info'].get('stopPrice', 0))
+                
                 # 수익률 계산
                 profit_percentage = (current_market_price - entry_price) / entry_price if pos_side == 'long' \
-                                    else (entry_price - current_market_price) / entry_price
+                                else (entry_price - current_market_price) / entry_price
 
                 # 최소 트레일링 단계 확인 (0.4%)
                 if profit_percentage >= TRAILING_THRESHOLD:
-                    # 이 함수에 상태를 저장하기 위한 비공개 속성이 없으므로 
-                    # 현재 스탑로스 주문을 조회하여 마지막 업데이트 가격을 확인
-                    try:
-                        open_orders_ = self.exchange.fetch_open_orders(self.symbol)
-                        existing_sl = [o for o in open_orders_ if o.get('clientOrderId','').startswith('sl_')]
+                    # 새로운 SL 가격 계산
+                    if pos_side == 'long':
+                        # 진입가와 현재가의 차이에서 TRAILING_STEP(0.4%) 단위로 나누어 몇 번째 스텝인지 계산
+                        step_count = int(profit_percentage / TRAILING_STEP)
+                        # 새로운 SL은 진입가 + (스텝 수 - 1) * 스텝 크기 * 진입가
+                        # 첫 번째 스텝(0.4%)에서는 SL을 진입가에 두고, 두 번째 스텝(0.8%)부터는 0.4% 간격으로 올림
+                        min_sl_price = entry_price * (1 + (step_count - 1) * TRAILING_STEP) if step_count > 0 else entry_price
                         
-                        if not existing_sl:
-                            self.logger.warning("No existing SL order found for trailing update")
+                        # 현재 가격에서 버퍼만큼 내린 값
+                        new_sl_price = current_market_price * (1 - TRAILING_BUFFER)
+                        
+                        # 기존 SL과 계산된 min_sl_price 중 높은 값만 사용 (SL은 항상 올리기만 함)
+                        if min_sl_price <= current_sl_price:
+                            # 이미 적절한 SL이 설정되어 있음
                             return None
                             
-                        # 기존 SL 가격 가져오기
-                        current_sl_price = float(existing_sl[0]['info'].get('stopPrice', 0))
+                    else:  # short position
+                        # 진입가와 현재가의 차이에서 TRAILING_STEP(0.4%) 단위로 나누어 몇 번째 스텝인지 계산
+                        step_count = int(profit_percentage / TRAILING_STEP)
+                        # 새로운 SL은 진입가 - (스텝 수 - 1) * 스텝 크기 * 진입가
+                        # 첫 번째 스텝(0.4%)에서는 SL을 진입가에 두고, 두 번째 스텝(0.8%)부터는 0.4% 간격으로 내림
+                        max_sl_price = entry_price * (1 - (step_count - 1) * TRAILING_STEP) if step_count > 0 else entry_price
                         
-                        # 새로운 SL 가격 계산
-                        if pos_side == 'long':
-                            # 진입가와 현재가의 차이에서 TRAILING_STEP(0.5%) 단위로 나누어 몇 번째 스텝인지 계산
-                            step_count = int(profit_percentage / TRAILING_STEP)
-                            # 새로운 SL은 진입가 + (스텝 수 - 1) * 스텝 크기 * 진입가
-                            # 첫 번째 스텝(0.5%)에서는 SL을 진입가에 두고, 두 번째 스텝(1.0%)부터는 0.5% 간격으로 올림
-                            min_sl_price = entry_price * (1 + (step_count - 1) * TRAILING_STEP) if step_count > 0 else entry_price
-                            
-                            # 현재 가격에서 버퍼만큼 내린 값
-                            new_sl_price = current_market_price * (1 - TRAILING_BUFFER)
-                            
-                            # 기존 SL과 계산된 min_sl_price 중 높은 값만 사용 (SL은 항상 올리기만 함)
-                            if min_sl_price <= current_sl_price:
-                                # 이미 적절한 SL이 설정되어 있음
-                                return None
-                                
-                        else:  # short position
-                            # 진입가와 현재가의 차이에서 TRAILING_STEP(0.5%) 단위로 나누어 몇 번째 스텝인지 계산
-                            step_count = int(profit_percentage / TRAILING_STEP)
-                            # 새로운 SL은 진입가 - (스텝 수 - 1) * 스텝 크기 * 진입가
-                            # 첫 번째 스텝(0.5%)에서는 SL을 진입가에 두고, 두 번째 스텝(1.0%)부터는 0.5% 간격으로 내림
-                            max_sl_price = entry_price * (1 - (step_count - 1) * TRAILING_STEP) if step_count > 0 else entry_price
-                            
-                            # 현재 가격에서 버퍼만큼 올린 값
-                            new_sl_price = current_market_price * (1 + TRAILING_BUFFER)
-                            
-                            # 기존 SL과 계산된 max_sl_price 중 낮은 값만 사용 (SL은 항상 내리기만 함)
-                            if max_sl_price >= current_sl_price:
-                                # 이미 적절한 SL이 설정되어 있음
-                                return None
+                        # 현재 가격에서 버퍼만큼 올린 값
+                        new_sl_price = current_market_price * (1 + TRAILING_BUFFER)
                         
-                        # 현재 SL보다 유리한 가격으로 업데이트 가능한 경우만 실행
-                        if (pos_side == 'long' and new_sl_price > current_sl_price) or \
-                        (pos_side == 'short' and new_sl_price < current_sl_price):
-                            
-                            # 기존 SL 주문 취소
-                            cancel_orders(existing_sl)
-                            
-                            # 새 SL 주문 생성
-                            t_side = 'sell' if pos_side == 'long' else 'buy'
-                            new_sl_order = self.exchange.create_order(
-                                symbol=self.symbol,
-                                type='STOP_MARKET',
-                                side=t_side,
-                                amount=position_size,
-                                params={
-                                    'stopPrice': new_sl_price,
-                                    'closePosition': True,
-                                    'clientOrderId': f"sl_{order['id']}"
-                                }
-                            )
-                            
-                            # 로그 출력 - 현재 이익률과 업데이트된 SL 표시
-                            self.logger.info(f"Trailing SL updated: Price={new_sl_price:.2f}, Current Profit={profit_percentage*100:.2f}%, Step={step_count}")
-                            return new_sl_order
+                        # 기존 SL과 계산된 max_sl_price 중 낮은 값만 사용 (SL은 항상 내리기만 함)
+                        if max_sl_price >= current_sl_price:
+                            # 이미 적절한 SL이 설정되어 있음
+                            return None
+                    
+                    # 현재 SL보다 유리한 가격으로 업데이트 가능한 경우만 실행
+                    if (pos_side == 'long' and new_sl_price > current_sl_price) or \
+                    (pos_side == 'short' and new_sl_price < current_sl_price):
+                        
+                        # 기존 SL 주문 취소
+                        cancel_orders(existing_sl)
+                        
+                        # 새 SL 주문 생성
+                        t_side = 'sell' if pos_side == 'long' else 'buy'
+                        new_sl_order = self.exchange.create_order(
+                            symbol=self.symbol,
+                            type='STOP_MARKET',
+                            side=t_side,
+                            amount=position_size,
+                            params={
+                                'stopPrice': new_sl_price,
+                                'closePosition': True,
+                                'clientOrderId': f"sl_{order['id']}"
+                            }
+                        )
+                        
+                        # 로그 출력 - 현재 이익률과 업데이트된 SL 표시
+                        self.logger.info(f"Trailing SL updated: Price={new_sl_price:.2f}, Current Profit={profit_percentage*100:.2f}%, Step={step_count}")
+                        return new_sl_order
 
-                    except Exception as e_:
-                        self.logger.error(f"Error updating trailing SL: {e_}")
-                        return None
                 else:
                     # 수익률이 충분하지 않으면 SL 업데이트 하지 않음
                     self.logger.debug(f"Profit percentage ({profit_percentage*100:.2f}%) below threshold ({TRAILING_THRESHOLD*100}%) - no SL update")
@@ -2012,14 +2027,16 @@ class BinanceFuturesTrader:
                 return None
 
         self.logger.info(f"Position opened - Side: {side}, Amount: {buy_amount} USDT")
+        
+        # 결과 반환 - 중요 변경: 기존 모니터링 함수 유지 플래그 추가
         return {
             'entry': order,
             'tp': tp_order,
             'sl': sl_order,
             'monitor_sl': monitor_and_adjust_sl,
-            'entry_price': entry_price
+            'entry_price': entry_price,
+            'retain_existing_sl_monitor': retain_existing_sl_monitor  # 새로 추가: 기존 모니터링 유지 여부
         }
-
 
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
@@ -5081,56 +5098,135 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                 
                 # Set up trailing stop loss monitoring if available
                 if 'monitor_sl' in order_info:
-                    # Clean up existing monitoring jobs
                     global sl_monitor_jobs
-                    for job in sl_monitor_jobs[:]:
-                        schedule.cancel_job(job)
-                        sl_monitor_jobs.remove(job)
-                        logger.info(f"Cancelled previous trailing SL monitoring job: {getattr(job, 'job_id', 'unknown')}")
+                    global sl_monitor_functions
                     
-                    # Store monitor function
-                    monitor_sl_func = order_info['monitor_sl']
+                    # 새로운 포지션 방향 확인
+                    current_position_side = None
+                    try:
+                        positions = trader.exchange.fetch_positions([trader.symbol])
+                        for pos in positions:
+                            if float(pos.get('contracts', 0) or 0) != 0:
+                                current_position_side = pos['side']  # 'long' 또는 'short'
+                                break
+                    except Exception as e:
+                        logger.error(f"Error fetching position for monitoring: {e}")
                     
-                    # Create unique job ID
-                    job_id = f"sl_monitor_{order_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                    # 기존 모니터링 함수 유지 여부 확인
+                    retain_existing = order_info.get('retain_existing_sl_monitor', False)
                     
-                    def periodic_sl_monitoring(monitor_func, job_id=job_id):
-                        try:
-                            # Measure function execution time
-                            start_time = time.time()
-                            
-                            new_sl_order = monitor_func()
-                            
-                            if new_sl_order:
-                                logger.info(f"Trailing SL order updated: {new_sl_order}")
-                            
-                            # Log execution time
-                            elapsed_time = time.time() - start_time
-                            logger.debug(f"SL monitoring job completed in {elapsed_time:.2f} seconds")
-                            
-                            # Check resource usage
-                            memory_percent = psutil.virtual_memory().percent
-                            if memory_percent > 85:
-                                logger.warning(f"High memory usage in SL monitoring: {memory_percent}%")
-                                gc.collect()
+                    if current_position_side:
+                        # 같은 방향의 기존 모니터링 작업 처리
+                        if retain_existing and current_position_side in sl_monitor_functions:
+                            logger.info(f"유지: 기존 {current_position_side} 포지션의 SL 모니터링 작업")
+                        else:
+                            # 같은 방향의 기존 작업 제거 (유지 플래그가 없는 경우)
+                            if current_position_side in sl_monitor_functions:
+                                logger.info(f"교체: 기존 {current_position_side} 포지션의 SL 모니터링 작업")
                                 
-                        except Exception as e:
-                            # Remove job if error occurs
-                            logger.error(f"Error in SL monitoring: {e}")
-                            for job in sl_monitor_jobs:
-                                if job.job_id == job_id:
-                                    schedule.cancel_job(job)
-                                    sl_monitor_jobs.remove(job)
-                                    break
-                    
-                    # Schedule monitoring job every minute
-                    job = schedule.every(1).minutes.do(periodic_sl_monitoring, monitor_sl_func)
-                    job.job_id = job_id
-                    
-                    # Add to global job list
-                    sl_monitor_jobs.append(job)
-                    logger.info(f"Created trailing SL monitoring job: {job_id}")          
-                
+                                # 기존 모니터링 작업 제거
+                                for job in sl_monitor_jobs[:]:
+                                    if hasattr(job, 'position_side') and job.position_side == current_position_side:
+                                        schedule.cancel_job(job)
+                                        sl_monitor_jobs.remove(job)
+                                        logger.info(f"Cancelled previous {current_position_side} SL monitoring job: {getattr(job, 'job_id', 'unknown')}")
+                                
+                                # 기존 함수 딕셔너리에서 제거
+                                if current_position_side in sl_monitor_functions:
+                                    del sl_monitor_functions[current_position_side]
+                        
+                        # 새 모니터링 함수가 있고 기존에 없는 경우에만 새로 등록
+                        if 'monitor_sl' in order_info and (current_position_side not in sl_monitor_functions or not retain_existing):
+                            # Store monitor function
+                            monitor_sl_func = order_info['monitor_sl']
+                            sl_monitor_functions[current_position_side] = monitor_sl_func
+                            
+                            # Create unique job ID
+                            job_id = f"sl_monitor_{current_position_side}_{order_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                            
+                            def periodic_sl_monitoring(monitor_func, job_id=job_id, position_side=current_position_side):
+                                try:
+                                    # Measure function execution time
+                                    start_time = time.time()
+                                    
+                                    # 현재 해당 방향의 포지션이 있는지 확인
+                                    positions_check = trader.exchange.fetch_positions([trader.symbol])
+                                    position_exists = False
+                                    for pos in positions_check:
+                                        if float(pos.get('contracts', 0) or 0) != 0 and pos['side'] == position_side:
+                                            position_exists = True
+                                            break
+                                    
+                                    # 포지션이 없는 경우 모니터링 중단
+                                    if not position_exists:
+                                        logger.info(f"{position_side} 포지션이 더 이상 존재하지 않음 - 모니터링 중단")
+                                        
+                                        # 해당 방향의 모든 모니터링 작업 제거
+                                        for job in sl_monitor_jobs[:]:
+                                            if hasattr(job, 'position_side') and job.position_side == position_side:
+                                                schedule.cancel_job(job)
+                                                sl_monitor_jobs.remove(job)
+                                                logger.info(f"Cancelled {position_side} SL monitoring job: {getattr(job, 'job_id', 'unknown')}")
+                                        
+                                        # 함수 딕셔너리에서 제거
+                                        if position_side in sl_monitor_functions:
+                                            del sl_monitor_functions[position_side]
+                                        
+                                        return
+                                    
+                                    # 모니터링 함수 실행
+                                    new_sl_order = monitor_func()
+                                    
+                                    if new_sl_order:
+                                        logger.info(f"Trailing SL order updated: {new_sl_order}")
+                                    
+                                    # Log execution time
+                                    elapsed_time = time.time() - start_time
+                                    logger.debug(f"SL monitoring job completed in {elapsed_time:.2f} seconds")
+                                    
+                                    # Check resource usage
+                                    memory_percent = psutil.virtual_memory().percent
+                                    if memory_percent > 85:
+                                        logger.warning(f"High memory usage in SL monitoring: {memory_percent}%")
+                                        gc.collect()
+                                        
+                                except Exception as e:
+                                    # Remove job if error occurs
+                                    logger.error(f"Error in SL monitoring: {e}")
+                                    # 오류 발생 시에도 작업은 유지 (중요한 보호 메커니즘)
+                                    # 단, 심각한 오류가 5회 이상 연속으로 발생하면 작업 제거
+                                    job_obj = None
+                                    for job in sl_monitor_jobs:
+                                        if getattr(job, 'job_id', None) == job_id:
+                                            job_obj = job
+                                            break
+                                            
+                                    if job_obj:
+                                        error_count = getattr(job_obj, 'error_count', 0) + 1
+                                        job_obj.error_count = error_count
+                                        
+                                        # 연속 5회 이상 오류 발생 시 작업 제거
+                                        if error_count >= 5:
+                                            logger.error(f"연속 {error_count}회 오류 발생, {position_side} SL 모니터링 작업 제거")
+                                            for job in sl_monitor_jobs[:]:
+                                                if job.job_id == job_id:
+                                                    schedule.cancel_job(job)
+                                                    sl_monitor_jobs.remove(job)
+                                                    break
+                                            
+                                            # 함수 딕셔너리에서 제거
+                                            if position_side in sl_monitor_functions:
+                                                del sl_monitor_functions[position_side]
+                            
+                            # Schedule monitoring job every minute
+                            job = schedule.every(1).minutes.do(periodic_sl_monitoring, monitor_sl_func)
+                            job.job_id = job_id
+                            job.position_side = current_position_side  # 포지션 방향 정보 추가
+                            job.error_count = 0  # 오류 카운터 추가
+                            
+                            # Add to global job list
+                            sl_monitor_jobs.append(job)
+                            logger.info(f"Created trailing SL monitoring job: {job_id} for {current_position_side} position")
             else:
                 # If no trade was executed (hold or failed)
                 log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
@@ -5400,6 +5496,7 @@ if __name__ == "__main__":
         trading_in_progress = False
         monitoring_in_progress = False
         
+        sl_monitor_functions = {}  # position_side: monitor_function 형태로 관리
         # AI 트레이딩 작업 강화 - 실패 시 메모리 정리
         def trading_job():
             global trading_in_progress
@@ -5461,6 +5558,10 @@ if __name__ == "__main__":
         schedule.every(5).minutes.do(trading_job)
         schedule.every(1).minutes.do(monitoring_job)
         
+        
+        # 주 스케줄러에 긴급 모니터링 확인 작업 추가 
+        # schedule.every(10).minutes.do(emergency_sl_monitor_check)
+
         # 스케줄러 실행 - 예외 처리 강화
         while True:
             try:
