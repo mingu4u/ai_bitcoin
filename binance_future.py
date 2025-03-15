@@ -1684,7 +1684,7 @@ class BinanceFuturesTrader:
         # 상수 정의
         SAFETY_MARGIN = 0.002      # 안전 마진 (0.2%)
         TRAILING_THRESHOLD = 0.004 # 트레일링 시작 기준 수익률 (0.4%)
-        TRAILING_STEP = 0.003      # 트레일링 스탑 업데이트 단계 (0.25%)
+        TRAILING_STEP = 0.003      # 트레일링 스탑 업데이트 단계 (0.3%)
         TRAILING_BUFFER = 0.003    # 트레일링 버퍼 (0.3%)
         MINIMUM_ORDER_VALUE = 10   # 최소 주문 금액 (USDT)
         MIN_PRICE_DIFF = 0.001     # 최소 가격 차이 (0.1%)
@@ -5257,6 +5257,64 @@ def ai_trading():
         # 다른 모든 경우 (e.g., "hold")
         return True
         
+    def verify_exit_conditions(exit_assessment, decision, position_side):
+        """
+        AI의 출구(청산) 결정이 실제 출구 조건과 일치하는지 확인하는 함수
+        
+        Args:
+            exit_assessment: assess_exit_signals 함수의 반환 결과
+            decision: AI 결정 ('buy', 'sell', 'hold')
+            position_side: 현재 포지션 방향 ('long', 'short', None)
+            
+        Returns:
+            bool: 출구 조건 충족 여부
+        """
+        # 포지션이 없으면 청산할 수 없음
+        if not position_side:
+            if decision in ['buy', 'sell']:
+                logger.warning(f"포지션이 없는데 {decision} 결정. 청산 불가능.")
+                return False
+            return True
+        
+        # should_exit 값 확인 (미리 계산된 출구 신호)
+        should_exit = exit_assessment.get("should_exit", False)
+        
+        # 청산 판단 검증
+        if position_side == 'long' and decision == 'sell':
+            # Long 포지션 청산 (sell)
+            if not should_exit:
+                logger.warning("출구 신호가 없는데 Long 포지션 청산 결정. 상충된 판단.")
+                if exit_assessment.get("exit_signals"):
+                    logger.info(f"감지된 출구 신호: {exit_assessment.get('exit_signals')}")
+                    logger.info(f"출구 점수: {exit_assessment.get('exit_score', 0)}")
+                    logger.info(f"임계값: {exit_assessment.get('exit_threshold', 2.0)}")
+                return False
+            return True
+            
+        elif position_side == 'short' and decision == 'buy':
+            # Short 포지션 청산 (buy)
+            if not should_exit:
+                logger.warning("출구 신호가 없는데 Short 포지션 청산 결정. 상충된 판단.")
+                if exit_assessment.get("exit_signals"):
+                    logger.info(f"감지된 출구 신호: {exit_assessment.get('exit_signals')}")
+                    logger.info(f"출구 점수: {exit_assessment.get('exit_score', 0)}")
+                    logger.info(f"임계값: {exit_assessment.get('exit_threshold', 2.0)}")
+                return False
+            return True
+        
+        # hold 결정은 항상 유효
+        elif decision == 'hold':
+            return True
+        
+        # 포지션과 일치하지 않는 방향으로 청산 명령이 내려진 경우
+        elif (position_side == 'long' and decision != 'sell') or (position_side == 'short' and decision != 'buy'):
+            if decision != 'hold':
+                logger.warning(f"{position_side} 포지션에 대해 잘못된 청산 명령: {decision}")
+                return False
+        
+        # 기본적으로 검증 통과
+        return True
+
 
     # 단기 조정 신호 데이터 추출 및 변수 준비
     long_correction_signals = trend_strength_result.get("short_term_correction", {}).get("long_entry_correction_signals", [])
@@ -5587,6 +5645,18 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                 result.decision = "hold"
                 result.percentage = 0
                 result.reason = f"Entry conditions not fully met for {original_decision} - HOLD for capital preservation. Original reason: {original_reason}"
+
+            # 출구 조건 검증 추가
+            if ((position_side == 'long' and result.decision == 'sell') or 
+                (position_side == 'short' and result.decision == 'buy')):
+                if not verify_exit_conditions(exit_assessment, result.decision, position_side):
+                    logger.warning(f"AI 결정 '{result.decision}'이 출구 조건을 충족하지 않음. 'hold'로 변경됩니다.")
+                    original_decision = result.decision
+                    original_reason = result.reason
+                    result.decision = "hold"
+                    result.percentage = 0
+                    result.reason = f"Exit conditions not met for {original_decision} - HOLD position. Original reason: {original_reason}"
+
 
             logger.info(f"### AI Decision: {result.decision.upper()} ###")
             logger.info(f"### Reason: {result.reason} ###")
