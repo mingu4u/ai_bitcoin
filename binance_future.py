@@ -402,20 +402,35 @@ class SignalTracker:
         if current_time is None:
             current_time = datetime.now()
         
-        # UTBot Alerts 업데이트 - 중요한 변경: 신호가 None인 경우에도 항상 업데이트
+        # UTBot Alerts 업데이트 - 중요한 변경: 신호가 None인 경우, 차트 가시권 내에 있는지 확인
         utbot = analysis_result.get("UTBot", {})
         utbot_signal = utbot.get("alert_signal", "None")
         
-        # 새로운 신호 여부와 관계없이 항상 최신 분석 결과로 업데이트
+        # 기존 캔들 수 확인
+        previous_candles_ago = self.signals["UTBot"]["candles_ago"]
+        
+        # 현재 UTBot 신호가 "None"인 경우 처리
         if utbot_signal == "None":
-            # 신호가 없는 경우, 현재 데이터를 None으로 설정
-            self.signals["UTBot"] = {
-                "signal": None,
-                "candles_ago": None,
-                "timestamp": None
-            }
-            print(f"UTBot 신호 업데이트: None (차트에서 신호 사라짐)")
-        elif utbot.get("alert_time"):  # 유효한 신호가 있는 경우만 시간 처리
+            # 기존 신호가 있고, 15캔들 이상 40캔들 미만인 경우 기존 신호 유지
+            if (self.signals["UTBot"]["signal"] is not None and 
+                previous_candles_ago is not None and 
+                previous_candles_ago >= 15 and 
+                previous_candles_ago < 40):
+                # 기존 신호 유지하고 candles_ago는 정확히 재계산
+                if self.signals["UTBot"]["timestamp"]:
+                    signal_time = datetime.fromisoformat(self.signals["UTBot"]["timestamp"])
+                    new_candles_ago = self._calculate_candles_ago(signal_time, current_time)
+                    self.signals["UTBot"]["candles_ago"] = new_candles_ago
+                    print(f"UTBot 신호 유지: {self.signals['UTBot']['signal']} (차트 가시권 외, 캔들 수: {new_candles_ago})")
+            elif previous_candles_ago is None or previous_candles_ago < 15:
+                # 차트 가시권 내(15캔들 미만)에서 신호가 사라진 경우 또는 신호가 없었던 경우
+                self.signals["UTBot"] = {
+                    "signal": None,
+                    "candles_ago": None,
+                    "timestamp": None
+                }
+                print(f"UTBot 신호 업데이트: None (차트에서 신호 사라짐)")
+        elif utbot.get("alert_time"):  # 유효한 신호가 있는 경우 시간 처리
             try:
                 # alert_time이 HH:MM 형식이라고 가정
                 signal_time_str = utbot.get("alert_time", "").strip()
@@ -444,15 +459,30 @@ class SignalTracker:
         blackflag = analysis_result.get("BlackFlag", {})
         blackflag_flip = blackflag.get("flip_detected", "none")
         
+        # 기존 BlackFlag 캔들 수 확인
+        previous_bf_candles_ago = self.signals["BlackFlag"]["candles_ago"]
+        
         if blackflag_flip == "none":
-            # 신호가 없는 경우, 현재 데이터를 None으로 설정
-            self.signals["BlackFlag"] = {
-                "signal": None,
-                "candles_ago": None,
-                "timestamp": None,
-                "stop_loss_price": None
-            }
-            print(f"BlackFlag 신호 업데이트: None (차트에서 신호 사라짐)")
+            # 기존 신호가 있고, 15캔들 이상 40캔들 미만인 경우 기존 신호 유지
+            if (self.signals["BlackFlag"]["signal"] is not None and 
+                previous_bf_candles_ago is not None and 
+                previous_bf_candles_ago >= 15 and 
+                previous_bf_candles_ago < 40):
+                # 기존 신호 유지하고 candles_ago는 정확히 재계산
+                if self.signals["BlackFlag"]["timestamp"]:
+                    signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
+                    new_bf_candles_ago = self._calculate_candles_ago(signal_time, current_time)
+                    self.signals["BlackFlag"]["candles_ago"] = new_bf_candles_ago
+                    print(f"BlackFlag 신호 유지: {self.signals['BlackFlag']['signal']} (차트 가시권 외, 캔들 수: {new_bf_candles_ago})")
+            elif previous_bf_candles_ago is None or previous_bf_candles_ago < 15:
+                # 차트 가시권 내(15캔들 미만)에서 신호가 사라진 경우 또는 신호가 없었던 경우
+                self.signals["BlackFlag"] = {
+                    "signal": None,
+                    "candles_ago": None,
+                    "timestamp": None,
+                    "stop_loss_price": None
+                }
+                print(f"BlackFlag 신호 업데이트: None (차트에서 신호 사라짐)")
         elif blackflag.get("flip_time"):  # 유효한 신호가 있는 경우만 시간 처리
             try:
                 # flip_time이 HH:MM 형식이라고 가정
@@ -498,7 +528,7 @@ class SignalTracker:
         self.update_candles_ago(current_time)
         
         # 캐시 저장
-        self.save_cache() 
+        self.save_cache()  
     
     def update_candles_ago(self, current_time=None):
         """현재 시간 기준으로 신호 발생 후 경과한 캔들 수 업데이트"""
@@ -510,7 +540,7 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
             self.signals["BlackFlag"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 40캔들 이상 지난 신호는 None 처리 (15->20->40 변경)
+            # 40캔들 이상 지난 신호는 None 처리
             if self.signals["BlackFlag"]["candles_ago"] > 40:
                 self.signals["BlackFlag"] = {
                     "signal": None,
@@ -524,13 +554,13 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["UTBot"]["timestamp"])
             self.signals["UTBot"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 40캔들 이상 지난 신호는 None 처리 (15->20->40 변경)
+            # 40캔들 이상 지난 신호는 None 처리
             if self.signals["UTBot"]["candles_ago"] > 40:
                 self.signals["UTBot"] = {
                     "signal": None,
                     "candles_ago": None,
                     "timestamp": None
-                } 
+                }
     
     def _calculate_candles_ago(self, signal_time, current_time):
         """
@@ -572,7 +602,7 @@ class SignalTracker:
                 "values": self.signals["VolumeOsc"]["values"],
                 "current": self.signals["VolumeOsc"]["values"][-1]
             }
-        }
+        }   
 
 def analyze_chart_signals(image_path,
                          # BlackFlag FTS parameters (normalized coordinates)
