@@ -4141,14 +4141,17 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     return result
 
 # 2. assess_exit_signals 함수 최적화
-def assess_exit_signals(df_5min, signals_data, position_side, df_hourly=None, df_4h=None):
+# 2. assess_exit_signals 함수 최적화
+def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=None, df_hourly=None, df_4h=None):
     """
     중장기 스윙 관점을 반영한 출구 신호 평가 - 단기 변동에 덜 민감하고 주요 추세 전환에만 반응하도록 개선
+    손실 상태의 포지션은 더 신속하게 종료하는 로직 추가
     
     Args:
         df_5min: 5분 OHLCV 데이터프레임 (지표 포함)
         signals_data: 차트 분석에서 얻은 신호 데이터 딕셔너리
         position_side: 현재 포지션 방향 ('long', 'short', 또는 None)
+        unrealized_pnl: 현재 포지션의 미실현 손익 (percent)
         df_hourly: 1시간 OHLCV 데이터프레임 (지표 포함, 선택사항)
         df_4h: 4시간 OHLCV 데이터프레임 (지표 포함, 선택사항)
         
@@ -4170,6 +4173,31 @@ def assess_exit_signals(df_5min, signals_data, position_side, df_hourly=None, df
     higher_timeframe_trend = "neutral"  # 기본값
     trend_strength = 1.0  # 기본 강도
     higher_timeframe_signals = []  # 상위 타임프레임 신호 저장
+    
+    # PnL 기반 손실 포지션 가중치 조정
+    pnl_multiplier = 1.0  # 기본값
+    
+    # 손실 포지션에 대한 가중치 증가 (더 신속한 종료를 위해)
+    if unrealized_pnl is not None and unrealized_pnl < 0:
+        # 손실이 클수록 가중치 증가 (손실폭 -8% 이상일 때 최대 가중치)
+        loss_severity = min(abs(unrealized_pnl) / 8.0, 1.0)  # 0~1 사이 값으로 정규화
+        pnl_multiplier = 1.0 + (loss_severity * 0.5)  # 최대 1.5배 가중치
+        
+        # 손실 수준에 따른 로깅
+        if loss_severity >= 0.8:  # 심각한 손실 (-6.4% 이상)
+            logger.warning(f"심각한 손실 감지: PnL {unrealized_pnl:.2f}%, 가중치 {pnl_multiplier:.2f}배 증가")
+            exit_signals.append(f"심각한 손실 감지 (PnL: {unrealized_pnl:.2f}%)")
+            exit_signal_weights.append(0.9 * pnl_multiplier)  # 높은 가중치로 시작
+        elif loss_severity >= 0.4:  # 중간 수준 손실 (-3.2% 이상)
+            logger.info(f"중간 수준 손실 감지: PnL {unrealized_pnl:.2f}%, 가중치 {pnl_multiplier:.2f}배 증가")
+            exit_signals.append(f"중간 수준 손실 감지 (PnL: {unrealized_pnl:.2f}%)")
+            exit_signal_weights.append(0.6 * pnl_multiplier)  # 중간 가중치로 시작
+    elif unrealized_pnl is not None and unrealized_pnl > 10:
+        # 수익이 매우 클 경우 (10% 이상) 가중치 소폭 증가 - 이익 실현 촉진
+        pnl_multiplier = 1.2
+        logger.info(f"상당한 수익 감지: PnL {unrealized_pnl:.2f}%, 가중치 {pnl_multiplier:.2f}배 증가")
+        exit_signals.append(f"상당한 수익 감지 (PnL: {unrealized_pnl:.2f}%)")
+        exit_signal_weights.append(0.5 * pnl_multiplier)  # 중간 가중치로 시작
 
     # 0. 중요: 상위 타임프레임 추세 강화 (1시간 및 4시간 차트 분석)
     if df_hourly is not None:
@@ -4827,14 +4855,33 @@ def assess_exit_signals(df_5min, signals_data, position_side, df_hourly=None, df
     # 신호 가중치 합산하여 최종 결정
     exit_score = sum(exit_signal_weights)
     
-    # 임계값 증가 (1.8->2.0) - 중장기 스윙 관점에서 더 많은/강력한 신호가 필요
-    # 또는 매우 강력한 단일 신호 (0.95 이상)가 있는 경우
-    should_exit = exit_score >= 2.0 or any(w >= 0.95 for w in exit_signal_weights)
+    # 손실 포지션을 위한 임계값 조정
+    exit_threshold = 2.0  # 기본 임계값
+    single_signal_threshold = 0.95  # 기본 단일 신호 임계값
+    
+    # PnL 기반 임계값 조정
+    if unrealized_pnl is not None and unrealized_pnl < 0:
+        # 손실이 클수록 임계값 감소 (더 쉽게 종료)
+        loss_severity = min(abs(unrealized_pnl) / 8.0, 1.0)  # 0~1 사이 값으로 정규화
+        
+        # 손실 수준에 따른 임계값 조정
+        if loss_severity >= 0.8:  # 심각한 손실 (-6.4% 이상)
+            exit_threshold = 1.5  # 25% 감소된 임계값
+            single_signal_threshold = 0.8  # 더 낮은 단일 신호 임계값
+            logger.warning(f"심각한 손실로 인해 종료 임계값 하향 조정: {exit_threshold:.1f} (원래 2.0)")
+        elif loss_severity >= 0.4:  # 중간 수준 손실 (-3.2% 이상)
+            exit_threshold = 1.7  # 15% 감소된 임계값
+            single_signal_threshold = 0.85  # 조금 낮은 단일 신호 임계값
+            logger.info(f"중간 수준 손실로 인해 종료 임계값 하향 조정: {exit_threshold:.1f} (원래 2.0)")
+    
+    # 최종 결정
+    should_exit = exit_score >= exit_threshold or any(w >= single_signal_threshold for w in exit_signal_weights)
     
     # 출구 신호가 있으면 로깅
     if exit_signals:
         logger.info(f"출구 신호 감지: {exit_signals}")
         logger.info(f"출구 신호 가중치: {exit_signal_weights}, 총점: {exit_score}")
+        logger.info(f"임계값: {exit_threshold:.1f} (단일 신호: {single_signal_threshold:.2f})")
         logger.info(f"최종 결정: {'EXIT' if should_exit else 'HOLD'}")
     
     # 결과 반환
@@ -4843,11 +4890,12 @@ def assess_exit_signals(df_5min, signals_data, position_side, df_hourly=None, df
         "exit_signals": exit_signals,
         "exit_score": exit_score,
         "exit_signal_weights": exit_signal_weights,
-        "higher_timeframe_trend": higher_timeframe_trend
+        "higher_timeframe_trend": higher_timeframe_trend,
+        "exit_threshold": exit_threshold,
+        "pnl_status": "loss" if unrealized_pnl is not None and unrealized_pnl < 0 else "profit" if unrealized_pnl is not None and unrealized_pnl > 0 else "neutral"
     }
     
     return result
-
 
 ### 메인 AI 트레이딩 로직
 def ai_trading():
