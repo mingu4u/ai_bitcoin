@@ -510,8 +510,8 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
             self.signals["BlackFlag"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 20캔들 이상 지난 신호는 None 처리 (15->20 변경)
-            if self.signals["BlackFlag"]["candles_ago"] > 20:
+            # 40캔들 이상 지난 신호는 None 처리 (15->20->40 변경)
+            if self.signals["BlackFlag"]["candles_ago"] > 40:
                 self.signals["BlackFlag"] = {
                     "signal": None,
                     "candles_ago": None,
@@ -524,8 +524,8 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["UTBot"]["timestamp"])
             self.signals["UTBot"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 20캔들 이상 지난 신호는 None 처리 (15->20 변경)
-            if self.signals["UTBot"]["candles_ago"] > 20:
+            # 40캔들 이상 지난 신호는 None 처리 (15->20->40 변경)
+            if self.signals["UTBot"]["candles_ago"] > 40:
                 self.signals["UTBot"] = {
                     "signal": None,
                     "candles_ago": None,
@@ -5084,9 +5084,9 @@ def ai_trading():
         """
         # 롱 포지션 진입 조건 검증
         if decision == "buy" and current_position_side is None:
-            # 신호 유효성 확인 (캔들 수 20으로 확장)
-            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 20
-            utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 20
+            # 신호 유효성 확인 (캔들 수 40으로 확장)
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 40
+            utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 40
             
             # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
             price_change_pct = 0
@@ -5145,8 +5145,8 @@ def ai_trading():
         # 숏 포지션 진입 조건 검증
         elif decision == "sell" and current_position_side is None:
             # 신호 유효성 확인 (캔들 수 20으로 확장)
-            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 20
-            utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 20
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 40
+            utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 40
             
             # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
             price_change_pct = 0
@@ -5363,14 +5363,14 @@ The data below must be considered in your analysis.
 For a valid PRIMARY entry, ALL of the following must be true:
 
 **For Long Entry:**
-1. **BlackFlag FTS:** Must show a BUY signal within the last 20 candles.
-2. **UT Bot Alerts:** Must display a BUY alert within the last 20 candles.
+1. **BlackFlag FTS:** Must show a BUY signal within the last 40 candles.
+2. **UT Bot Alerts:** Must display a BUY alert within the last 40 candles.
 3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"}).
 
 **For Short Entry:**
-1. **BlackFlag FTS:** Must show a SELL signal within the last 20 candles.
-2. **UT Bot Alerts:** Must display a SELL alert within the last 20 candles.
+1. **BlackFlag FTS:** Must show a SELL signal within the last 40 candles.
+2. **UT Bot Alerts:** Must display a SELL alert within the last 40 candles.
 3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"}).
 
