@@ -606,7 +606,7 @@ class SignalTracker:
 
 def analyze_chart_signals(image_path,
                          # BlackFlag FTS parameters (normalized coordinates)
-                         blackflag_cloud_roi=(0.0, 0.05, 0.92, 0.68),
+                         blackflag_cloud_roi=(0.0, 0.05, 0.75, 0.68),
                          blackflag_xaxis_yrange=(0.87, 0.91),
                          blackflag_chunk_size=10,
                          blackflag_needed_red_chunks=2,
@@ -615,27 +615,29 @@ def analyze_chart_signals(image_path,
                          utbot_xaxis_yrange=(0.87, 0.91),
                          # Volume Oscillator parameters (normalized ROI)
                          volume_roi=(0.93, 0.68, 0.97, 0.88),
+                         # Timeframe Signal Table parameters (normalized ROI)
+                         timeframe_table_roi=(0.882, 0.097, 0.925, 0.297),
+                         # Ranging Box Detection parameters (normalized coordinates)
+                         ranging_detection_x_center=0.725,
+                         ranging_box_scan_height=(0.1, 0.6),
+                         ranging_box_color_lower=np.array([125, 0, 125]),
+                         ranging_box_color_upper=np.array([155, 50, 155]),
                          # Debug flag and prefix
                          debug=False,
                          debug_prefix="debug_"):
     """
-    하나의 이미지에서 아래 3개 신호/값을 감지하여 반환합니다.
+    하나의 이미지에서 아래 5개 신호/값을 감지하여 반환합니다.
 
       1) BlackFlag FTS 신호 – Flip 신호, flip time, stop_loss_price를
          long, short 두 방향 모두 검출한 후, 프레임에서 오른쪽(큰 flip_x) 신호만 결과로 출력.
-         (결과 예: {"flip_detected": "long", "flip_x": 123, "flip_time": "18:25", "stop_loss_price": 95295.4})
       2) UT Bot Alerts 신호 – Buy(하늘색) 또는 Sell(주황색) 박스 중 오른쪽(최신) 박스를 선택하고,
          그 박스 중심 아래 x축 영역 OCR로 신호 시간(alert_time)을 판독.
       3) Volume Oscillator 값 – volume_roi 영역 내 파란색 박스를 찾아 그 내부 숫자(예:-11.51%)를 OCR해
          '%'제거 후 float형으로 반환.
-    
-    모든 좌표는 정규화(0~1) 값이며, debug=True이면 debug_prefix를 이용해 debug 이미지(세 지표가 모두 표시된 한 개 이미지)를 저장합니다.
-    반환 예시:
-      {
-        "BlackFlag": { "flip_detected": "long" or "short" or "none", "flip_x": ..., "flip_time": ..., "stop_loss_price": ... },
-        "UTBot": { "alert_signal": "Buy"/"Sell"/"None", "alert_time": "hh:mm" },
-        "VolumeOsc": -11.51
-      }
+      4) 타임프레임 시그널 테이블 – 우측 상단의 테이블에서 5, 15, 30, 60, 240분봉에 대한
+         Bullish, Bearish, Ranging 상태를 감지하여 각 상태의 개수와 함께 상세 정보를 반환.
+      5) 현재 횡보장 여부 – 중앙 하단 보라색 동그라미 표시 위로 보라색 횡보 박스가 있는지 감지하여
+         현재 장이 횡보장인지 여부(True/False)를 반환.
     """
 
     # 이미지 로드
@@ -666,7 +668,6 @@ def analyze_chart_signals(image_path,
 
     ############### BlackFlag FTS Detection ###############
     # run_blackflag_detection()는 주어진 방향("long" 또는 "short")에 대해 검출 결과를 반환함.
-    # OCR 및 좌표 계산은 원본 이미지(img)를 사용하고, 결과 debug 오버레이는 debug_img에 그림.
     def run_blackflag_detection(direction):
         # OCR 계산용 복사본(원본 이미지 손상을 피하기 위해)
         img_bf = img.copy()
@@ -678,9 +679,12 @@ def analyze_chart_signals(image_path,
         cv2.rectangle(debug_img, (cx1, cy1), (cx2, cy2), (0,255,255), 2)
 
         # HSV 범위
-        lower_red1 = np.array([0, 70, 70]);     upper_red1 = np.array([10, 255, 255])
-        lower_red2 = np.array([170, 70, 70]);    upper_red2 = np.array([180, 255, 255])
-        lower_green = np.array([35, 60, 70]);     upper_green = np.array([85, 255, 255])
+        lower_red1 = np.array([0, 70, 70])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([170, 70, 70])
+        upper_red2 = np.array([180, 255, 255])
+        lower_green = np.array([35, 60, 70])
+        upper_green = np.array([85, 255, 255])
 
         # Step B: chunk별 색상 판별
         chunk_colors = []
@@ -699,6 +703,17 @@ def analyze_chart_signals(image_path,
                 chunk_colors.append("green" if green_count > red_count else "red")
             else:
                 chunk_colors.append("red" if red_count > green_count else "green")
+                
+        # Debug: 각 chunk의 색상 표시
+        if debug:
+            chunk_height = 10
+            chunk_display_y = cy1 - chunk_height - 5
+            for i in range(n_chunks):
+                x_start = cx1 + i * blackflag_chunk_size
+                x_end = x_start + blackflag_chunk_size
+                color = (0, 255, 0) if chunk_colors[i] == "green" else (0, 0, 255)
+                cv2.rectangle(debug_img, (x_start, chunk_display_y), (x_end, chunk_display_y + chunk_height), color, -1)
+                
         # Step C: flip 신호 판별 (연속된 chunk 조건)
         if direction == "long":
             first_color = "red"
@@ -710,6 +725,7 @@ def analyze_chart_signals(image_path,
             second_color = "red"
             first_needed = blackflag_needed_green_chunks
             second_needed = blackflag_needed_red_chunks
+            
         flip_x_local = None
         i_idx = 0
         while i_idx < n_chunks:
@@ -721,12 +737,14 @@ def analyze_chart_signals(image_path,
             if not valid_first:
                 i_idx += 1
                 continue
+                
             start_second_idx = i_idx + first_needed
             valid_second = True
             for g in range(second_needed):
                 if start_second_idx + g >= n_chunks or chunk_colors[start_second_idx + g] != second_color:
                     valid_second = False
                     break
+                    
             if valid_second:
                 flip_x_local = start_second_idx * blackflag_chunk_size
                 break
@@ -739,7 +757,7 @@ def analyze_chart_signals(image_path,
         # Step D: flip_x_global 및 flip time OCR
         flip_x_global = cx1 + flip_x_local
         cv2.line(debug_img, (flip_x_global, cy1), (flip_x_global, cy2), (0,255,255), 2)
-        x_margin = 35
+        x_margin = 50
         x1px = max(0, flip_x_global - x_margin)
         x2px = min(w, flip_x_global + x_margin)
         y1p = int(blackflag_xaxis_yrange[0] * h)
@@ -750,6 +768,13 @@ def analyze_chart_signals(image_path,
         time_text = pytesseract.image_to_string(roi_xaxis, config=ocr_config)
         time_label = time_text.strip().replace("\n","").replace(" ","")
 
+        # 필요시 time_label 정리 (정규식 이용)
+        time_pattern = r'(\d{1,2}):(\d{2})'
+        time_matches = re.search(time_pattern, time_label)
+        if time_matches:
+            hour, minute = time_matches.groups()
+            time_label = f"{hour}:{minute}"
+
         # Step E: stop_loss_price OCR
         if direction == "long":
             rgb_color = np.uint8([[[80,175,76]]])
@@ -759,11 +784,8 @@ def analyze_chart_signals(image_path,
             rgb_color = np.uint8([[[82,82,255]]])
             hsv_ref = cv2.cvtColor(rgb_color, cv2.COLOR_BGR2HSV)
             mask_candidate = cv2.inRange(roi_cloud_hsv, hsv_ref*0.9, hsv_ref*1.1)
-        
-        # 수정된 부분: 클라우드 영역 바운더리(상단/하단) 근처 후보만 고려
+            
         candidate_center_y = None
-        valid_candidates = []
-        
         if flip_x_local < roi_w:
             right_side_mask = mask_candidate[:, flip_x_local:]
             points = cv2.findNonZero(right_side_mask)
@@ -771,67 +793,41 @@ def analyze_chart_signals(image_path,
                 points[:,:,0] += flip_x_local
                 max_x = np.max(points[:,:,0])
                 candidate_points = points[points[:,:,0] == max_x]
-                candidate_points = candidate_points.reshape(-1, 2)
+                candidate_points = candidate_points.reshape(-1,2)
+                candidate_center_y = int(np.mean(candidate_points[:,1]))
                 
-                # 후보 포인트들을 y좌표 기준으로 정렬
-                candidate_points = sorted(candidate_points, key=lambda p: p[1])
-                
-                # 여러 개의 후보점이 존재할 경우
-                if len(candidate_points) > 0:
-                    if direction == "long":
-                        # long 방향(Green Cloud)인 경우 가장 아래쪽 점 사용 (Cloud의 경계) - 첫번째 점 무시
-                        if len(candidate_points) > 1:
-                            candidate_center_y = int(candidate_points[-1][1])
-                        else:
-                            candidate_center_y = int(candidate_points[0][1])
-                    else:
-                        # short 방향(Red Cloud)인 경우 가장 위쪽 점 사용 (Cloud의 경계) - 마지막 점 무시
-                        if len(candidate_points) > 1:
-                            candidate_center_y = int(candidate_points[0][1])
-                        else:
-                            candidate_center_y = int(candidate_points[0][1])
-        
-        stop_loss_price = None
-        # 변수 초기화 위치 수정 - new_s_y1, new_s_y2 변수를 먼저 정의
+        # 변수 초기화 위치 수정 - 더 일찍 변수들을 정의하여 오류 방지
         s_x1 = int(w * 0.92)
         s_x2 = int(w * 0.97)
+        new_s_y1 = cy1  # 기본값으로 cy1 사용
+        new_s_y2 = cy2  # 기본값으로 cy2 사용
         
+        stop_loss_price = None
         if candidate_center_y is not None:
             global_center_y = cy1 + candidate_center_y
             band_half = 20
             new_s_y1 = max(0, global_center_y - band_half)
             new_s_y2 = min(h, global_center_y + band_half)
-            
-            # 클라우드 영역 내부로 제한하는 추가 로직
-            if direction == "long":
-                # Long(Green Cloud)인 경우 하단 경계 근처로 제한
-                new_s_y1 = max(new_s_y1, cy1)
-                new_s_y2 = min(new_s_y2, cy2)
-            else:
-                # Short(Red Cloud)인 경우 상단 경계 근처로 제한
-                new_s_y1 = max(new_s_y1, cy1)
-                new_s_y2 = min(new_s_y2, cy2)
-                
             roi_stoploss = img_bf[new_s_y1:new_s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, new_s_y1), (s_x2, new_s_y2), (0,255,0), 2)
         else:
-            # 후보 포인트가 없는 경우 클라우드 영역으로 제한
-            s_y1 = cy1
-            s_y2 = cy2
-            roi_stoploss = img_bf[s_y1:s_y2, s_x1:s_x2]
-            cv2.rectangle(debug_img, (s_x1, s_y1), (s_x2, s_y2), (255,0,255), 2)
-            # candidate_center_y가 None일 때의 new_s_y1, new_s_y2 설정
-            new_s_y1 = s_y1
-            new_s_y2 = s_y2
+            s_y1 = int(h * 0.05)
+            s_y2 = int(h * 0.68)
+            new_s_y1 = s_y1  # 명시적으로 new_s_y1 설정
+            new_s_y2 = s_y2  # 명시적으로 new_s_y2 설정
+            roi_stoploss = img_bf[new_s_y1:new_s_y2, s_x1:s_x2]
+            cv2.rectangle(debug_img, (s_x1, new_s_y1), (s_x2, new_s_y2), (255,0,255), 2)
             
         roi_stoploss_hsv = cv2.cvtColor(roi_stoploss, cv2.COLOR_BGR2HSV)
         if direction == "long":
             mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_green, upper_green)
         else:
             mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_red1, upper_red1) | cv2.inRange(roi_stoploss_hsv, lower_red2, upper_red2)
+            
         kernel = np.ones((3,3), np.uint8)
         mask_stoploss_sl = cv2.morphologyEx(mask_stoploss_sl, cv2.MORPH_OPEN, kernel)
         contours_sl, _ = cv2.findContours(mask_stoploss_sl, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
         if contours_sl:
             candidate_contours = [cnt for cnt in contours_sl if cv2.contourArea(cnt) > 500]
             if candidate_contours:
@@ -849,6 +845,7 @@ def analyze_chart_signals(image_path,
                         stop_loss_price = float(matches[0])
                     except:
                         stop_loss_price = None
+                        
         if stop_loss_price is None:
             ocr_config_sl = "--psm 7 -c tessedit_char_whitelist=0123456789,."
             stop_loss_text = pytesseract.image_to_string(roi_stoploss, config=ocr_config_sl)
@@ -860,73 +857,86 @@ def analyze_chart_signals(image_path,
                     stop_loss_price = float(matches[0])
                 except:
                     stop_loss_price = None
+                    
         return {"flip_detected": True,
                 "flip_x": flip_x_global,
                 "flip_time": time_label,
-                "stop_loss_price": stop_loss_price}  
-        
+                "stop_loss_price": stop_loss_price}
+
     ############### UT Bot Alerts Detection ###############
     def detect_utbot():
-            img_ut = img.copy()
-            img_hsv = cv2.cvtColor(img_ut, cv2.COLOR_BGR2HSV)
-            # HSV 범위: 하늘색 for Buy, 주황색 for Sell
-            lower_cyan   = np.array([80, 100, 100])
-            upper_cyan   = np.array([100, 255, 255])   # Buy
-            lower_orange = np.array([10, 150, 100])
-            upper_orange = np.array([25, 255, 255])    # Sell
+        img_ut = img.copy()
+        img_hsv = cv2.cvtColor(img_ut, cv2.COLOR_BGR2HSV)
+        # HSV 범위: 하늘색 for Buy, 주황색 for Sell
+        lower_cyan   = np.array([80, 100, 100])
+        upper_cyan   = np.array([100, 255, 255])   # Buy
+        lower_orange = np.array([10, 150, 100])
+        upper_orange = np.array([25, 255, 255])    # Sell
 
-            bounding_data = []
-            # Buy 신호 탐색
-            mask_buy = cv2.inRange(img_hsv, lower_cyan, upper_cyan)
-            contours_buy, _ = cv2.findContours(mask_buy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for cnt in contours_buy:
-                area = cv2.contourArea(cnt)
-                if area < 750:
-                    continue
-                x, y, w_box, h_box = cv2.boundingRect(cnt)
-                cx = x + w_box // 2
-                bounding_data.append({
-                    "signal": "Buy",
-                    "cx": cx,
-                    "box": (x, y, w_box, h_box)
-                })
-                cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (255,255,0), 2)
-            # Sell 신호 탐색
-            mask_sell = cv2.inRange(img_hsv, lower_orange, upper_orange)
-            contours_sell, _ = cv2.findContours(mask_sell, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for cnt in contours_sell:
-                area = cv2.contourArea(cnt)
-                if area < 750:
-                    continue
-                x, y, w_box, h_box = cv2.boundingRect(cnt)
-                cx = x + w_box // 2
-                bounding_data.append({
-                    "signal": "Sell",
-                    "cx": cx,
-                    "box": (x, y, w_box, h_box)
-                })
-                cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (0,165,255), 2)
-            alert_signal = "None"
-            alert_time = ""
-            center_x = None
-            if len(bounding_data) > 0:
-                best_box = max(bounding_data, key=lambda d: d["cx"])
-                alert_signal = best_box["signal"]
-                center_x = best_box["cx"]
-                (bx, by, bw, bh) = best_box["box"]
-                cv2.rectangle(debug_img, (bx,by), (bx+bw,by+bh), (0,255,255), 3)
-            if alert_signal != "None" and center_x is not None:
-                x_margin = 35
-                x1px = max(0, center_x - x_margin)
-                x2px = min(w, center_x + x_margin)
-                y1p = int(utbot_xaxis_yrange[0] * h)
-                y2p = int(utbot_xaxis_yrange[1] * h)
-                roi_time = img_ut[y1p:y2p, x1px:x2px]
-                cv2.rectangle(debug_img, (x1px,y1p), (x2px,y2p), (0,0,255), 2)
-                ocr_config = "--psm 7 --oem 3"
-                time_ocr_text = pytesseract.image_to_string(roi_time, config=ocr_config)
-                alert_time = time_ocr_text.strip().replace("\n"," ").strip()
-            return {"alert_signal": alert_signal, "alert_time": alert_time}
+        bounding_data = []
+        # Buy 신호 탐색
+        mask_buy = cv2.inRange(img_hsv, lower_cyan, upper_cyan)
+        contours_buy, _ = cv2.findContours(mask_buy, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours_buy:
+            area = cv2.contourArea(cnt)
+            if area < 750:  # 면적 임계값 변경
+                continue
+            x, y, w_box, h_box = cv2.boundingRect(cnt)
+            cx = x + w_box // 2
+            bounding_data.append({
+                "signal": "Buy",
+                "cx": cx,
+                "box": (x, y, w_box, h_box)
+            })
+            cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (255,255,0), 2)
+            
+        # Sell 신호 탐색
+        mask_sell = cv2.inRange(img_hsv, lower_orange, upper_orange)
+        contours_sell, _ = cv2.findContours(mask_sell, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours_sell:
+            area = cv2.contourArea(cnt)
+            if area < 750:  # 면적 임계값 변경
+                continue
+            x, y, w_box, h_box = cv2.boundingRect(cnt)
+            cx = x + w_box // 2
+            bounding_data.append({
+                "signal": "Sell",
+                "cx": cx,
+                "box": (x, y, w_box, h_box)
+            })
+            cv2.rectangle(debug_img, (x,y), (x+w_box,y+h_box), (0,165,255), 2)
+            
+        alert_signal = "None"
+        alert_time = ""
+        center_x = None
+        
+        if len(bounding_data) > 0:
+            best_box = max(bounding_data, key=lambda d: d["cx"])
+            alert_signal = best_box["signal"]
+            center_x = best_box["cx"]
+            (bx, by, bw, bh) = best_box["box"]
+            cv2.rectangle(debug_img, (bx,by), (bx+bw,by+bh), (0,255,255), 3)
+            
+        if alert_signal != "None" and center_x is not None:
+            x_margin = 35
+            x1px = max(0, center_x - x_margin)
+            x2px = min(w, center_x + x_margin)
+            y1p = int(utbot_xaxis_yrange[0] * h)
+            y2p = int(utbot_xaxis_yrange[1] * h)
+            roi_time = img_ut[y1p:y2p, x1px:x2px]
+            cv2.rectangle(debug_img, (x1px,y1p), (x2px,y2p), (0,0,255), 2)
+            ocr_config = "--psm 7 --oem 3"
+            time_ocr_text = pytesseract.image_to_string(roi_time, config=ocr_config)
+            alert_time = time_ocr_text.strip().replace("\n"," ").strip()
+            
+            # 시간 형식 정리 (정규식 이용)
+            time_pattern = r'(\d{1,2}):(\d{2})'
+            time_matches = re.search(time_pattern, alert_time)
+            if time_matches:
+                hour, minute = time_matches.groups()
+                alert_time = f"{hour}:{minute}"
+                
+        return {"alert_signal": alert_signal, "alert_time": alert_time}
     ############ End UT Bot Detection ############
         
     ############## Volume Oscillator Detection ##############
@@ -946,24 +956,204 @@ def analyze_chart_signals(image_path,
         mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_OPEN, kernel)
         contours, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         sub_roi = roi_osc
+        
         if contours:
             max_cnt = max(contours, key=cv2.contourArea)
             x_box, y_box, w_box, h_box = cv2.boundingRect(max_cnt)
             cv2.rectangle(debug_img, (x1+x_box, y1+y_box), (x1+x_box+w_box, y1+y_box+h_box), (255,255,0), 2)
             sub_roi = roi_osc[y_box:y_box+h_box, x_box:x_box+w_box]
+            
         ocr_config = "--psm 7 --oem 3"
         ocr_text = pytesseract.image_to_string(sub_roi, config=ocr_config)
         ocr_text = ocr_text.strip().replace("\n", "").replace(" ", "")
         ocr_text = ocr_text.replace("%", "")
         matches = re.findall(r"[+-]?\d+\.\d+|[+-]?\d+", ocr_text)
         vol_value = None
+        
         if matches:
             try:
                 vol_value = float(matches[0])
             except ValueError:
                 vol_value = None
+                
         return vol_value
     ############ End Volume Oscillator Detection ############
+
+    ############## 타임프레임 시그널 테이블 감지 ##############
+    def detect_timeframe_signals():
+        """
+        우측 상단 타임프레임 시그널 테이블을 감지하여 각 타임프레임(5, 15, 30, 60, 240)의
+        신호 상태(Bullish, Bearish, Ranging)를 감지합니다.
+        
+        Returns:
+            dict: 각 타임프레임별 신호 상태와 통계
+        """
+        try:
+            img_tf = img.copy()
+            
+            # 테이블 ROI 추출
+            x1, y1, x2, y2 = to_px(timeframe_table_roi)
+            roi_table = img_tf[y1:y2, x1:x2]
+            
+            # 디버그 시 ROI 표시
+            if debug:
+                cv2.rectangle(debug_img, (x1, y1), (x2, y2), (0, 255, 255), 2)
+            
+            # 결과 초기화
+            result = {
+                "details": [],
+                "bullish_count": 0,
+                "bearish_count": 0,
+                "ranging_count": 0
+            }
+            
+            # ROI가 너무 작으면 처리 중단
+            if roi_table.shape[0] < 10 or roi_table.shape[1] < 10:
+                print("타임프레임 테이블 ROI가 너무 작습니다")
+                return result
+            
+            # 테이블 행 추출 (5개 행: 5분, 15분, 30분, 60분, 240분)
+            h_roi, w_roi = roi_table.shape[:2]
+            row_height = h_roi // 5
+            
+            timeframes = ["5", "15", "30", "60", "240"]
+            
+            for i, tf in enumerate(timeframes):
+                # 각 행 추출
+                y_start = i * row_height
+                y_end = (i + 1) * row_height
+                row = roi_table[y_start:y_end, :]
+                
+                # 색상 기반 신호 검출 (오른쪽 컬럼)
+                right_cell = row[:, w_roi//2:]
+                
+                # 색상 분석 (HSV 변환)
+                right_cell_hsv = cv2.cvtColor(right_cell, cv2.COLOR_BGR2HSV)
+                
+                # Bullish (녹색) 감지
+                lower_green = np.array([35, 50, 50])
+                upper_green = np.array([90, 255, 255])
+                mask_green = cv2.inRange(right_cell_hsv, lower_green, upper_green)
+                green_count = np.count_nonzero(mask_green)
+                
+                # Bearish (빨간색) 감지
+                lower_red1 = np.array([0, 50, 50])
+                upper_red1 = np.array([10, 255, 255])
+                lower_red2 = np.array([170, 50, 50])
+                upper_red2 = np.array([180, 255, 255])
+                mask_red1 = cv2.inRange(right_cell_hsv, lower_red1, upper_red1)
+                mask_red2 = cv2.inRange(right_cell_hsv, lower_red2, upper_red2)
+                mask_red = mask_red1 | mask_red2
+                red_count = np.count_nonzero(mask_red)
+                
+                # Ranging (회색) 감지 - 색상 값이 낮고, 채도가 낮은 영역 탐지
+                lower_gray = np.array([0, 0, 80])
+                upper_gray = np.array([180, 30, 220])
+                mask_gray = cv2.inRange(right_cell_hsv, lower_gray, upper_gray)
+                gray_count = np.count_nonzero(mask_gray)
+                
+                # 픽셀 수 비교로 신호 결정
+                pixel_counts = {
+                    "Bullish": green_count,
+                    "Bearish": red_count,
+                    "Ranging": gray_count
+                }
+                
+                signal = max(pixel_counts.items(), key=lambda x: x[1])[0]
+                
+                # 디버그 시 표시
+                if debug:
+                    y_abs = y1 + y_start
+                    cv2.rectangle(debug_img, (x1, y_abs), (x2, y_abs + row_height), (255, 0, 255), 1)
+                    cv2.putText(debug_img, f"{tf}min: {signal}", (x1, y_abs + row_height//2), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+                
+                # 결과 추가
+                result["details"].append({"timeframe": tf, "signal": signal})
+                
+                # 통계 업데이트
+                if signal == "Bullish":
+                    result["bullish_count"] += 1
+                elif signal == "Bearish":
+                    result["bearish_count"] += 1
+                elif signal == "Ranging":
+                    result["ranging_count"] += 1
+            
+            return result
+        
+        except Exception as e:
+            print(f"타임프레임 신호 감지 중 오류: {e}")
+            return {
+                "details": [],
+                "bullish_count": 0,
+                "bearish_count": 0,
+                "ranging_count": 0
+            }
+    ############ End Timeframe Signals Detection ############
+    
+    ############## 횡보장 감지 ##############
+    def detect_ranging_market():
+        """
+        중앙 하단의 보라색 동그라미 위로 보라색 횡보 박스가 있는지 감지합니다.
+        
+        Returns:
+            bool: 현재 횡보장 여부
+        """
+        try:
+            img_ranging = img.copy()
+            
+            # X 좌표 계산 (보라색 동그라미의 X 좌표)
+            x_center = int(ranging_detection_x_center * w)
+            
+            # Y 범위 계산 (지정된 범위 내에서만 검사)
+            y_start = int(ranging_box_scan_height[0] * h)
+            y_end = int(ranging_box_scan_height[1] * h)
+            
+            # 검사 영역 선택
+            roi_column = img_ranging[y_start:y_end, x_center-5:x_center+5]
+            
+            # 디버그 시 검사 영역 표시
+            if debug:
+                cv2.line(debug_img, (x_center, y_start), (x_center, y_end), (0, 255, 255), 2)
+                
+            # 보라색 색상 감지 (HSV 변환)
+            roi_hsv = cv2.cvtColor(roi_column, cv2.COLOR_BGR2HSV)
+            
+            # 보라색 범위 마스크 생성
+            lower_purple = np.array([275/2, 0, 0])  # Convert 275 to OpenCV H range (0-180)
+            upper_purple = np.array([360/2, 255, 255]) # Convert 285 to OpenCV H range
+            mask_purple = cv2.inRange(roi_hsv, lower_purple, upper_purple)
+            
+            # 보라색 영역 개수 계산
+            purple_pixel_count = np.count_nonzero(mask_purple)
+            
+            # 보라색 횡보 박스 감지 여부 결정
+            # 임계값: ROI 면적의 5% 이상이 보라색이면 횡보장으로 판단
+            is_ranging = purple_pixel_count > (roi_column.shape[0] * roi_column.shape[1] * 0.05)
+            
+            # 디버그 시 횡보장 결과 표시
+            if debug:
+                color = (0, 255, 0) if is_ranging else (0, 0, 255)
+                cv2.putText(debug_img, f"Ranging: {is_ranging}", (x_center-80, y_start-10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                
+                # 감지된 보라색 영역 표시
+                if purple_pixel_count > 0:
+                    # 마스크에서 보라색 영역의 위치 찾기
+                    coords = cv2.findNonZero(mask_purple)
+                    if coords is not None:
+                        for point in coords:
+                            py, px = point[0][1], point[0][0]
+                            abs_y = y_start + py
+                            abs_x = x_center - 5 + px
+                            cv2.circle(debug_img, (abs_x, abs_y), 2, (255, 0, 255), -1)
+                
+            return is_ranging
+            
+        except Exception as e:
+            print(f"횡보장 감지 중 오류: {e}")
+            return False
+    ############ End Ranging Market Detection ############
 
     # 각 지표 검출 함수 호출
     result_long = run_blackflag_detection("long")
@@ -1008,6 +1198,10 @@ def analyze_chart_signals(image_path,
     # UT Bot 및 Volume Oscillator 검출 함수 호출
     utbot_result = detect_utbot()
     volume_result = read_volume_osc()
+    
+    # 새로 추가: 타임프레임 시그널 테이블 및 횡보장 감지 함수 호출
+    timeframe_signals = detect_timeframe_signals()
+    is_ranging_market = detect_ranging_market()
 
     # 최종 debug 이미지 저장(하나로 통합)
     save_debug_final(debug_img, "merged")
@@ -1019,9 +1213,14 @@ def analyze_chart_signals(image_path,
     # GC 강제 수행
     gc.collect()
 
-    return {"BlackFlag": blackflag_final,
-            "UTBot": utbot_result,
-            "VolumeOsc": volume_result}
+    # 기존 결과에 새 결과 추가하여 반환
+    return {
+        "BlackFlag": blackflag_final,
+        "UTBot": utbot_result,
+        "VolumeOsc": volume_result,
+        "TimeframeSignals": timeframe_signals,
+        "IsRangingMarket": is_ranging_market
+    }
 
 class ChartSignalProcessor:
     """
@@ -3290,9 +3489,10 @@ class TradingDecision(BaseModel):
     pl_ratio: float
 
 
+# 1. assess_trend_strength 함수 수정 - 진입 기준 완화
 def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     """
-    비트코인의 특성에 맞게 개선된 트렌드 강도 평가 함수
+    비트코인의 특성에 맞게 개선된 트렌드 강도 평가 함수 - 진입 기준 완화
     
     Args:
         df_5min: 5분 OHLCV 데이터프레임 (지표 포함)
@@ -3322,91 +3522,91 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
         "short_correction_signals": []
     }
 
-    # 1. 극단적인 가격 레벨 확인 - 비트코인의 높은 변동성에 맞게 수정
+    # 1. 극단적인 가격 레벨 확인 - 기준 완화
     try:
         # 1시간 차트 극단 확인
         hourly_high = df_hourly['high'].max()
         hourly_low = df_hourly['low'].min()
         hourly_range = hourly_high - hourly_low
         
-        # 상단 극단 확인 (신규: 볼린저 밴드와 연계)
+        # 상단 극단 확인 (신규: 볼린저 밴드와 연계) - 완화: 1.005 -> 1.008
         if ('bb_bbh' in latest_hourly and 
-            current_price > latest_hourly['bb_bbh'] * 1.005 and 
-            latest_hourly['rsi'] > 75):
+            current_price > latest_hourly['bb_bbh'] * 1.008 and 
+            latest_hourly['rsi'] > 78):  # 75 -> 78로 완화
             long_trend_disqualified = True
-            disqualification_reasons.append(f"가격이 1시간 상단 밴드를 5% 이상 돌파 & RSI > 75")
+            disqualification_reasons.append(f"가격이 1시간 상단 밴드를 8% 이상 돌파 & RSI > 78")
         
-        # 하단 극단 확인 (신규: 볼린저 밴드와 연계)
+        # 하단 극단 확인 (신규: 볼린저 밴드와 연계) - 완화: 0.995 -> 0.992
         if ('bb_bbl' in latest_hourly and 
-            current_price < latest_hourly['bb_bbl'] * 0.995 and 
-            latest_hourly['rsi'] < 25):
+            current_price < latest_hourly['bb_bbl'] * 0.992 and 
+            latest_hourly['rsi'] < 22):  # 25 -> 22로 완화
             short_trend_disqualified = True
-            disqualification_reasons.append(f"가격이 1시간 하단 밴드를 5% 이상 하회 & RSI < 25")
+            disqualification_reasons.append(f"가격이 1시간 하단 밴드를 8% 이상 하회 & RSI < 22")
         
-        # 4시간 차트 극단 확인 - 비트코인의 상승 경향을 고려하여 비대칭 적용
+        # 4시간 차트 극단 확인 - 완화
         if df_4h is not None:
             four_hour_high = df_4h['high'].max()
             four_hour_low = df_4h['low'].min()
             four_hour_range = four_hour_high - four_hour_low
             
-            # 상단 극단 확인 (상단 기준 7% - 비트코인의 상승 잠재력 감안)
+            # 상단 극단 확인 (완화: 1.01 -> 1.015)
             if ('bb_bbh' in latest_4h and 
-                current_price > latest_4h['bb_bbh'] * 1.01 and
-                latest_4h['rsi'] > 78):
+                current_price > latest_4h['bb_bbh'] * 1.015 and
+                latest_4h['rsi'] > 80):  # 78 -> 80으로 완화
                 long_trend_disqualified = True
-                disqualification_reasons.append(f"가격이 4시간 상단 밴드를 1% 이상 돌파 & RSI > 78")
+                disqualification_reasons.append(f"가격이 4시간 상단 밴드를 1.5% 이상 돌파 & RSI > 80")
             
-            # 하단 극단 확인 (하단 기준 5% - 비트코인의 더 급격한 하락 특성 반영)
+            # 하단 극단 확인 (완화: 0.99 -> 0.985)
             if ('bb_bbl' in latest_4h and 
-                current_price < latest_4h['bb_bbl'] * 0.99 and
-                latest_4h['rsi'] < 22):
+                current_price < latest_4h['bb_bbl'] * 0.985 and
+                latest_4h['rsi'] < 20):  # 22 -> 20으로 완화
                 short_trend_disqualified = True
-                disqualification_reasons.append(f"가격이 4시간 하단 밴드를 1% 이상 하회 & RSI < 22")
+                disqualification_reasons.append(f"가격이 4시간 하단 밴드를 1.5% 이상 하회 & RSI < 20")
     except Exception as e:
         logger.error(f"가격 극단치 확인 중 오류: {e}")
     
-    # 2. RSI 과매수/과매도 확인 - 비트코인의 극단적 움직임을 허용하도록 수정
+    # 2. RSI 과매수/과매도 확인 - 완화
     try:
         # 1시간 RSI 확인 (컨텍스트 고려)
         hourly_rsi = latest_hourly['rsi']
         
-        # 과매수 확인 (RSI > 78, 이전 70에서 상향)
-        if hourly_rsi > 78:
+        # 과매수 확인 (RSI > 80, 이전 78에서 상향)
+        if hourly_rsi > 80:  # 78 -> 80으로 상향
             # 상승 모멘텀 확인 (제시된 데이터에서 강한 상승 경향 반영)
             if len(df_hourly) > 2:
                 rsi_diff = hourly_rsi - df_hourly['rsi'].iloc[-2]
-                # RSI가 약해질 때만 비적격으로 처리 (중요: 3으로 증가, 이전 1에서 상향)
-                if rsi_diff < 3.0:
+                # RSI가 약해질 때만 비적격으로 처리 (중요: 완화: 3 -> 2)
+                if rsi_diff < 2.0:
                     long_trend_disqualified = True
                     disqualification_reasons.append(f"1시간 RSI 과매수 및 약화 ({hourly_rsi:.2f}, 변화: {rsi_diff:.2f})")
         
-        # 과매도 확인 (RSI < 22, 이전 25에서 하향)
-        if hourly_rsi < 22:
+        # 과매도 확인 (RSI < 20, 이전 22에서 하향)
+        if hourly_rsi < 20:  # 22 -> 20으로 하향
             # 하락 모멘텀 확인
             if len(df_hourly) > 2:
                 rsi_diff = hourly_rsi - df_hourly['rsi'].iloc[-2]
-                # RSI가 강해질 때만 비적격으로 처리 (중요: -3으로 감소, 이전 -1에서 하향)
-                if rsi_diff > -3.0:
+                # RSI가 강해질 때만 비적격으로 처리 (중요: 완화: -3 -> -2)
+                if rsi_diff > -2.0:
                     short_trend_disqualified = True
                     disqualification_reasons.append(f"1시간 RSI 과매도 및 강화 ({hourly_rsi:.2f}, 변화: {rsi_diff:.2f})")
         
-        # 4시간 RSI 확인 (비트코인의 변동성 고려하여 기준 조정)
+        # 4시간 RSI 확인 - 완화
         if df_4h is not None and 'rsi' in latest_4h:
             four_hour_rsi = latest_4h['rsi']
             
-            # 4시간 RSI 과매수 임계값 증가 (비트코인의 강한 상승 고려)
-            if four_hour_rsi > 80 and four_hour_rsi < df_4h['rsi'].iloc[-2]:
+            # 4시간 RSI 과매수 임계값 증가 (완화: 80 -> 82)
+            if four_hour_rsi > 82 and four_hour_rsi < df_4h['rsi'].iloc[-2]:
                 long_trend_disqualified = True
                 disqualification_reasons.append(f"4시간 RSI 강한 과매수 ({four_hour_rsi:.2f}) 및 하락 시작")
             
-            # 4시간 RSI 과매도 임계값 감소 (급격한 하락 고려)
-            if four_hour_rsi < 20 and four_hour_rsi > df_4h['rsi'].iloc[-2]:
+            # 4시간 RSI 과매도 임계값 감소 (완화: 20 -> 18)
+            if four_hour_rsi < 18 and four_hour_rsi > df_4h['rsi'].iloc[-2]:
                 short_trend_disqualified = True
                 disqualification_reasons.append(f"4시간 RSI 강한 과매도 ({four_hour_rsi:.2f}) 및 상승 시작")
     except Exception as e:
         logger.error(f"RSI 극단치 확인 중 오류: {e}")
     
-    # 3. 연장된 트렌드 지속시간 확인 - 비트코인의 강한 트렌드 인정
+    # 3. 연장된 트렌드 지속시간 확인 - 완화
     try:
         # 비트코인 시장의 특성에 맞게 마지막 15개 캔들 분석
         if 'ema_12' in df_5min.columns or 'sma_20' in df_5min.columns:
@@ -3416,32 +3616,33 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
             bullish_count = sum(last_15_candles['close'] > last_15_candles['open'])
             bearish_count = sum(last_15_candles['close'] < last_15_candles['open'])
             
-            # 비트코인의 강한 트렌드를 고려하여 기준 상향 (85% → 90%)
-            if bullish_count / 15 >= 0.90:
+            # 완화: 90% -> 95%
+            if bullish_count / 15 >= 0.95:
                 # 볼륨 프로필 확인 - 볼륨이 감소하고 MACD 약화될 때만 비적격으로
                 if 'volume' in df_5min.columns and 'macd' in df_5min.columns:
                     recent_volume = df_5min['volume'].iloc[-3:].mean()
                     avg_volume = df_5min['volume'].iloc[-15:].mean()
                     macd_diff = df_5min['macd'].iloc[-1] - df_5min['macd'].iloc[-2]
                     
-                    # 볼륨 감소 + MACD 약화 조합의 경우만 비적격
-                    if recent_volume < avg_volume * 0.7 and macd_diff < 0:
+                    # 완화: 0.7 -> 0.65
+                    if recent_volume < avg_volume * 0.65 and macd_diff < 0:
                         long_trend_disqualified = True
                         disqualification_reasons.append(f"연장된 상승 트렌드 ({bullish_count}/15 상승 캔들), 볼륨 감소 및 MACD 약화")
             
-            if bearish_count / 15 >= 0.90:
+            # 완화: 90% -> 95%
+            if bearish_count / 15 >= 0.95:
                 # 볼륨 프로필 확인 - 볼륨이 감소하고 MACD 약화될 때만 비적격으로
                 if 'volume' in df_5min.columns and 'macd' in df_5min.columns:
                     recent_volume = df_5min['volume'].iloc[-3:].mean()
                     avg_volume = df_5min['volume'].iloc[-15:].mean()
                     macd_diff = df_5min['macd'].iloc[-1] - df_5min['macd'].iloc[-2]
                     
-                    # 볼륨 감소 + MACD 약화 조합의 경우만 비적격
-                    if recent_volume < avg_volume * 0.7 and macd_diff > 0:
+                    # 완화: 0.7 -> 0.65
+                    if recent_volume < avg_volume * 0.65 and macd_diff > 0:
                         short_trend_disqualified = True
                         disqualification_reasons.append(f"연장된 하락 트렌드 ({bearish_count}/15 하락 캔들), 볼륨 감소 및 MACD 약화")
             
-            # 연속 캔들 확인 - 비트코인의 보다 강한 트렌드를 허용
+            # 연속 캔들 확인 - 완화: 15 -> 18
             consecutive_bullish = 0
             consecutive_bearish = 0
             max_consecutive_bullish = 0
@@ -3459,14 +3660,14 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                     max_consecutive_bullish = max(max_consecutive_bullish, consecutive_bullish)
                     max_consecutive_bearish = max(max_consecutive_bearish, consecutive_bearish)
             
-            # 이례적으로 극단적인 연속 캔들만 고려 (12→15로 증가)
-            if max_consecutive_bullish >= 15:
+            # 완화: 15 -> 18
+            if max_consecutive_bullish >= 18:
                 long_trend_disqualified = True
-                disqualification_reasons.append(f"15+ 연속 상승 캔들 감지 ({max_consecutive_bullish})")
+                disqualification_reasons.append(f"18+ 연속 상승 캔들 감지 ({max_consecutive_bullish})")
                 
-            if max_consecutive_bearish >= 15:
+            if max_consecutive_bearish >= 18:
                 short_trend_disqualified = True
-                disqualification_reasons.append(f"15+ 연속 하락 캔들 감지 ({max_consecutive_bearish})")
+                disqualification_reasons.append(f"18+ 연속 하락 캔들 감지 ({max_consecutive_bearish})")
     except Exception as e:
         logger.error(f"트렌드 지속 시간 확인 중 오류: {e}")
     
@@ -3481,18 +3682,18 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
         avg_candle_range = (recent_candles['high'] - recent_candles['low']).mean()
         latest_candle_range = recent_candles['high'].iloc[-1] - recent_candles['low'].iloc[-1]
         
-        # 최근 가격 움직임의 속도 확인
+        # 최근 가격 움직임의 속도 확인 - 완화: 1.8 -> 1.6
         price_velocity = abs(recent_candles['close'].iloc[-1] - recent_candles['close'].iloc[-3]) / avg_candle_range
         
-        # 강한 상승 모멘텀 (비트코인의 특성에 맞게 조정)
-        if price_velocity > 1.8 and recent_candles['close'].iloc[-1] > recent_candles['close'].iloc[-3] and recent_candles['close'].iloc[-1] > recent_candles['open'].iloc[-1]:
+        # 강한 상승 모멘텀 - 완화: 1.8 -> 1.6
+        if price_velocity > 1.6 and recent_candles['close'].iloc[-1] > recent_candles['close'].iloc[-3] and recent_candles['close'].iloc[-1] > recent_candles['open'].iloc[-1]:
             long_criteria.append(True)
-            logger.info(f"강한 상승 모멘텀 감지: 가격 속도 = {price_velocity:.2f} (임계값 1.8)")
+            logger.info(f"강한 상승 모멘텀 감지: 가격 속도 = {price_velocity:.2f} (임계값 1.6)")
         
-        # 강한 하락 모멘텀 (비트코인의 특성에 맞게 조정)
-        if price_velocity > 1.8 and recent_candles['close'].iloc[-1] < recent_candles['close'].iloc[-3] and recent_candles['close'].iloc[-1] < recent_candles['open'].iloc[-1]:
+        # 강한 하락 모멘텀 - 완화: 1.8 -> 1.6
+        if price_velocity > 1.6 and recent_candles['close'].iloc[-1] < recent_candles['close'].iloc[-3] and recent_candles['close'].iloc[-1] < recent_candles['open'].iloc[-1]:
             short_criteria.append(True)
-            logger.info(f"강한 하락 모멘텀 감지: 가격 속도 = {price_velocity:.2f} (임계값 1.8)")
+            logger.info(f"강한 하락 모멘텀 감지: 가격 속도 = {price_velocity:.2f} (임계값 1.6)")
 
         if 'bb_bbh' in latest_5min and 'bb_bbl' in latest_5min and 'bb_bbm' in latest_5min:
             # 밴드 폭 및 기타 속성 계산
@@ -3504,10 +3705,10 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
             # ==== 개선된 브레이크아웃 감지 로직 ====
             
             # A. 브레이크아웃 분석용 데이터 수집
-            candle_body_sizes = []       # 캔들 몸통 크기
-            candle_ranges = []           # 고가-저가 범위
-            candle_directions = []       # 캔들 방향 (1=상승, -1=하락)
-            close_to_close_changes = []  # 종가-종가 변화
+            candle_body_sizes = []
+            candle_ranges = []
+            candle_directions = []
+            close_to_close_changes = []
             
             for i in range(candle_analysis_window):
                 idx = -(i + 1)  # 가장 최근 캔들부터
@@ -3548,37 +3749,35 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
             recent_directions = candle_directions[:3]
             recent_volumes = candle_volumes[:3] if has_volume_data else []
             
-            # D. 브레이크아웃 판단 로직 (개선된 컨텍스트)
+            # D. 브레이크아웃 판단 로직 (개선된 컨텍스트) - 완화
             is_breakout = False
             breakout_direction = 0  # 0=없음, 1=상승, -1=하락
             breakout_reasons = []
             
-            # 확인 1: 최근 캔들 크기 이상치
-            # 비트코인의 빠른 가격 변화 고려 - 1.5 → 1.3으로 완화
-            if recent_bodies[0] > avg_body_size + 1.3 * body_size_std:
+            # 확인 1: 최근 캔들 크기 이상치 - 완화: 1.3 -> 1.2
+            if recent_bodies[0] > avg_body_size + 1.2 * body_size_std:
                 breakout_reasons.append(f"이례적으로 큰 최근 캔들 몸통 ({recent_bodies[0]:.2f} vs 평균 {avg_body_size:.2f})")
                 
-            # 확인 2: 방향 일관성
-            recent_direction_sum = sum(recent_directions)
-            if abs(recent_direction_sum) >= 2:  # 최소 3개 중 2개 캔들이 같은 방향
+            # 확인 2: 방향 일관성 - 3개 중 2개 -> 4개 중 2개
+            max_check_candles = min(4, len(recent_directions))
+            recent_direction_sum = sum(recent_directions[:max_check_candles])
+            if abs(recent_direction_sum) >= 2:  # 최소 4개 중 2개 캔들이 같은 방향
                 direction_str = "상승" if recent_direction_sum > 0 else "하락"
                 breakout_reasons.append(f"최근 캔들에서 일관된 {direction_str} 방향")
                 breakout_direction = 1 if recent_direction_sum > 0 else -1
             
-            # 확인 3: 최근 종가 변화 이상치
+            # 확인 3: 최근 종가 변화 이상치 - 완화: 1.6 -> 1.5
             if close_to_close_changes:
                 avg_close_change = sum(abs(x) for x in close_to_close_changes) / len(close_to_close_changes)
                 recent_close_change = abs(df_5min['close'].iloc[-1] - df_5min['close'].iloc[-2])
                 
-                # 비트코인의 급격한 가격 변화 고려 - 1.8 → 1.6으로 완화
-                if recent_close_change > avg_close_change * 1.6:
+                if recent_close_change > avg_close_change * 1.5:
                     breakout_reasons.append(f"큰 폭의 가격 이동 ({recent_close_change:.2f} vs 평균 {avg_close_change:.2f})")
             
-            # 확인 4: 볼륨 급증 (데이터 있는 경우)
+            # 확인 4: 볼륨 급증 (데이터 있는 경우) - 완화: 1.1 -> 1.05
             if has_volume_data and recent_volumes:
                 recent_volume = recent_volumes[0]
-                # 비트코인의 빠른 거래량 변화 고려 - 1.2 → 1.1로 완화
-                if recent_volume > avg_volume + 1.1 * volume_std:
+                if recent_volume > avg_volume + 1.05 * volume_std:
                     breakout_reasons.append(f"볼륨 급증 ({recent_volume:.2f} vs 평균 {avg_volume:.2f})")
             
             # 확인 5: 볼린저 밴드 확장/수축
@@ -3593,27 +3792,25 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                 # 밴드 폭 변화율 계산
                 band_width_change_ratio = recent_band_widths[0] / recent_band_widths[4]
                 
-                # 비트코인의 빠른 밴드 확장 고려 - 1.15 → 1.12로 완화
-                if band_width_change_ratio > 1.12:
+                # 완화: 1.12 -> 1.1
+                if band_width_change_ratio > 1.1:
                     breakout_reasons.append(f"볼린저 밴드 확장 ({(band_width_change_ratio-1)*100:.1f}% 증가)")
-                # 비트코인의 빠른 밴드 수축 고려 - 0.9 → 0.92로 완화
-                elif band_width_change_ratio < 0.92:
-                    # 중앙선에서 가격 거리
+                # 완화: 0.92 -> 0.9
+                elif band_width_change_ratio < 0.9:
+                    # 중앙선에서 가격 거리 - 완화: 0.32 -> 0.3
                     middle_to_price_ratio = abs(current_price - latest_5min['bb_bbm']) / band_width
-                    # 비트코인의 빠른 밴드 이탈 고려 - 0.35 → 0.32로 완화
-                    if middle_to_price_ratio > 0.32:
+                    if middle_to_price_ratio > 0.3:
                         breakout_reasons.append(f"잠재적 스퀴즈 브레이크아웃 (밴드 수축 중, 가격이 중앙에서 이탈)")
             
-            # 통합 브레이크아웃 분석 결과
-            # 비트코인의 빠른 브레이크아웃 고려 - 필요 이유 수 2→1로 완화
+            # 통합 브레이크아웃 분석 결과 - 완화: 필요 이유 수 1 -> 1(유지)
             if len(breakout_reasons) >= 1 and breakout_direction != 0:
                 is_breakout = True
                 logger.info(f"브레이크아웃 감지 ({breakout_direction > 0 and '상승' or '하락'}) - 이유: {', '.join(breakout_reasons)}")
             
             # ==== 컨텍스트를 고려한 볼린저 밴드 경계 분석 ====
             
-            # 거리 임계값 계산 - 비트코인의 높은 변동성 고려
-            threshold_distance = band_width * 0.2  # 0.18 → 0.2로 증가
+            # 거리 임계값 계산 - 완화: 0.2 -> 0.18
+            threshold_distance = band_width * 0.18
             
             # 거리 계산
             distance_to_upper = latest_5min['bb_bbh'] - current_price
@@ -3625,10 +3822,9 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                 if is_breakout and breakout_direction > 0:  # 상승 브레이크아웃
                     if current_price > latest_5min['bb_bbh']:
                         logger.info("가격이 상단 볼린저 밴드 위지만 유효한 상승 브레이크아웃으로 간주")
-                        # 극단적으로 확장된 경우만 비적격 처리
-                        # 비트코인의 강한 돌파 허용 - 0.6 → 0.7로 증가
+                        # 극단적으로 확장된 경우만 비적격 처리 - 완화: 0.7 -> 0.8
                         excessive_ratio = (current_price - latest_5min['bb_bbh']) / band_width
-                        if excessive_ratio > 0.7:
+                        if excessive_ratio > 0.8:
                             long_trend_disqualified = True
                             disqualification_reasons.append(f"가격이 상단 BB를 과도하게 초과 ({excessive_ratio:.2f} 밴드 폭)")
                     else:
@@ -3643,9 +3839,8 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                     
                     # 가격이 일관되게 밴드 위에 있고 여전히 상승 중인 경우
                     if above_band_count >= 2 and df_5min['close'].iloc[-1] > df_5min['close'].iloc[-2]:
-                        # 볼륨이 여전히 강한지 확인
-                        if has_volume_data and recent_volumes[0] > avg_volume:
-                            # 비적격으로 처리하지 않음 - 비트코인의 강한 모멘텀일 수 있음
+                        # 볼륨이 여전히 강한지 확인 - 완화: 평균 -> 평균의 90%
+                        if has_volume_data and recent_volumes[0] > avg_volume * 0.9:
                             logger.info(f"가격이 {above_band_count}개 캔들 동안 밴드 위에 있고 가격 상승 및 강한 볼륨 - 유효한 추세 지속")
                         else:
                             long_trend_disqualified = True
@@ -3658,18 +3853,17 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                             percent_to_upper = (distance_to_upper / band_width) * 100
                             disqualification_reasons.append(f"가격이 상단 BB 부근 (상단에서 {percent_to_upper:.2f}%) 이지만 브레이크아웃 신호 없음")
             
-            # 하단 밴드 분석 (위와 동일한 로직 구조)
+            # 하단 밴드 분석
             if distance_to_lower <= threshold_distance or current_price < latest_5min['bb_bbl']:
                 # 유효한 브레이크아웃이 감지된 경우, 하단 밴드 아래에 있어도 비적격으로 처리하지 않음
                 if is_breakout and breakout_direction < 0:  # 하락 브레이크아웃
                     if current_price < latest_5min['bb_bbl']:
                         logger.info("가격이 하단 볼린저 밴드 아래지만 유효한 하락 브레이크아웃으로 간주")
-                        # 극단적으로 확장된 경우만 비적격 처리
-                        # 비트코인의 강한 하락 허용 - 0.6 → 0.7로 증가
+                        # 극단적으로 확장된 경우만 비적격 처리 - 완화: 0.7 -> 0.8
                         excessive_ratio = (latest_5min['bb_bbl'] - current_price) / band_width
-                        if excessive_ratio > 0.7:
+                        if excessive_ratio > 0.8:
                             short_trend_disqualified = True
-                            disqualification_reasons.append(f"가격이 하단 BB 아래로 과도하게 이탈 ({excessive_ratio:.2f} 밴드 폭)")
+                            disqualification_reasons.append(f"가격이 하단 BB를 과도하게 하회 ({excessive_ratio:.2f} 밴드 폭)")
                     else:
                         logger.info("가격이 하단 볼린저 밴드 부근에 있으며, 유효한 하락 브레이크아웃 신호 감지")
                 else:
@@ -3682,9 +3876,8 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                     
                     # 가격이 일관되게 밴드 아래에 있고 여전히 하락 중인 경우
                     if below_band_count >= 2 and df_5min['close'].iloc[-1] < df_5min['close'].iloc[-2]:
-                        # 볼륨이 여전히 강한지 확인
-                        if has_volume_data and recent_volumes[0] > avg_volume:
-                            # 비적격으로 처리하지 않음 - 비트코인의 강한 모멘텀일 수 있음
+                        # 볼륨이 여전히 강한지 확인 - 완화: 평균 -> 평균의 90%
+                        if has_volume_data and recent_volumes[0] > avg_volume * 0.9:
                             logger.info(f"가격이 {below_band_count}개 캔들 동안 밴드 아래에 있고 가격 하락 및 강한 볼륨 - 유효한 추세 지속")
                         else:
                             short_trend_disqualified = True
@@ -3697,135 +3890,133 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                             percent_to_lower = (distance_to_lower / band_width) * 100
                             disqualification_reasons.append(f"가격이 하단 BB 부근 (하단에서 {percent_to_lower:.2f}%) 이지만 브레이크아웃 신호 없음")
     except Exception as e:
-        logger.error(f"트렌드 지속 시간 확인 중 오류: {e}")
+        logger.error(f"볼린저 밴드 분석 중 오류: {e}")
     
     # 긍정적 기준 확인 - 비적격이 아닌 경우만 실행
     if not long_trend_disqualified or not short_trend_disqualified:
-        # 5분 차트에서 EMA 위치 확인 (기준 1)
+        # 5분 차트에서 EMA 위치 확인 (기준 1) - 완화
         try:
             ema12 = latest_5min.get('ema_12', 0)
             sma20 = latest_5min.get('sma_20', 0)
             
             if ema12 > 0 and sma20 > 0:
-                # 롱 기준 - 비트코인의 빠른 움직임을 고려해 완화된 임계값
+                # 롱 기준 - 완화: 0.0007 -> 0.0005
                 if current_price > ema12 and current_price > sma20 and ema12 > sma20:
-                    # 0.001 → 0.0007로 완화
-                    if (current_price - ema12) / ema12 > 0.0007:
+                    if (current_price - ema12) / ema12 > 0.0005:
                         long_criteria.append(True)
                 
-                # 숏 기준
+                # 숏 기준 - 완화: 0.0007 -> 0.0005
                 if current_price < ema12 and current_price < sma20 and ema12 < sma20:
-                    # 0.001 → 0.0007로 완화
-                    if (ema12 - current_price) / ema12 > 0.0007:
+                    if (ema12 - current_price) / ema12 > 0.0005:
                         short_criteria.append(True)
         except Exception as e:
             logger.error(f"EMA 확인 중 오류: {e}")
         
-        # 연속 캔들 방향 확인 (기준 2) - 비트코인의 빠른 움직임에 맞게 수정
+        # 연속 캔들 방향 확인 (기준 2) - 완화
         try:
-            # 최근 4개 캔들 가져오기 (이전 4개에서 완화)
+            # 최근 3개 캔들 가져오기 (유지)
             recent_candles = df_5min.iloc[-3:].copy()
             
-            # 롱: 3개 캔들 중 2개 이상 상승 캔들 (4/5→2/3로 완화)
+            # 롱: 3개 캔들 중 2개 이상 상승 캔들 (유지)
             bullish_count = sum(recent_candles['close'] > recent_candles['open'])
             if bullish_count >= 2 and recent_candles['close'].iloc[-1] > recent_candles['close'].iloc[-2]:
-                # 최근 캔들이 상승이고 최소 0.05% 상승 (0.08%→0.05%로 완화)
+                # 최근 캔들이 상승이고 최소 % 상승 - 완화: 0.0005 -> 0.0003
                 if (recent_candles['close'].iloc[-1] > recent_candles['open'].iloc[-1] and
-                    (recent_candles['close'].iloc[-1] - recent_candles['open'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.0005):
+                    (recent_candles['close'].iloc[-1] - recent_candles['open'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.0003):
                     long_criteria.append(True)
             
-            # 숏: 3개 캔들 중 2개 이상 하락 캔들 (4/5→2/3로 완화)
+            # 숏: 3개 캔들 중 2개 이상 하락 캔들 (유지)
             bearish_count = sum(recent_candles['close'] < recent_candles['open'])
             if bearish_count >= 2 and recent_candles['close'].iloc[-1] < recent_candles['close'].iloc[-2]:
-                # 최근 캔들이 하락이고 최소 0.05% 하락 (0.08%→0.05%로 완화)
+                # 최근 캔들이 하락이고 최소 % 하락 - 완화: 0.0005 -> 0.0003
                 if (recent_candles['close'].iloc[-1] < recent_candles['open'].iloc[-1] and
-                    (recent_candles['open'].iloc[-1] - recent_candles['close'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.0005):
+                    (recent_candles['open'].iloc[-1] - recent_candles['close'].iloc[-1]) / recent_candles['open'].iloc[-1] > 0.0003):
                     short_criteria.append(True)
         except Exception as e:
             logger.error(f"연속 캔들 확인 중 오류: {e}")
         
-        # MACD 히스토그램 방향 확인 (기준 3) - 비트코인의 빠른 움직임에 맞게 수정
+        # MACD 히스토그램 방향 확인 (기준 3) - 완화
         try:
             if 'macd_diff' in df_5min.columns:
                 recent_macd = df_5min['macd_diff'].iloc[-3:].values
                 
-                # 롱: MACD 히스토그램 2+ 캔들 증가 (3→2로 완화)
+                # 롱: MACD 히스토그램 2+ 캔들 증가 (유지)
                 if (len(recent_macd) >= 3 and
                     recent_macd[-1] > 0 and 
                     recent_macd[-1] > recent_macd[-2] and
-                    # 절대값 임계치 - 0.6 → 0.4로 완화 (비트코인의 빠른 신호 포착)
-                    abs(recent_macd[-1]) > 0.4):
+                    # 절대값 임계치 - 완화: 0.4 -> 0.3
+                    abs(recent_macd[-1]) > 0.3):
                     long_criteria.append(True)
                 
-                # 숏: MACD 히스토그램 2+ 캔들 감소 (3→2로 완화)
+                # 숏: MACD 히스토그램 2+ 캔들 감소 (유지)
                 if (len(recent_macd) >= 3 and
                     recent_macd[-1] < 0 and 
                     recent_macd[-1] < recent_macd[-2] and
-                    # 절대값 임계치 - 0.6 → 0.4로 완화 (비트코인의 빠른 신호 포착)
-                    abs(recent_macd[-1]) > 0.4):
+                    # 절대값 임계치 - 완화: 0.4 -> 0.3
+                    abs(recent_macd[-1]) > 0.3):
                     short_criteria.append(True)
         except Exception as e:
             logger.error(f"MACD 확인 중 오류: {e}")
         
-        # 고점과 저점 패턴 확인 (기준 4)
+        # 고점과 저점 패턴 확인 (기준 4) - 완화
         try:
-            # 15개 캔들 분석 (20→15로 단축, 비트코인의 빠른 움직임 고려)
-            last_15_candles = df_5min.iloc[-15:].copy()
+            # 캔들 분석 범위 - 완화: 15 -> 12
+            last_candles = df_5min.iloc[-12:].copy()
             
             # 스윙 고점과 저점 식별
             highs = []
             lows = []
             
-            for i in range(1, len(last_15_candles) - 1):
+            for i in range(1, len(last_candles) - 1):
                 # 스윙 고점
-                if last_15_candles['high'].iloc[i] > last_15_candles['high'].iloc[i-1] and \
-                   last_15_candles['high'].iloc[i] > last_15_candles['high'].iloc[i+1]:
-                    highs.append(last_15_candles['high'].iloc[i])
+                if last_candles['high'].iloc[i] > last_candles['high'].iloc[i-1] and \
+                   last_candles['high'].iloc[i] > last_candles['high'].iloc[i+1]:
+                    highs.append(last_candles['high'].iloc[i])
                 
                 # 스윙 저점
-                if last_15_candles['low'].iloc[i] < last_15_candles['low'].iloc[i-1] and \
-                   last_15_candles['low'].iloc[i] < last_15_candles['low'].iloc[i+1]:
-                    lows.append(last_15_candles['low'].iloc[i])
+                if last_candles['low'].iloc[i] < last_candles['low'].iloc[i-1] and \
+                   last_candles['low'].iloc[i] < last_candles['low'].iloc[i+1]:
+                    lows.append(last_candles['low'].iloc[i])
             
-            # 최소 3개 스윙 포인트 필요 (4→3으로 완화)
-            if len(highs) >= 3 and len(lows) >= 3:
-                # 롱 기준: 높아지는 고점과 저점 (0.08% → 0.06%로 완화)
-                higher_highs = all(highs[-1] > h * 1.0006 for h in highs[:-1])
-                higher_lows = all(lows[i] > lows[i-1] * 1.0006 for i in range(1, len(lows)))
+            # 최소 스윙 포인트 수 - 완화: 3 -> 2
+            if len(highs) >= 2 and len(lows) >= 2:
+                # 롱 기준: 높아지는 고점과 저점 - 완화: 0.0006 -> 0.0004
+                higher_highs = all(highs[-1] > h * 1.0004 for h in highs[:-1])
+                higher_lows = all(lows[i] > lows[i-1] * 1.0004 for i in range(1, len(lows)))
                 
                 if higher_highs and higher_lows:
                     long_criteria.append(True)
             
-                # 숏 기준: 낮아지는 고점과 저점 (0.08% → 0.06%로 완화)
-                lower_highs = all(highs[i] < highs[i-1] * 0.9994 for i in range(1, len(highs)))
-                lower_lows = all(lows[-1] < l * 0.9994 for l in lows[:-1])
+                # 숏 기준: 낮아지는 고점과 저점 - 완화: 0.0006 -> 0.0004
+                lower_highs = all(highs[i] < highs[i-1] * 0.9996 for i in range(1, len(highs)))
+                lower_lows = all(lows[-1] < l * 0.9996 for l in lows[:-1])
                 
                 if lower_highs and lower_lows:
                     short_criteria.append(True)
         except Exception as e:
             logger.error(f"가격 구조 확인 중 오류: {e}")
         
-        # 1시간 타임프레임 추세 확인 (기준 5) - ADX
+        # 1시간 타임프레임 추세 확인 (기준 5) - ADX 완화
         try:
             hourly_adx = latest_hourly['adx']
             hourly_di_plus = latest_hourly['di_plus']
             hourly_di_minus = latest_hourly['di_minus']
             
-            # 롱: ADX > 21 (25→21로 완화) & DI+ > DI-
-            if hourly_adx > 21 and hourly_di_plus > hourly_di_minus:
-                # 차이 임계값 (8→5로 완화)
-                if hourly_di_plus - hourly_di_minus > 5:
+            # 롱: ADX 임계값 - 완화: 21 -> 19
+            if hourly_adx > 19 and hourly_di_plus > hourly_di_minus:
+                # 차이 임계값 - 완화: 5 -> 4
+                if hourly_di_plus - hourly_di_minus > 4:
                     long_criteria.append(True)
             
-            # 숏: ADX > 21 (25→21로 완화) & DI- > DI+
-            if hourly_adx > 21 and hourly_di_minus > hourly_di_plus:
-                # 차이 임계값 (8→5로 완화)
-                if hourly_di_minus - hourly_di_plus > 5:
+            # 숏: ADX 임계값 - 완화: 21 -> 19
+            if hourly_adx > 19 and hourly_di_minus > hourly_di_plus:
+                # 차이 임계값 - 완화: 5 -> 4
+                if hourly_di_minus - hourly_di_plus > 4:
                     short_criteria.append(True)
         except Exception as e:
             logger.error(f"1시간 ADX 확인 중 오류: {e}")
         
-        # 4시간 차트 MACD 방향 확인 (기준 6) - 비트코인의 빠른 진입을 위해 완화
+        # 4시간 차트 MACD 방향 확인 (기준 6) - 완화
         try:
             if df_4h is not None and 'macd' in df_4h.columns and 'macd_signal' in df_4h.columns:
                 # 4시간 MACD 방향 확인
@@ -3841,8 +4032,8 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                                     four_hour_macd[-1] > four_hour_macd[-2] and  # 2+ 캔들 상승
                                     four_hour_macd[-2] > four_hour_macd[-3])
                 
-                # 제로 크로싱 임계값 - 비트코인의 빠른 움직임 고려 -5 → -7로 완화
-                if macd_cross_bullish or (macd_bullish_conv and four_hour_macd[-1] > -7):
+                # 제로 크로싱 임계값 - 완화: -7 -> -9
+                if macd_cross_bullish or (macd_bullish_conv and four_hour_macd[-1] > -9):
                     long_criteria.append(True)
                 
                 # 숏: MACD 시그널선 아래로 교차 또는 강세로부터 약세로 전환
@@ -3854,13 +4045,13 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                                     four_hour_macd[-1] < four_hour_macd[-2] and  # 2+ 캔들 하락
                                     four_hour_macd[-2] < four_hour_macd[-3])
                 
-                # 제로 크로싱 임계값 - 비트코인의 빠른 움직임 고려 5 → 7로 완화
-                if macd_cross_bearish or (macd_bearish_conv and four_hour_macd[-1] < 7):
+                # 제로 크로싱 임계값 - 완화: 7 -> 9
+                if macd_cross_bearish or (macd_bearish_conv and four_hour_macd[-1] < 9):
                     short_criteria.append(True)
         except Exception as e:
             logger.error(f"4시간 MACD 확인 중 오류: {e}")
         
-        # 새로 추가: 볼륨 프로필 확인 (기준 7) - 비트코인 시장에 맞게 조정
+        # 볼륨 프로필 확인 (기준 7) - 완화
         try:
             if 'volume' in df_5min.columns:
                 # 최근 볼륨 데이터
@@ -3876,60 +4067,57 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                 bullish_candles = sum(1 for i in range(len(recent_3_candles)) if recent_3_candles['close'].iloc[i] > recent_3_candles['open'].iloc[i])
                 bearish_candles = sum(1 for i in range(len(recent_3_candles)) if recent_3_candles['close'].iloc[i] < recent_3_candles['open'].iloc[i])
                 
-                # 롱: 볼륨 증가 + 상승 캔들
-                # 비트코인의 빠른 볼륨 증가 고려 - 1.1 → 1.07로 완화
-                if avg_5_volume > avg_10_volume * 1.07 and bullish_candles >= 2:
-                    # 볼륨 가중 평균 상승 대 하락 볼륨
+                # 롱: 볼륨 증가 + 상승 캔들 - 완화: 1.07 -> 1.05
+                if avg_5_volume > avg_10_volume * 1.05 and bullish_candles >= 2:
+                    # 볼륨 가중 평균 상승 대 하락 볼륨 - 완화: 비교 방식 변경
                     bullish_volume = sum(df_5min['volume'].iloc[-i-1] for i in range(5) 
                                         if df_5min['close'].iloc[-i-1] > df_5min['open'].iloc[-i-1])
                     bearish_volume = sum(df_5min['volume'].iloc[-i-1] for i in range(5) 
                                         if df_5min['close'].iloc[-i-1] < df_5min['open'].iloc[-i-1])
                     
-                    if bullish_volume > bearish_volume:
+                    # 완화: 단순 불리시 볼륨 > 베어리시 볼륨 -> 불리시 볼륨 > 베어리시 볼륨 * 0.9
+                    if bullish_volume > bearish_volume * 0.9:
                         long_criteria.append(True)
                 
-                # 숏: 볼륨 증가 + 하락 캔들
-                if avg_5_volume > avg_10_volume * 1.07 and bearish_candles >= 2:
-                    # 볼륨 가중 평균 상승 대 하락 볼륨
+                # 숏: 볼륨 증가 + 하락 캔들 - 완화: 1.07 -> 1.05
+                if avg_5_volume > avg_10_volume * 1.05 and bearish_candles >= 2:
+                    # 볼륨 가중 평균 상승 대 하락 볼륨 - 완화: 비교 방식 변경
                     bullish_volume = sum(df_5min['volume'].iloc[-i-1] for i in range(5) 
                                         if df_5min['close'].iloc[-i-1] > df_5min['open'].iloc[-i-1])
                     bearish_volume = sum(df_5min['volume'].iloc[-i-1] for i in range(5) 
                                         if df_5min['close'].iloc[-i-1] < df_5min['open'].iloc[-i-1])
                     
-                    if bearish_volume > bullish_volume:
+                    # 완화: 단순 베어리시 볼륨 > 불리시 볼륨 -> 베어리시 볼륨 > 불리시 볼륨 * 0.9
+                    if bearish_volume > bullish_volume * 0.9:
                         short_criteria.append(True)
         except Exception as e:
             logger.error(f"볼륨 프로필 확인 중 오류: {e}")
         
-        # 새로 추가: 멀티타임프레임 모멘텀 정렬 (기준 8) - 비트코인에 맞게
+        # 멀티타임프레임 모멘텀 정렬 (기준 8) - 완화
         try:
             # RSI로 타임프레임 간 모멘텀 정렬 확인
             if 'rsi' in latest_5min and 'rsi' in latest_hourly:
-                # 롱 추세
-                if latest_5min['rsi'] > 50 and latest_hourly['rsi'] > 50:
-                    # 비트코인의 빠른 움직임 - 이전 캔들과 비교하지 않고, 1시간 RSI 기준 완화
-                    if latest_hourly['rsi'] > 45:
-                        long_criteria.append(True)
+                # 롱 추세 - 완화: 45 -> 43
+                if latest_5min['rsi'] > 50 and latest_hourly['rsi'] > 43:
+                    long_criteria.append(True)
                 
-                # 숏 추세
-                if latest_5min['rsi'] < 50 and latest_hourly['rsi'] < 50:
-                    # 비트코인의 빠른 움직임 - 이전 캔들과 비교하지 않고, 1시간 RSI 기준 완화
-                    if latest_hourly['rsi'] < 55:
-                        short_criteria.append(True)
+                # 숏 추세 - 완화: 55 -> 57
+                if latest_5min['rsi'] < 50 and latest_hourly['rsi'] < 57:
+                    short_criteria.append(True)
                 
-                # 4시간 모멘텀 확인
+                # 4시간 모멘텀 확인 - 완화
                 if df_4h is not None and 'rsi' in latest_4h:
-                    # 강한 상승 정렬 - 비트코인의 변동성 고려 50 → 48로 완화
-                    if latest_5min['rsi'] > 50 and latest_hourly['rsi'] > 50 and latest_4h['rsi'] > 48:
+                    # 강한 상승 정렬 - 완화: 48 -> 45
+                    if latest_5min['rsi'] > 50 and latest_hourly['rsi'] > 50 and latest_4h['rsi'] > 45:
                         long_criteria.append(True)  # 멀티타임프레임 정렬 점수 추가
                     
-                    # 강한 하락 정렬 - 비트코인의 변동성 고려 50 → 52로 완화
-                    if latest_5min['rsi'] < 50 and latest_hourly['rsi'] < 50 and latest_4h['rsi'] < 52:
+                    # 강한 하락 정렬 - 완화: 52 -> 55
+                    if latest_5min['rsi'] < 50 and latest_hourly['rsi'] < 50 and latest_4h['rsi'] < 55:
                         short_criteria.append(True)  # 멀티타임프레임 정렬 점수 추가
         except Exception as e:
             logger.error(f"멀티타임프레임 정렬 확인 중 오류: {e}")
         
-        # 새로 추가: 볼린저 밴드 폭 확인 (비트코인 특화)
+        # 볼린저 밴드 폭 확인 - 완화
         try:
             if 'bb_bbh' in latest_5min and 'bb_bbl' in latest_5min and 'bb_bbm' in latest_5min:
                 # 현재 밴드 폭 계산
@@ -3942,11 +4130,11 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                     if band_widths:
                         avg_band_width = sum(band_widths) / len(band_widths)
                         
-                        # 밴드 폭이 좁아지고 있는지 확인 (스퀴즈 전)
-                        if current_band_width < avg_band_width * 0.9:
-                            # 가격이 중앙선에 가까워지고 있음 (잠재적 발사 준비)
+                        # 밴드 폭이 좁아지고 있는지 확인 - 완화: 0.9 -> 0.85
+                        if current_band_width < avg_band_width * 0.85:
+                            # 가격이 중앙선에 가까워지고 있음 - 완화: 0.2 -> 0.25
                             price_to_mid = abs(current_price - latest_5min['bb_bbm'])
-                            if price_to_mid < current_band_width * 0.2:
+                            if price_to_mid < current_band_width * 0.25:
                                 logger.info("볼린저 밴드 스퀴즈 상태 감지 - 브레이크아웃 가능성 높음")
                                 # 최근 3캔들의 방향을 확인하여 방향 결정
                                 recent_direction = sum(1 if df_5min['close'].iloc[-i] > df_5min['open'].iloc[-i] else -1 
@@ -3958,45 +4146,44 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
         except Exception as e:
             logger.error(f"볼린저 밴드 폭 확인 중 오류: {e}")
         
-        # 새로 추가: 비트코인 특성 반영한 ADX 확인
+        # 비트코인 특성 반영한 ADX 확인 - 완화
         try:
-            # ADX 임계값 - 비트코인의 빠른 움직임에 맞게 감소 (20이상)
-            if latest_5min['adx'] > 20:
+            # ADX 임계값 - 완화: 20 -> 18
+            if latest_5min['adx'] > 18:
                 # +DI > -DI이고, 가격이 상승 중이면 상승 추세
-                if latest_5min['di_plus'] > latest_5min['di_minus'] and latest_5min['close'] > latest_5min['open']:
+                if latest_5min['di_plus'] > latest_5min['di_minus'] * 0.95 and latest_5min['close'] > latest_5min['open']:
                     long_criteria.append(True)
                 
                 # -DI > +DI이고, 가격이 하락 중이면 하락 추세
-                if latest_5min['di_minus'] > latest_5min['di_plus'] and latest_5min['close'] < latest_5min['open']:
+                if latest_5min['di_minus'] > latest_5min['di_plus'] * 0.95 and latest_5min['close'] < latest_5min['open']:
                     short_criteria.append(True)
         except Exception as e:
             logger.error(f"ADX 확인 중 오류: {e}")
     
-
-        # 새로 추가: 단기 조정 감지 로직
+        # 단기 조정 감지 로직 - 완화
         try:  
-            # 1. 과매수/과매도 RSI 확인 (5분)
+            # 1. 과매수/과매도 RSI 확인 (5분) - 완화: 75/25 -> 78/22
             rsi_5min = latest_5min['rsi']
-            if rsi_5min > 75:  # 과매수 상태
-                short_term_correction_signals["long_correction_signals"].append(f"RSI(5-min) 과매수: {rsi_5min:.2f} > 75")
-            if rsi_5min < 25:  # 과매도 상태
-                short_term_correction_signals["short_correction_signals"].append(f"RSI(5-min) 과매도: {rsi_5min:.2f} < 25")
+            if rsi_5min > 78:  # 과매수 상태
+                short_term_correction_signals["long_correction_signals"].append(f"RSI(5-min) 과매수: {rsi_5min:.2f} > 78")
+            if rsi_5min < 22:  # 과매도 상태
+                short_term_correction_signals["short_correction_signals"].append(f"RSI(5-min) 과매도: {rsi_5min:.2f} < 22")
             
-            # 2. 볼린저 밴드 이탈 확인
+            # 2. 볼린저 밴드 이탈 확인 - 완화: 0.2% -> 0.25%
             if 'bb_bbh' in latest_5min and 'bb_bbl' in latest_5min:
-                # 상단 밴드 이탈 (0.2% 이상)
-                if current_price > latest_5min['bb_bbh'] * 1.002:
+                # 상단 밴드 이탈
+                if current_price > latest_5min['bb_bbh'] * 1.0025:
                     short_term_correction_signals["long_correction_signals"].append(
                         f"가격이 상단 볼린저 밴드 {((current_price/latest_5min['bb_bbh'])-1)*100:.2f}% 이탈"
                     )
-                # 하단 밴드 이탈 (0.2% 이상)
-                if current_price < latest_5min['bb_bbl'] * 0.998:
+                # 하단 밴드 이탈
+                if current_price < latest_5min['bb_bbl'] * 0.9975:
                     short_term_correction_signals["short_correction_signals"].append(
                         f"가격이 하단 볼린저 밴드 {((latest_5min['bb_bbl']/current_price)-1)*100:.2f}% 이탈"
                     )
             
-            # 3. 연속 캔들 확인
-            if len(recent_candles) >= 3:
+            # 3. 연속 캔들 확인 - 완화: 3 -> 4
+            if len(recent_candles) >= 4:
                 # 롱 포지션 진입 전 조정 신호 (연속 상승 캔들)
                 consecutive_bullish = 0
                 increasing_body_size = True
@@ -4014,7 +4201,7 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                     else:
                         break
                 
-                if consecutive_bullish >= 3 and increasing_body_size:
+                if consecutive_bullish >= 4 and increasing_body_size:
                     short_term_correction_signals["long_correction_signals"].append(
                         f"{consecutive_bullish}개 연속 상승 캔들 (몸통 크기 증가)"
                     )
@@ -4036,7 +4223,7 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                     else:
                         break
                 
-                if consecutive_bearish >= 3 and increasing_body_size:
+                if consecutive_bearish >= 4 and increasing_body_size:
                     short_term_correction_signals["short_correction_signals"].append(
                         f"{consecutive_bearish}개 연속 하락 캔들 (몸통 크기 증가)"
                     )
@@ -4073,13 +4260,6 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                             if df_5min['macd'].iloc[i] < df_5min['macd'].iloc[i-1] and df_5min['macd'].iloc[i] < df_5min['macd'].iloc[i+1]:
                                 macd_troughs.append((i, df_5min['macd'].iloc[i]))
                 
-                # 롱 포지션 진입 전 조정 신호 (베어리시 다이버전스)
-                if len(price_peaks) >= 2 and len(rsi_peaks) >= 2:
-                    if price_peaks[-1][1] > price_peaks[-2][1] and rsi_peaks[-1][1] < rsi_peaks[-2][1]:
-                        short_term_correction_signals["long_correction_signals"].append(
-                            "가격과 RSI 간 베어리시 다이버전스 감지 (고점)"
-                        )
-                
                 if len(price_peaks) >= 2 and len(macd_peaks) >= 2:
                     if price_peaks[-1][1] > price_peaks[-2][1] and macd_peaks[-1][1] < macd_peaks[-2][1]:
                         short_term_correction_signals["long_correction_signals"].append(
@@ -4099,12 +4279,12 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
                             "가격과 MACD 간 불리시 다이버전스 감지 (저점)"
                         )
             
-            # 5. 볼륨 스파이크 확인
+            # 5. 볼륨 스파이크 확인 - 완화: 2배 -> 2.2배
             if 'volume' in df_5min.columns:
                 avg_volume = df_5min['volume'].iloc[-6:-1].mean()  # 최근 5개 캔들 평균 (현재 캔들 제외)
                 current_volume = df_5min['volume'].iloc[-1]
                 
-                if current_volume > avg_volume * 2:  # 200% 이상 볼륨 스파이크
+                if current_volume > avg_volume * 2.2:  # 220% 이상 볼륨 스파이크
                     # 상승 캔들 + 볼륨 스파이크 = 롱 포지션 진입 전 조정 가능성
                     if df_5min['close'].iloc[-1] > df_5min['open'].iloc[-1]:
                         short_term_correction_signals["long_correction_signals"].append(
@@ -4140,15 +4320,14 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
         except Exception as e:
             logger.error(f"단기 조정 감지 중 오류: {e}")
 
-
-    # 최종 평가: 비트코인에 대해 필요한 기준 개수 감소 (3 → 2)
-    long_trend_is_strong = (not long_trend_disqualified) and (len(long_criteria) >= 2)
-    short_trend_is_strong = (not short_trend_disqualified) and (len(short_criteria) >= 2)
+    # 최종 평가: 필요한 기준 개수 완화 (2 -> 1)
+    long_trend_is_strong = (not long_trend_disqualified) and (len(long_criteria) >= 1)
+    short_trend_is_strong = (not short_trend_disqualified) and (len(short_criteria) >= 1)
     
     # 결과 반환
     result = {
-        "long_trend_strong": (not long_trend_disqualified) and (len(long_criteria) >= 2),
-        "short_trend_strong": (not short_trend_disqualified) and (len(short_criteria) >= 2),
+        "long_trend_strong": (not long_trend_disqualified) and (len(long_criteria) >= 1),
+        "short_trend_strong": (not short_trend_disqualified) and (len(short_criteria) >= 1),
         "long_criteria_count": len(long_criteria),
         "short_criteria_count": len(short_criteria),
         "long_disqualified": long_trend_disqualified,
@@ -4157,8 +4336,9 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
         "short_term_correction": {
             "long_entry_correction_signals": short_term_correction_signals["long_correction_signals"],
             "short_entry_correction_signals": short_term_correction_signals["short_correction_signals"],
-            "long_correction_likely": len(short_term_correction_signals["long_correction_signals"]) >= 2,
-            "short_correction_likely": len(short_term_correction_signals["short_correction_signals"]) >= 2
+            # 완화: 2 -> 3 (더 엄격해짐 - 더 많은 신호가 필요)
+            "long_correction_likely": len(short_term_correction_signals["long_correction_signals"]) >= 3,
+            "short_correction_likely": len(short_term_correction_signals["short_correction_signals"]) >= 3
         }
     }
     
@@ -4170,12 +4350,9 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     
     return result
 
-# 2. assess_exit_signals 함수 최적화
-# 2. assess_exit_signals 함수 최적화
-def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=None, df_hourly=None, df_4h=None):
+def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=None, df_hourly=None, df_4h=None, signals_analysis=None):
     """
-    중장기 스윙 관점을 반영한 출구 신호 평가 - 단기 변동에 덜 민감하고 주요 추세 전환에만 반응하도록 개선
-    손실 상태의 포지션은 더 신속하게 종료하는 로직 추가
+    출구 신호 평가 - 추가된 횡보장 감지 및 타임프레임 신호 테이블 고려
     
     Args:
         df_5min: 5분 OHLCV 데이터프레임 (지표 포함)
@@ -4184,12 +4361,13 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
         unrealized_pnl: 현재 포지션의 미실현 손익 (percent)
         df_hourly: 1시간 OHLCV 데이터프레임 (지표 포함, 선택사항)
         df_4h: 4시간 OHLCV 데이터프레임 (지표 포함, 선택사항)
+        signals_analysis: analyze_chart_signals 함수의 반환 결과
         
     Returns:
         dict: 출구 평가 결과를 담은 딕셔너리
     """
     # 시작 로깅
-    logger.info(f"포지션 방향 {position_side}에 대한 출구 신호 평가 시작 (중장기 스윙 관점)")
+    logger.info(f"포지션 방향 {position_side}에 대한 출구 신호 평가 시작")
     
     # 포지션이 없으면 출구가 필요 없음
     if not position_side:
@@ -4202,33 +4380,95 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
     # 초기화: 상위 타임프레임 추세 확인 (결과에 따라 가중치 조정)
     higher_timeframe_trend = "neutral"  # 기본값
     trend_strength = 1.0  # 기본 강도
-    higher_timeframe_signals = []  # 상위 타임프레임 신호 저장
+    higher_timeframe_signals = []  # 상위 타임프레임 신호
     
-    # PnL 기반 손실 포지션 가중치 조정
+    # 새로 추가: 횡보장 감지 및 타임프레임 신호 테이블 결과 파싱
+    is_ranging_market = False
+    timeframe_signals = None
+    
+    if signals_analysis is not None:
+        # 횡보장 감지 결과 확인
+        is_ranging_market = signals_analysis.get("IsRangingMarket", False)
+        
+        # 타임프레임 신호 테이블 결과 확인
+        timeframe_signals = signals_analysis.get("TimeframeSignals", {})
+        
+        # 횡보장이 감지되면 로깅
+        if is_ranging_market:
+            logger.info("현재 시장이 횡보장 상태로 감지됨")
+            exit_signals.append("횡보장 상태 감지")
+            # 손실일 경우 횡보장에서 빠르게 탈출
+            weight = 0.9 if unrealized_pnl is not None and unrealized_pnl < 0 else 0.7
+            exit_signal_weights.append(weight)
+    
+    # PnL 기반 가중치 조정
     pnl_multiplier = 1.0  # 기본값
     
-    # 손실 포지션에 대한 가중치 증가 (더 신속한 종료를 위해)
+    # 손실 포지션에 대한 가중치 증가 (더 신속한 종료를 위해) - 강화
     if unrealized_pnl is not None and unrealized_pnl < 0:
-        # 손실이 클수록 가중치 증가 (손실폭 -8% 이상일 때 최대 가중치)
-        loss_severity = min(abs(unrealized_pnl) / 8.0, 1.0)  # 0~1 사이 값으로 정규화
-        pnl_multiplier = 1.0 + (loss_severity * 0.5)  # 최대 1.5배 가중치
+        # 손실이 클수록 가중치 증가 (손실폭 -8% -> -6%일 때 최대 가중치)
+        loss_severity = min(abs(unrealized_pnl) / 6.0, 1.0)  # 8.0 -> 6.0으로 변경
+        pnl_multiplier = 1.0 + (loss_severity * 0.7)  # 0.5 -> 0.7로 증가 (최대 1.7배 가중치)
         
         # 손실 수준에 따른 로깅
-        if loss_severity >= 0.8:  # 심각한 손실 (-6.4% 이상)
+        if loss_severity >= 0.7:  # 심각한 손실 (-4.2% 이상)
             logger.warning(f"심각한 손실 감지: PnL {unrealized_pnl:.2f}%, 가중치 {pnl_multiplier:.2f}배 증가")
             exit_signals.append(f"심각한 손실 감지 (PnL: {unrealized_pnl:.2f}%)")
-            exit_signal_weights.append(0.9 * pnl_multiplier)  # 높은 가중치로 시작
-        elif loss_severity >= 0.4:  # 중간 수준 손실 (-3.2% 이상)
+            exit_signal_weights.append(1.0 * pnl_multiplier)  # 0.9 -> 1.0으로 증가
+        elif loss_severity >= 0.3:  # 중간 수준 손실 (-1.8% 이상)
             logger.info(f"중간 수준 손실 감지: PnL {unrealized_pnl:.2f}%, 가중치 {pnl_multiplier:.2f}배 증가")
             exit_signals.append(f"중간 수준 손실 감지 (PnL: {unrealized_pnl:.2f}%)")
-            exit_signal_weights.append(0.6 * pnl_multiplier)  # 중간 가중치로 시작
-    elif unrealized_pnl is not None and unrealized_pnl > 10:
-        # 수익이 매우 클 경우 (10% 이상) 가중치 소폭 증가 - 이익 실현 촉진
-        pnl_multiplier = 1.2
-        logger.info(f"상당한 수익 감지: PnL {unrealized_pnl:.2f}%, 가중치 {pnl_multiplier:.2f}배 증가")
-        exit_signals.append(f"상당한 수익 감지 (PnL: {unrealized_pnl:.2f}%)")
-        exit_signal_weights.append(0.5 * pnl_multiplier)  # 중간 가중치로 시작
+            exit_signal_weights.append(0.7 * pnl_multiplier)  # 0.6 -> 0.7로 증가
+    elif unrealized_pnl is not None and unrealized_pnl > 0:
+        # 트레일링 스탑로스를 고려한 더 너그러운 가중치 적용
+        profit_level = min(unrealized_pnl / 30.0, 1.0)  # 0~1 사이 값으로 정규화 (10.0 → 30.0으로 변경)
+        
+        # pnl_multiplier 크게 감소 (0.7 → 0.5)
+        pnl_multiplier = max(1.0 - (profit_level * 0.5), 0.5)  # 최소 0.5배로 가중치 더 축소
+        
+        if unrealized_pnl > 30:  # 매우 높은 수익 (30% 이상)
+            # 매우 높은 수익에서 출구 신호 가중치 크게 감소
+            logger.info(f"매우 큰 수익 감지: PnL {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화됨")
+            exit_signals.append(f"매우 큰 수익 감지 (PnL: {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화)")
+            exit_signal_weights.append(0.35)  # 0.4 → 0.35로 감소
+        elif unrealized_pnl > 20:  # 높은 수익 (20-30%)
+            logger.info(f"높은 수익 감지: PnL {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화됨")
+            exit_signals.append(f"높은 수익 감지 (PnL: {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화)")
+            exit_signal_weights.append(0.4)  # 중간 수준 가중치
+        elif unrealized_pnl > 10:  # 중간 수익 (10-20%)
+            logger.info(f"중간 수준 수익 감지: PnL {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화됨")
+            # 추가 신호 없음 - 트레일링 스탑로스에 의존
+        elif unrealized_pnl > 5:  # 적당한 수익 (5-10%)
+            logger.info(f"적당한 수익 상태: PnL {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화됨")
+            # 추가 신호 없음 - 트레일링 스탑로스에 의존
 
+    # 새로 추가: 타임프레임 신호 테이블 기반 출구 신호 평가
+    if timeframe_signals and position_side:
+        bullish_count = timeframe_signals.get("bullish_count", 0)
+        bearish_count = timeframe_signals.get("bearish_count", 0)
+        details = timeframe_signals.get("details", [])
+        
+        # 5분봉 신호 상태 확인
+        five_min_signal = None
+        for tf_signal in details:
+            if tf_signal.get("timeframe") == "5":
+                five_min_signal = tf_signal.get("signal")
+                break
+                
+        # 롱 포지션 & 하락 신호 다수
+        if position_side == 'long' and bearish_count >= 3 and five_min_signal == "Bearish":
+            logger.info(f"롱 포지션에 대한 다수의 하락 신호 감지 (bearish_count: {bearish_count}, 5분봉: {five_min_signal})")
+            exit_signals.append(f"다수의 타임프레임에서 하락 신호 감지 ({bearish_count}/5 타임프레임)")
+            weight = 0.85 * pnl_multiplier
+            exit_signal_weights.append(weight)
+            
+        # 숏 포지션 & 상승 신호 다수
+        elif position_side == 'short' and bullish_count >= 3 and five_min_signal == "Bullish":
+            logger.info(f"숏 포지션에 대한 다수의 상승 신호 감지 (bullish_count: {bullish_count}, 5분봉: {five_min_signal})")
+            exit_signals.append(f"다수의 타임프레임에서 상승 신호 감지 ({bullish_count}/5 타임프레임)")
+            weight = 0.85 * pnl_multiplier
+            exit_signal_weights.append(weight)
+    
     # 0. 중요: 상위 타임프레임 추세 강화 (1시간 및 4시간 차트 분석)
     if df_hourly is not None:
         try:
@@ -4247,40 +4487,39 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                 latest_hourly = df_hourly.iloc[-1]
                 ema_sma_ratio = latest_hourly['ema_50'] / latest_hourly['sma_200']
                 
-                # 상승 추세 (EMA50 > SMA200)
-                if ema_sma_ratio > 1.01:  # 1% 이상 위
+                # 상승 추세 (EMA50 > SMA200) - 완화: 1.01 -> 1.015
+                if ema_sma_ratio > 1.015:
                     higher_timeframe_trend = "bullish"
-                    # 추세가 강할수록 신호 가중치를 더 낮춤 (1.0 -> 0.7)
-                    trend_strength = 0.7
+                    # 추세가 강할수록 신호 가중치를 더 낮춤 - 완화: 0.7 -> 0.65
+                    trend_strength = 0.65
                     higher_timeframe_signals.append(f"1시간 차트 강한 상승 추세: EMA50/SMA200 = {ema_sma_ratio:.3f}")
                     
-                    # 롱 포지션의 경우 상승 추세에서 출구 신호 가중치 추가 감소
+                    # 롱 포지션의 경우 상승 추세에서 출구 신호 가중치 추가 감소 - 완화: 0.6 -> 0.55
                     if position_side == 'long':
-                        trend_strength = 0.6  # 더 낮게 조정 (롱 포지션을 더 오래 유지)
+                        trend_strength = 0.55
                 
-                # 하락 추세 (EMA50 < SMA200)
-                elif ema_sma_ratio < 0.99:  # 1% 이상 아래
+                # 하락 추세 (EMA50 < SMA200) - 완화: 0.99 -> 0.985
+                elif ema_sma_ratio < 0.985:
                     higher_timeframe_trend = "bearish"
-                    # 추세가 강할수록 신호 가중치를 더 낮춤 (1.0 -> 0.7)
-                    trend_strength = 0.7
+                    # 추세가 강할수록 신호 가중치를 더 낮춤 - 완화: 0.7 -> 0.65
+                    trend_strength = 0.65
                     higher_timeframe_signals.append(f"1시간 차트 강한 하락 추세: EMA50/SMA200 = {ema_sma_ratio:.3f}")
                     
-                    # 숏 포지션의 경우 하락 추세에서 출구 신호 가중치 추가 감소
+                    # 숏 포지션의 경우 하락 추세에서 출구 신호 가중치 추가 감소 - 완화: 0.6 -> 0.55
                     if position_side == 'short':
-                        trend_strength = 0.6  # 더 낮게 조정 (숏 포지션을 더 오래 유지)
+                        trend_strength = 0.55
             
-            # 1시간 ADX로 추세 강도 평가 (더 높은 임계값)
+            # 1시간 ADX로 추세 강도 평가 - 완화: 35 -> 30
             if 'adx' in df_hourly.columns:
                 hourly_adx = df_hourly['adx'].iloc[-1]
-                # ADX가 높으면 더 강한 추세 (임계값 30->35로 증가, 가중치 감소)
-                if hourly_adx > 35:
-                    # 가중치 추가 감소 (기존 * 0.8)
-                    trend_strength *= 0.8
+                if hourly_adx > 30:
+                    # 가중치 추가 감소 - 완화: 0.8 -> 0.75
+                    trend_strength *= 0.75
                     higher_timeframe_signals.append(f"1시간 ADX 매우 높음 ({hourly_adx:.1f}) - 더 강한 추세 확인")
         except Exception as e:
             logger.error(f"1시간 차트 추세 확인 중 오류: {e}")
 
-    # 4시간 차트 분석 추가 (더 장기적 관점)
+    # 4시간 차트 분석 (더 장기적 관점) - 완화
     if df_4h is not None:
         try:
             latest_4h = df_4h.iloc[-1]
@@ -4296,34 +4535,34 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             if 'ema_50' in df_4h.columns and 'sma_100' in df_4h.columns:
                 ema_sma_ratio_4h = latest_4h['ema_50'] / latest_4h['sma_100']
                 
-                # 상승 추세 (EMA50 > SMA100)
-                if ema_sma_ratio_4h > 1.015:  # 1.5% 이상 (강한 상승 추세 판별)
+                # 상승 추세 (EMA50 > SMA100) - 완화: 1.015 -> 1.02
+                if ema_sma_ratio_4h > 1.02:
                     if higher_timeframe_trend == "bullish":
-                        # 1시간 + 4시간 모두 상승 추세 = 추가 가중치 감소
-                        trend_strength *= 0.8
+                        # 1시간 + 4시간 모두 상승 추세 = 추가 가중치 감소 - 완화: 0.8 -> 0.75
+                        trend_strength *= 0.75
                         higher_timeframe_signals.append(f"4시간 차트도 강한 상승 추세 확인: EMA50/SMA100 = {ema_sma_ratio_4h:.3f}")
                         
-                        # 롱 포지션의 경우 두 타임프레임 모두 강한 상승 추세면 출구 신호 가중치 크게 감소
+                        # 롱 포지션의 경우 두 타임프레임 모두 강한 상승 추세면 출구 신호 가중치 크게 감소 - 완화: 0.8 -> 0.75
                         if position_side == 'long':
-                            trend_strength *= 0.8  # 총 0.38 정도 (0.6 * 0.8 * 0.8)
+                            trend_strength *= 0.75
                     else:
-                        # 1시간은 다른 추세, 4시간은 상승 추세 = 중간 레벨 가중치
-                        trend_strength = 0.8
+                        # 1시간은 다른 추세, 4시간은 상승 추세 = 중간 레벨 가중치 - 완화: 0.8 -> 0.75
+                        trend_strength = 0.75
                         higher_timeframe_signals.append(f"4시간 차트는 상승 추세: EMA50/SMA100 = {ema_sma_ratio_4h:.3f}")
                 
-                # 하락 추세 (EMA50 < SMA100)
-                elif ema_sma_ratio_4h < 0.985:  # 1.5% 이상 아래 (강한 하락 추세 판별)
+                # 하락 추세 (EMA50 < SMA100) - 완화: 0.985 -> 0.98
+                elif ema_sma_ratio_4h < 0.98:
                     if higher_timeframe_trend == "bearish":
-                        # 1시간 + 4시간 모두 하락 추세 = 추가 가중치 감소
-                        trend_strength *= 0.8
+                        # 1시간 + 4시간 모두 하락 추세 = 추가 가중치 감소 - 완화: 0.8 -> 0.75
+                        trend_strength *= 0.75
                         higher_timeframe_signals.append(f"4시간 차트도 강한 하락 추세 확인: EMA50/SMA100 = {ema_sma_ratio_4h:.3f}")
                         
-                        # 숏 포지션의 경우 두 타임프레임 모두 강한 하락 추세면 출구 신호 가중치 크게 감소
+                        # 숏 포지션의 경우 두 타임프레임 모두 강한 하락 추세면 출구 신호 가중치 크게 감소 - 완화: 0.8 -> 0.75
                         if position_side == 'short':
-                            trend_strength *= 0.8  # 총 0.38 정도 (0.6 * 0.8 * 0.8)
+                            trend_strength *= 0.75
                     else:
-                        # 1시간은 다른 추세, 4시간은 하락 추세 = 중간 레벨 가중치
-                        trend_strength = 0.8
+                        # 1시간은 다른 추세, 4시간은 하락 추세 = 중간 레벨 가중치 - 완화: 0.8 -> 0.75
+                        trend_strength = 0.75
                         higher_timeframe_signals.append(f"4시간 차트는 하락 추세: EMA50/SMA100 = {ema_sma_ratio_4h:.3f}")
         except Exception as e:
             logger.error(f"4시간 차트 추세 확인 중 오류: {e}")
@@ -4334,85 +4573,114 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
         for signal in higher_timeframe_signals:
             logger.info(f"  - {signal}")
             
-    # 1. 핵심 신호의 명확한 반전 확인 (BlackFlag와 UTBot) - 중장기 스윙에 맞게 캔들 임계값 축소
-    # 그러나 반전 신호가 모두 등장해야만 강한 출구 신호로 간주
+    # 1. 핵심 신호의 명확한 반전 확인 (BlackFlag와 UTBot) 
+    # - 손실 포지션의 경우 캔들 임계값 축소 (더 빠른 반응)
+    # - 이익 포지션의 경우 임계값 확대 (더 늦은 반응)
     try:
-        # 캔들 임계값 10으로 유지 (5->7->10->5로 다시 축소) - 더 빠른 반응 유지
+        # 캔들 임계값 설정 - PnL 기반 차별화
+        if unrealized_pnl is not None and unrealized_pnl < 0:
+            # 손실 포지션일 경우, 더 빠른 반응을 위해 캔들 임계값 축소
+            candle_threshold = 3  # 기존 5에서 3으로 축소 (빠른 대응)
+        elif unrealized_pnl is not None and unrealized_pnl > 5:
+            # 상당한 이익 포지션일 경우, 더 늦은 반응을 위해 캔들 임계값 확대
+            candle_threshold = 7  # 기존 5에서 7로 확대 (더 오래 보유)
+        else:
+            # 기본 임계값 유지
+            candle_threshold = 5
+        
         if position_side == 'long':
-            bf_reversed = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 5
-            ut_reversed = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 5
+            bf_reversed = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= candle_threshold
+            ut_reversed = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= candle_threshold
             
             # 상위 타임프레임 추세와 반대 방향일 때만 신호 적용
             apply_full_weight = higher_timeframe_trend != "bullish"
             
             if bf_reversed and ut_reversed:  # 두 신호 모두 반전되고 최근인 경우
-                exit_signals.append("BlackFlag 및 UTBot 신호가 최근에 Sell로 반전됨 (5 캔들 이내)")
-                # 상위 타임프레임 추세 반영
-                weight = 1.0 * trend_strength if apply_full_weight else 0.8 * trend_strength
+                exit_signals.append(f"BlackFlag 및 UTBot 신호가 최근에 Sell로 반전됨 ({candle_threshold} 캔들 이내)")
+                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
+                base_weight = 1.0 * trend_strength if apply_full_weight else 0.8 * trend_strength
+                weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
                 
-            elif bf_reversed and signals_data.get("BlackFlag_CandlesAgo", 999) <= 2:  # BlackFlag만 반전되었지만 매우 최근인 경우
-                exit_signals.append("최근 BlackFlag FTS 신호가 Sell로 반전됨 (2 캔들 이내)")
-                # 상위 타임프레임 추세 반영
-                weight = 0.8 * trend_strength if apply_full_weight else 0.7 * trend_strength
+            elif bf_reversed and signals_data.get("BlackFlag_CandlesAgo", 999) <= max(1, candle_threshold // 2):  
+                # BlackFlag만 반전되었지만 매우 최근인 경우
+                exit_signals.append(f"최근 BlackFlag FTS 신호가 Sell로 반전됨 ({max(1, candle_threshold // 2)} 캔들 이내)")
+                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
+                base_weight = 0.8 * trend_strength if apply_full_weight else 0.7 * trend_strength
+                weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
                 
-            elif ut_reversed and signals_data.get("UTBot_CandlesAgo", 999) <= 2:  # UTBot만 반전되었지만 매우 최근인 경우
-                exit_signals.append("최근 UTBot 신호가 Sell로 반전됨 (2 캔들 이내)")
-                # 상위 타임프레임 추세 반영
-                weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength
+            elif ut_reversed and signals_data.get("UTBot_CandlesAgo", 999) <= max(1, candle_threshold // 2):  
+                # UTBot만 반전되었지만 매우 최근인 경우
+                exit_signals.append(f"최근 UTBot 신호가 Sell로 반전됨 ({max(1, candle_threshold // 2)} 캔들 이내)")
+                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
+                base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength
+                weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
             
-            # 두 신호 모두 반전되지 않은 경우: 출구 신호 없음
-
         elif position_side == 'short':
-            bf_reversed = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 5
-            ut_reversed = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 5
+            bf_reversed = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= candle_threshold
+            ut_reversed = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= candle_threshold
             
             # 상위 타임프레임 추세와 반대 방향일 때만 신호 적용
             apply_full_weight = higher_timeframe_trend != "bearish"
             
             if bf_reversed and ut_reversed:  # 두 신호 모두 반전되고 최근인 경우
-                exit_signals.append("BlackFlag 및 UTBot 신호가 최근에 Buy로 반전됨 (5 캔들 이내)")
-                # 상위 타임프레임 추세 반영
-                weight = 1.0 * trend_strength if apply_full_weight else 0.8 * trend_strength
+                exit_signals.append(f"BlackFlag 및 UTBot 신호가 최근에 Buy로 반전됨 ({candle_threshold} 캔들 이내)")
+                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
+                base_weight = 1.0 * trend_strength if apply_full_weight else 0.8 * trend_strength
+                weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
                 
-            elif bf_reversed and signals_data.get("BlackFlag_CandlesAgo", 999) <= 2:  # BlackFlag만 반전되었지만 매우 최근인 경우
-                exit_signals.append("최근 BlackFlag FTS 신호가 Buy로 반전됨 (2 캔들 이내)")
-                # 상위 타임프레임 추세 반영
-                weight = 0.8 * trend_strength if apply_full_weight else 0.7 * trend_strength
+            elif bf_reversed and signals_data.get("BlackFlag_CandlesAgo", 999) <= max(1, candle_threshold // 2):  
+                # BlackFlag만 반전되었지만 매우 최근인 경우
+                exit_signals.append(f"최근 BlackFlag FTS 신호가 Buy로 반전됨 ({max(1, candle_threshold // 2)} 캔들 이내)")
+                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
+                base_weight = 0.8 * trend_strength if apply_full_weight else 0.7 * trend_strength
+                weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
                 
-            elif ut_reversed and signals_data.get("UTBot_CandlesAgo", 999) <= 2:  # UTBot만 반전되었지만 매우 최근인 경우
-                exit_signals.append("최근 UTBot 신호가 Buy로 반전됨 (2 캔들 이내)")
-                # 상위 타임프레임 추세 반영
-                weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength
+            elif ut_reversed and signals_data.get("UTBot_CandlesAgo", 999) <= max(1, candle_threshold // 2):  
+                # UTBot만 반전되었지만 매우 최근인 경우
+                exit_signals.append(f"최근 UTBot 신호가 Buy로 반전됨 ({max(1, candle_threshold // 2)} 캔들 이내)")
+                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
+                base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength
+                weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
-            
-            # 두 신호 모두 반전되지 않은 경우: 출구 신호 없음
     except Exception as e:
         logger.error(f"핵심 신호 반전 확인 중 오류: {e}")
     
-    # 2. Volume Oscillator 확인 - 임계값과 연속성 확인 강화
+    # 2. Volume Oscillator 확인 - 임계값 및 조건 차별화
     try:
         volume_osc_current = signals_data.get("VolumeOsc_Current")
         volume_osc_history = signals_data.get("VolumeOsc_History", [])
         
-        # 이전: 4개 이상 연속 음수 & -22 이하
-        # 개선: 5개 이상 연속 음수 & -25 이하로 임계값 강화 (4->5, -22->-25)
+        # PnL에 따라 연속성 조건 차별화
+        if unrealized_pnl is not None and unrealized_pnl < 0:
+            # 손실 포지션일 경우, 더 빠른 감지를 위해 조건 완화
+            required_consecutive = 4  # 5 -> 4로 감소
+            threshold_value = -20     # -25 -> -20으로 완화
+        elif unrealized_pnl is not None and unrealized_pnl > 5:
+            # 이익 포지션일 경우, 더 오래 보유하기 위해 조건 강화
+            required_consecutive = 6  # 5 -> 6으로 증가
+            threshold_value = -30     # -25 -> -30으로 강화
+        else:
+            # 기본 조건 유지
+            required_consecutive = 5
+            threshold_value = -25
+        
         consecutive_negative = 0
         
-        if volume_osc_current is not None and isinstance(volume_osc_history, list) and len(volume_osc_history) >= 5:
-            for i in range(min(6, len(volume_osc_history))):  # 최근 6개까지만 확인
+        if volume_osc_current is not None and isinstance(volume_osc_history, list) and len(volume_osc_history) >= required_consecutive:
+            for i in range(min(required_consecutive + 1, len(volume_osc_history))):
                 idx = len(volume_osc_history) - 1 - i
-                if idx >= 0 and volume_osc_history[idx] is not None and float(volume_osc_history[idx]) < -25:
+                if idx >= 0 and volume_osc_history[idx] is not None and float(volume_osc_history[idx]) < threshold_value:
                     consecutive_negative += 1
                 else:
                     break  # 연속성이 깨지면 중단
                     
-        # 5개 이상 연속으로 상당히 음수 (-25 미만)인 경우에만 유효한 출구 신호로 간주
-        if consecutive_negative >= 5:
+        # 필요한 연속 캔들 수 만큼 Volume Osc가 임계값 미만인 경우 출구 신호 추가
+        if consecutive_negative >= required_consecutive:
             # 상위 타임프레임 추세와 평가
             apply_full_weight = True
             if position_side == 'long' and higher_timeframe_trend == "bullish":
@@ -4420,26 +4688,52 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             elif position_side == 'short' and higher_timeframe_trend == "bearish":
                 apply_full_weight = False
                 
-            exit_signals.append(f"Volume Oscillator가 연속적으로 매우 음수 (-25 미만): {consecutive_negative}개 연속 캔들")
-            weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength  # 가중치 감소 (0.75->0.7)
+            exit_signals.append(f"Volume Oscillator가 연속적으로 매우 음수 ({threshold_value} 미만): {consecutive_negative}개 연속 캔들")
+            
+            # PnL에 따른 가중치 조정
+            base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength
+            weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
             exit_signal_weights.append(weight)
             
-        # 현재 값이 매우 낮은 경우도 임계값 강화 (-35 -> -40)
-        elif volume_osc_current is not None and float(volume_osc_current) < -40:
-            exit_signals.append(f"Volume Oscillator 극도로 낮은 값 (-40 미만): {volume_osc_current}")
-            weight = 0.6 * trend_strength  # 가중치 감소 (0.65->0.6)
-            exit_signal_weights.append(weight)
+        # 현재 값이 매우 낮은 경우 - PnL에 따라 임계값 차별화
+        elif volume_osc_current is not None:
+            extreme_threshold = -35  # 기본값
+            
+            if unrealized_pnl is not None and unrealized_pnl < 0:
+                # 손실 포지션일 경우 임계값 완화
+                extreme_threshold = -30  # -40 -> -30으로 완화
+            elif unrealized_pnl is not None and unrealized_pnl > 5:
+                # 이익 포지션일 경우 임계값 강화
+                extreme_threshold = -45  # -40 -> -45로 강화
+                
+            if float(volume_osc_current) < extreme_threshold:
+                exit_signals.append(f"Volume Oscillator 극도로 낮은 값 ({extreme_threshold} 미만): {volume_osc_current}")
+                
+                # PnL에 따른 가중치 조정
+                base_weight = 0.6 * trend_strength
+                weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
+                exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"Volume Oscillator 확인 중 오류: {e}")
-    
-    # 3. 다이버전스 감지 - 장기적인 명확한 다이버전스만 고려
+
+    # 3. 다이버전스 감지 - PnL에 따라 차별화된 임계치 적용
     try:
-        # 다이버전스 체크를 위해 더 많은 캔들 가져오기 (12->15로 확장)
-        recent_df = df_5min.iloc[-15:].copy()
+        # 다이버전스 체크를 위한 캔들 수 설정 - PnL 기반 차별화
+        if unrealized_pnl is not None and unrealized_pnl < 0:
+            # 손실 포지션일 경우, 더 민감하게 반응하도록 캔들 수 증가
+            divergence_candles = 12  # 15 -> 12로 감소
+        elif unrealized_pnl is not None and unrealized_pnl > 5:
+            # 이익 포지션일 경우, 덜 민감하게 반응하도록 캔들 수 증가
+            divergence_candles = 18  # 15 -> 18로 증가
+        else:
+            # 기본 캔들 수 유지
+            divergence_candles = 15
+            
+        # 다이버전스 체크를 위한 캔들 준비
+        recent_df = df_5min.iloc[-divergence_candles:].copy()
         
         # 롱 포지션에서의 베어리시 다이버전스 감지
         if position_side == 'long':
-            # 최소 2개의 피크 포인트 필요 (더 명확한 패턴)
             # 가격 피크 찾기
             price_peaks = []
             for i in range(1, len(recent_df) - 1):
@@ -4452,19 +4746,35 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                 if recent_df['rsi'].iloc[i] > recent_df['rsi'].iloc[i-1] and recent_df['rsi'].iloc[i] > recent_df['rsi'].iloc[i+1]:
                     rsi_peaks.append((i, recent_df['rsi'].iloc[i]))
             
-            # 피크가 더 명확해야 함 (임계값 증가 1.005->1.02, 0.95->0.9)
+            # 피크가 더 명확해야 함 - PnL 기반 차별화
             if len(price_peaks) >= 2 and len(rsi_peaks) >= 2:
                 # 최근 두 개의 가격 피크와 RSI 피크 비교
                 price_peak1, price_peak2 = price_peaks[-2:]
                 rsi_peak1, rsi_peak2 = rsi_peaks[-2:]
                 
+                # PnL 기반 임계값 차별화
+                price_threshold = 1.015  # 기본 1.02
+                rsi_threshold = 0.92     # 기본 0.9
+                
+                if unrealized_pnl is not None and unrealized_pnl < 0:
+                    # 손실 포지션일 경우 임계값 완화
+                    price_threshold = 1.01  # 1.02 -> 1.01로 완화
+                    rsi_threshold = 0.94    # 0.9 -> 0.94로 완화
+                elif unrealized_pnl is not None and unrealized_pnl > 5:
+                    # 이익 포지션일 경우 임계값 강화
+                    price_threshold = 1.025  # 1.02 -> 1.025로 강화
+                    rsi_threshold = 0.87     # 0.9 -> 0.87로 강화
+                
                 # 가격은 더 높은 고점을 만들고 RSI는 더 낮은 고점을 만드는지 확인 (명확한 다이버전스)
-                if (price_peak2[1] > price_peak1[1] * 1.02) and (rsi_peak2[1] < rsi_peak1[1] * 0.9):
+                if (price_peak2[1] > price_peak1[1] * price_threshold) and (rsi_peak2[1] < rsi_peak1[1] * rsi_threshold):
                     # 상위 타임프레임 추세 반영
                     apply_full_weight = higher_timeframe_trend != "bullish"
                     
-                    exit_signals.append("롱 포지션에서 명확한 RSI 베어리시 다이버전스 감지 (가격은 2% 이상 높은 고점, RSI는 10% 이상 낮은 고점)")
-                    weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength  # 가중치 약간 감소 (0.85->0.8)
+                    exit_signals.append(f"롱 포지션에서 명확한 RSI 베어리시 다이버전스 감지 (가격 {(price_threshold-1)*100:.1f}%+ 상승, RSI {(1-rsi_threshold)*100:.1f}%+ 하락)")
+                    
+                    # PnL에 따른 가중치 조정
+                    base_weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
 
             # MACD 다이버전스 - 더 강화된 조건
@@ -4475,19 +4785,34 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     if recent_df['macd'].iloc[i] > recent_df['macd'].iloc[i-1] and recent_df['macd'].iloc[i] > recent_df['macd'].iloc[i+1]:
                         macd_peaks.append((i, recent_df['macd'].iloc[i]))
                 
-                # 임계값 동일하게 증가
+                # PnL 기반 임계값 차별화
+                price_threshold = 1.015  # 기본 1.02
+                macd_threshold = 0.92     # 기본 0.9
+                
+                if unrealized_pnl is not None and unrealized_pnl < 0:
+                    # 손실 포지션일 경우 임계값 완화
+                    price_threshold = 1.01  # 1.02 -> 1.01로 완화
+                    macd_threshold = 0.94    # 0.9 -> 0.94로 완화
+                elif unrealized_pnl is not None and unrealized_pnl > 5:
+                    # 이익 포지션일 경우 임계값 강화
+                    price_threshold = 1.025  # 1.02 -> 1.025로 강화
+                    macd_threshold = 0.87     # 0.9 -> 0.87로 강화
+                
                 if len(price_peaks) >= 2 and len(macd_peaks) >= 2:
                     # 최근 두 개의 가격 피크와 MACD 피크 비교
                     price_peak1, price_peak2 = price_peaks[-2:]
                     macd_peak1, macd_peak2 = macd_peaks[-2:]
                     
                     # 가격은 더 높은 고점을 만들고 MACD는 더 낮은 고점을 만드는지 확인 (명확한 다이버전스)
-                    if (price_peak2[1] > price_peak1[1] * 1.02) and (macd_peak2[1] < macd_peak1[1] * 0.9):
+                    if (price_peak2[1] > price_peak1[1] * price_threshold) and (macd_peak2[1] < macd_peak1[1] * macd_threshold):
                         # 상위 타임프레임 추세 반영
                         apply_full_weight = higher_timeframe_trend != "bullish"
                         
-                        exit_signals.append("롱 포지션에서 명확한 MACD 베어리시 다이버전스 감지 (가격은 2% 이상 높은 고점, MACD는 10% 이상 낮은 고점)")
-                        weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                        exit_signals.append(f"롱 포지션에서 명확한 MACD 베어리시 다이버전스 감지 (가격 {(price_threshold-1)*100:.1f}%+ 상승, MACD {(1-macd_threshold)*100:.1f}%+ 하락)")
+                        
+                        # PnL에 따른 가중치 조정
+                        base_weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                        weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
         
         # 숏 포지션에서의 불리시 다이버전스 감지
@@ -4504,19 +4829,34 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                 if recent_df['rsi'].iloc[i] < recent_df['rsi'].iloc[i-1] and recent_df['rsi'].iloc[i] < recent_df['rsi'].iloc[i+1]:
                     rsi_troughs.append((i, recent_df['rsi'].iloc[i]))
             
-            # 임계값 동일하게 증가 (0.995->0.98, 1.05->1.1)
+            # PnL 기반 임계값 차별화
+            price_threshold = 0.985  # 기본 0.98
+            rsi_threshold = 1.08     # 기본 1.1
+            
+            if unrealized_pnl is not None and unrealized_pnl < 0:
+                # 손실 포지션일 경우 임계값 완화
+                price_threshold = 0.99  # 0.98 -> 0.99로 완화
+                rsi_threshold = 1.06    # 1.1 -> 1.06으로 완화
+            elif unrealized_pnl is not None and unrealized_pnl > 5:
+                # 이익 포지션일 경우 임계값 강화
+                price_threshold = 0.975  # 0.98 -> 0.975로 강화
+                rsi_threshold = 1.13     # 1.1 -> 1.13으로 강화
+            
             if len(price_troughs) >= 2 and len(rsi_troughs) >= 2:
                 # 최근 두 개의 가격 저점과 RSI 저점 비교
                 price_trough1, price_trough2 = price_troughs[-2:]
                 rsi_trough1, rsi_trough2 = rsi_troughs[-2:]
                 
                 # 가격은 더 낮은 저점을 만들고 RSI는 더 높은 저점을 만드는지 확인 (명확한 다이버전스)
-                if (price_trough2[1] < price_trough1[1] * 0.98) and (rsi_trough2[1] > rsi_trough1[1] * 1.1):
+                if (price_trough2[1] < price_trough1[1] * price_threshold) and (rsi_trough2[1] > rsi_trough1[1] * rsi_threshold):
                     # 상위 타임프레임 추세 반영
                     apply_full_weight = higher_timeframe_trend != "bearish"
                     
-                    exit_signals.append("숏 포지션에서 명확한 RSI 불리시 다이버전스 감지 (가격은 2% 이상 낮은 저점, RSI는 10% 이상 높은 저점)")
-                    weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    exit_signals.append(f"숏 포지션에서 명확한 RSI 불리시 다이버전스 감지 (가격 {(1-price_threshold)*100:.1f}%+ 하락, RSI {(rsi_threshold-1)*100:.1f}%+ 상승)")
+                    
+                    # PnL에 따른 가중치 조정
+                    base_weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
             
             # MACD 다이버전스 - 더 강화된 조건
@@ -4527,132 +4867,211 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     if recent_df['macd'].iloc[i] < recent_df['macd'].iloc[i-1] and recent_df['macd'].iloc[i] < recent_df['macd'].iloc[i+1]:
                         macd_troughs.append((i, recent_df['macd'].iloc[i]))
                 
-                # 임계값 동일하게 증가
+                # PnL 기반 임계값 차별화
+                macd_threshold = 1.08  # 기본 1.1
+                
+                if unrealized_pnl is not None and unrealized_pnl < 0:
+                    # 손실 포지션일 경우 임계값 완화
+                    price_threshold = 0.99   # 0.98 -> 0.99로 완화
+                    macd_threshold = 1.06    # 1.1 -> 1.06으로 완화
+                elif unrealized_pnl is not None and unrealized_pnl > 5:
+                    # 이익 포지션일 경우 임계값 강화
+                    price_threshold = 0.975  # 0.98 -> 0.975로 강화
+                    macd_threshold = 1.13    # 1.1 -> 1.13으로 강화
+                
                 if len(price_troughs) >= 2 and len(macd_troughs) >= 2:
                     # 최근 두 개의 가격 저점과 MACD 저점 비교
                     price_trough1, price_trough2 = price_troughs[-2:]
                     macd_trough1, macd_trough2 = macd_troughs[-2:]
                     
                     # 가격은 더 낮은 저점을 만들고 MACD는 더 높은 저점을 만드는지 확인 (명확한 다이버전스)
-                    if (price_trough2[1] < price_trough1[1] * 0.98) and (macd_trough2[1] > macd_trough1[1] * 1.1):
+                    if (price_trough2[1] < price_trough1[1] * price_threshold) and (macd_trough2[1] > macd_trough1[1] * macd_threshold):
                         # 상위 타임프레임 추세 반영
                         apply_full_weight = higher_timeframe_trend != "bearish"
                         
-                        exit_signals.append("숏 포지션에서 명확한 MACD 불리시 다이버전스 감지 (가격은 2% 이상 낮은 저점, MACD는 10% 이상 높은 저점)")
-                        weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                        exit_signals.append(f"숏 포지션에서 명확한 MACD 불리시 다이버전스 감지 (가격 {(1-price_threshold)*100:.1f}%+ 하락, MACD {(macd_threshold-1)*100:.1f}%+ 상승)")
+                        
+                        # PnL에 따른 가중치 조정
+                        base_weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                        weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"다이버전스 확인 중 오류: {e}")
     
-    # 4. 트렌드 전환 확인 - 주요 지지/저항 돌파 여부 (더 명확한 돌파만 고려)
+    # 4. 트렌드 전환 확인 - 주요 지지/저항 돌파 여부 - PnL 기반 차별화
     try:
         latest = df_5min.iloc[-1]
         
-        # 이동평균선 교차 확인 - 단기적 교차를 줄이고 명확한 교차만 감지
+        # 이동평균선 교차 확인 - PnL 기반 차별화
         if 'ema_12' in df_5min.columns and 'sma_20' in df_5min.columns:
-            # Long position - EMA가 SMA 아래로 교차 (with stronger confirmation)
+            # 필요한 캔들 수 설정 - PnL 기반 차별화
+            if unrealized_pnl is not None and unrealized_pnl < 0:
+                # 손실 포지션일 경우, 더 빠른 감지를 위해 캔들 수 감소
+                min_cross_candles = 3  # 기본 4에서 3으로 감소
+                cross_gap_threshold = 0.002  # 0.003 -> 0.002로 완화
+            elif unrealized_pnl is not None and unrealized_pnl > 5:
+                # 이익 포지션일 경우, 더 늦은 감지를 위해 캔들 수 증가
+                min_cross_candles = 5  # 기본 4에서 5로 증가
+                cross_gap_threshold = 0.004  # 0.003 -> 0.004로 강화
+            else:
+                # 기본 캔들 수 유지
+                min_cross_candles = 4
+                cross_gap_threshold = 0.003
+                
+            # Long position - EMA가 SMA 아래로 교차
             if position_side == 'long':
-                # 최근 캔들 체크 - 더 많은 확정 필요 (3->4개로 증가)
+                # 최근 캔들 체크
                 cross_below_count = 0
                 for i in range(min(5, len(df_5min))):
                     idx = len(df_5min) - 1 - i
                     if df_5min['ema_12'].iloc[idx] < df_5min['sma_20'].iloc[idx]:
                         cross_below_count += 1
                 
-                # 최소 4개 이상의 캔들에서 EMA가 SMA 아래에 있고, 교차 폭이 충분히 클 때만 신호로 간주
-                if cross_below_count >= 4:
-                    # 교차 폭 확인 (추가 검증) - 임계값 증가 (0.001->0.003)
+                # 최소 지정된 캔들 수 이상 EMA가 SMA 아래에 있고, 교차 폭이 충분히 클 때만 신호로 간주
+                if cross_below_count >= min_cross_candles:
+                    # 교차 폭 확인 (추가 검증)
                     cross_gap = (df_5min['sma_20'].iloc[-1] - df_5min['ema_12'].iloc[-1]) / df_5min['sma_20'].iloc[-1]
-                    if cross_gap > 0.003:  # 0.3% 이상 이격
+                    if cross_gap > cross_gap_threshold:
                         # 상위 타임프레임 추세 반영
                         apply_full_weight = higher_timeframe_trend != "bullish"
                         
                         exit_signals.append(f"EMA12가 SMA20 아래로 명확하게 교차 확인됨 ({cross_below_count}개 캔들, 이격도 {cross_gap*100:.2f}%)")
-                        weight = 0.7 * trend_strength if apply_full_weight else 0.5 * trend_strength  # 가중치 감소 (0.75->0.7, 0.6->0.5)
+                        
+                        # PnL에 따른 가중치 조정
+                        base_weight = 0.7 * trend_strength if apply_full_weight else 0.5 * trend_strength
+                        weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
             
-            # Short position - EMA가 SMA 위로 교차 (with stronger confirmation)
+            # Short position - EMA가 SMA 위로 교차
             elif position_side == 'short':
-                # 최근 캔들 체크 - 더 많은 확정 필요 (3->4개로 증가)
+                # 최근 캔들 체크
                 cross_above_count = 0
                 for i in range(min(5, len(df_5min))):
                     idx = len(df_5min) - 1 - i
                     if df_5min['ema_12'].iloc[idx] > df_5min['sma_20'].iloc[idx]:
                         cross_above_count += 1
                 
-                # 최소 4개 이상의 캔들에서 EMA가 SMA 위에 있고, 교차 폭이 충분히 클 때만 신호로 간주
-                if cross_above_count >= 4:
-                    # 교차 폭 확인 (추가 검증) - 임계값 증가 (0.001->0.003)
+                # 최소 지정된 캔들 수 이상 EMA가 SMA 위에 있고, 교차 폭이 충분히 클 때만 신호로 간주
+                if cross_above_count >= min_cross_candles:
+                    # 교차 폭 확인 (추가 검증)
                     cross_gap = (df_5min['ema_12'].iloc[-1] - df_5min['sma_20'].iloc[-1]) / df_5min['sma_20'].iloc[-1]
-                    if cross_gap > 0.003:  # 0.3% 이상 이격
+                    if cross_gap > cross_gap_threshold:
                         # 상위 타임프레임 추세 반영
                         apply_full_weight = higher_timeframe_trend != "bearish"
                         
                         exit_signals.append(f"EMA12가 SMA20 위로 명확하게 교차 확인됨 ({cross_above_count}개 캔들, 이격도 {cross_gap*100:.2f}%)")
-                        weight = 0.7 * trend_strength if apply_full_weight else 0.5 * trend_strength  # 가중치 감소 (0.75->0.7, 0.6->0.5)
+                        
+                        # PnL에 따른 가중치 조정
+                        base_weight = 0.7 * trend_strength if apply_full_weight else 0.5 * trend_strength
+                        weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
         
-        # B. 주요 지지/저항 레벨 돌파 확인 (볼린저 밴드 + 추가 확인) - 더 강력한 돌파 요구
-        # Long position - 주요 지지선 하향 돌파 (강화된 기준)
+        # B. 주요 지지/저항 레벨 돌파 확인 (볼린저 밴드 + 추가 확인) - PnL 기반 차별화
+        # Long position - 주요 지지선 하향 돌파
         if position_side == 'long' and 'bb_bbl' in latest:
-            # 하단 밴드 돌파 폭 더 크게 요구 (0.995->0.99) - 뚜렷한 돌파만 고려
-            if latest['close'] < latest['bb_bbl'] * 0.99:
-                # 추가 확인: 최소 3개 캔들 연속으로 밴드 아래에 있는지 (2->3)
+            # PnL에 따른 임계값 차별화
+            if unrealized_pnl is not None and unrealized_pnl < 0:
+                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
+                band_breach_threshold = 0.992  # 0.99 -> 0.992로 완화
+                min_candles_below = 2     # 3 -> 2로 완화
+            elif unrealized_pnl is not None and unrealized_pnl > 5:
+                # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                band_breach_threshold = 0.985  # 0.99 -> 0.985로 강화
+                min_candles_below = 4     # 3 -> 4로 강화
+            else:
+                # 기본 임계값 유지
+                band_breach_threshold = 0.99
+                min_candles_below = 3
+            
+            # 하단 밴드 돌파 확인
+            if latest['close'] < latest['bb_bbl'] * band_breach_threshold:
+                # 추가 확인: 최소 지정된 캔들 수 연속으로 밴드 아래에 있는지
                 below_band_count = 0
                 for i in range(min(4, len(df_5min))):
                     idx = len(df_5min) - 1 - i
-                    if df_5min['close'].iloc[idx] < df_5min['bb_bbl'].iloc[idx] * 0.99:
+                    if df_5min['close'].iloc[idx] < df_5min['bb_bbl'].iloc[idx] * band_breach_threshold:
                         below_band_count += 1
                     else:
                         break
                 
-                if below_band_count >= 3:  # 최소 3캔들 연속 돌파 확인
+                if below_band_count >= min_candles_below:
                     # 상위 타임프레임 추세 반영
                     apply_full_weight = higher_timeframe_trend != "bullish"
                     
                     exit_signals.append(f"롱 포지션에서 가격이 하단 볼린저 밴드 아래로 뚜렷하게 이탈 ({below_band_count}개 캔들 연속)")
-                    weight = 0.85 * trend_strength if apply_full_weight else 0.7 * trend_strength  # 가중치 변경 (0.95->0.85, 0.8->0.7)
+                    
+                    # PnL에 따른 가중치 조정
+                    base_weight = 0.85 * trend_strength if apply_full_weight else 0.7 * trend_strength
+                    weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
         
-        # Short position - 주요 저항선 상향 돌파 (강화된 기준)
+        # Short position - 주요 저항선 상향 돌파
         elif position_side == 'short' and 'bb_bbh' in latest:
-            # 상단 밴드 돌파 폭 더 크게 요구 (1.005->1.01) - 뚜렷한 돌파만 고려
-            if latest['close'] > latest['bb_bbh'] * 1.01:
-                # 추가 확인: 최소 3개 캔들 연속으로 밴드 위에 있는지 (2->3)
+            # PnL에 따른 임계값 차별화
+            if unrealized_pnl is not None and unrealized_pnl < 0:
+                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
+                band_breach_threshold = 1.008  # 1.01 -> 1.008로 완화
+                min_candles_above = 2     # 3 -> 2로 완화
+            elif unrealized_pnl is not None and unrealized_pnl > 5:
+                # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                band_breach_threshold = 1.015  # 1.01 -> 1.015로 강화
+                min_candles_above = 4     # 3 -> 4로 강화
+            else:
+                # 기본 임계값 유지
+                band_breach_threshold = 1.01
+                min_candles_above = 3
+            
+            # 상단 밴드 돌파 폭 확인
+            if latest['close'] > latest['bb_bbh'] * band_breach_threshold:
+                # 추가 확인: 최소 지정된 캔들 수 연속으로 밴드 위에 있는지
                 above_band_count = 0
                 for i in range(min(4, len(df_5min))):
                     idx = len(df_5min) - 1 - i
-                    if df_5min['close'].iloc[idx] > df_5min['bb_bbh'].iloc[idx] * 1.01:
+                    if df_5min['close'].iloc[idx] > df_5min['bb_bbh'].iloc[idx] * band_breach_threshold:
                         above_band_count += 1
                     else:
                         break
 
-                if above_band_count >= 3:  # 최소 3캔들 연속 돌파 확인
+                if above_band_count >= min_candles_above:
                     # 상위 타임프레임 추세 반영
                     apply_full_weight = higher_timeframe_trend != "bearish"
                     
                     exit_signals.append(f"숏 포지션에서 가격이 상단 볼린저 밴드 위로 뚜렷하게 이탈 ({above_band_count}개 캔들 연속)")
-                    weight = 0.85 * trend_strength if apply_full_weight else 0.7 * trend_strength  # 가중치 변경 (0.95->0.85, 0.8->0.7)
+                    
+                    # PnL에 따른 가중치 조정
+                    base_weight = 0.85 * trend_strength if apply_full_weight else 0.7 * trend_strength
+                    weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
-        
-        # C. 캔들 패턴 분석 제거 - 단기적인 신호로 인한 조기 청산 방지
-        # (캔들 패턴 관련 코드를 삭제하여 단기 패턴에 반응하지 않도록 함)
     except Exception as e:
         logger.error(f"트렌드 반전 및 지지/저항 레벨 확인 중 오류: {e}")
     
-    # 5. 볼륨 프로필 분석 - 극단적인 볼륨 급증에만 반응 (임계값 증가)
+    # 5. 볼륨 프로필 분석 - PnL 기반 차별화
     try:
         if 'volume' in df_5min.columns:
             recent_volume = df_5min['volume'].iloc[-1]
             avg_volume = df_5min['volume'].iloc[-10:].mean()
             
-            # 더 극단적인 볼륨 요구 (3.5->4.5배로 증가)
-            if recent_volume > avg_volume * 4.5:
+            # PnL에 따른 임계값 차별화
+            if unrealized_pnl is not None and unrealized_pnl < 0:
+                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
+                volume_spike_threshold = 3.5  # 4.5 -> 3.5로 완화
+                body_ratio_threshold = 0.65   # 0.7 -> 0.65로 완화
+            elif unrealized_pnl is not None and unrealized_pnl > 5:
+                # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                volume_spike_threshold = 5.5  # 4.5 -> 5.5로 강화
+                body_ratio_threshold = 0.75   # 0.7 -> 0.75로 강화
+            else:
+                # 기본 임계값 유지
+                volume_spike_threshold = 4.5
+                body_ratio_threshold = 0.7
+            
+            # 볼륨 급증 확인
+            if recent_volume > avg_volume * volume_spike_threshold:
                 # 추가 확인: 볼륨 급증과 함께 캔들 방향이 포지션과 반대이고, 캔들 크기가 충분히 클 때
                 latest_body_ratio = abs(latest['close'] - latest['open']) / (latest['high'] - latest['low'])
                 
-                if ((position_side == 'long' and latest['close'] < latest['open'] and latest_body_ratio > 0.7) or 
-                   (position_side == 'short' and latest['close'] > latest['open'] and latest_body_ratio > 0.7)):
+                if ((position_side == 'long' and latest['close'] < latest['open'] and latest_body_ratio > body_ratio_threshold) or 
+                   (position_side == 'short' and latest['close'] > latest['open'] and latest_body_ratio > body_ratio_threshold)):
                     
                     # 상위 타임프레임 추세 반영
                     apply_full_weight = True
@@ -4662,118 +5081,184 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                         apply_full_weight = False
                     
                     exit_signals.append(f"포지션 방향과 반대되는 극단적 볼륨 스파이크 ({recent_volume/avg_volume:.1f}배) 및 강한 반전 캔들")
-                    weight = 0.75 * trend_strength if apply_full_weight else 0.65 * trend_strength  # 가중치 감소 (0.85->0.75, 0.7->0.65)
+                    
+                    # PnL에 따른 가중치 조정
+                    base_weight = 0.75 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"볼륨 프로필 확인 중 오류: {e}")
     
-    # 6. 변동성 확인 - 극단적인 ATR 급증만 고려
+    # 6. 변동성 확인 - PnL 기반 차별화
     try:
         if 'atr' in df_5min.columns:
             recent_atr = df_5min['atr'].iloc[-1]
             avg_atr = df_5min['atr'].iloc[-20:].mean()
             
-            # 더 극단적인 변동성 요구 (3.0->4.0배로 증가)
-            if recent_atr > avg_atr * 4.0:
+            # PnL에 따른 임계값 차별화
+            if unrealized_pnl is not None and unrealized_pnl < 0:
+                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
+                atr_spike_threshold = 3.0  # 4.0 -> 3.0으로 완화
+                price_move_threshold = 0.6  # 0.8 -> 0.6으로 완화
+            elif unrealized_pnl is not None and unrealized_pnl > 5:
+                # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                atr_spike_threshold = 5.0  # 4.0 -> 5.0으로 강화
+                price_move_threshold = 1.0  # 0.8 -> 1.0으로 강화
+            else:
+                # 기본 임계값 유지
+                atr_spike_threshold = 4.0
+                price_move_threshold = 0.8
+            
+            # 변동성 급증 확인
+            if recent_atr > avg_atr * atr_spike_threshold:
                 # 추가 확인: 변동성 급증과 함께 가격이 포지션에 불리한 방향으로 움직이는지
                 is_unfavorable = (position_side == 'long' and latest['close'] < df_5min['close'].iloc[-2]) or \
                                 (position_side == 'short' and latest['close'] > df_5min['close'].iloc[-2])
                 
-                # 역추세 크기 확인 - 큰 변동의 경우만 고려
+                # 역추세 크기 확인
                 price_move_pct = abs(latest['close'] - df_5min['close'].iloc[-2]) / df_5min['close'].iloc[-2] * 100
                 
-                if is_unfavorable and price_move_pct > 0.8:  # 0.8% 이상의 불리한 움직임
+                if is_unfavorable and price_move_pct > price_move_threshold:
                     exit_signals.append(f"극단적인 변동성 스파이크 감지 (ATR {recent_atr/avg_atr:.1f}배) 및 {price_move_pct:.1f}% 불리한 가격 움직임")
-                    exit_signal_weights.append(0.7 * trend_strength)  # 가중치 감소 (0.75->0.7)
+                    
+                    # PnL에 따른 가중치 조정
+                    base_weight = 0.7 * trend_strength
+                    weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
+                    exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"변동성 확인 중 오류: {e}")
     
-    # 7. 과매수/과매도 확인 (RSI) - 극단적 레벨과 지속성 강화
+    # 7. 과매수/과매도 확인 (RSI) - PnL 기반 차별화
     try:
         if 'rsi' in df_5min.columns:
             rsi_value = df_5min['rsi'].iloc[-1]
             
-            # 더 극단적인 과매수/과매도 요구 (18->15, 82->85)
+            # PnL에 따른 임계값 차별화
+            if unrealized_pnl is not None and unrealized_pnl < 0:
+                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
+                long_rsi_threshold = 18  # 15 -> 18로 완화
+                short_rsi_threshold = 82  # 85 -> 82로 완화
+                min_candles_count = 3     # 4 -> 3으로 완화
+            elif unrealized_pnl is not None and unrealized_pnl > 5:
+                # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                long_rsi_threshold = 12  # 15 -> 12로 강화
+                short_rsi_threshold = 88  # 85 -> 88로 강화
+                min_candles_count = 5     # 4 -> 5로 강화
+            else:
+                # 기본 임계값 유지
+                long_rsi_threshold = 15
+                short_rsi_threshold = 85
+                min_candles_count = 4
+            
             # Long position - RSI 극단적 과매도
-            if position_side == 'long' and rsi_value <= 15:
-                # 추가 확인: 이전 캔들들도 낮은 RSI인지 - 더 많은 캔들 요구 (3->4)
+            if position_side == 'long' and rsi_value <= long_rsi_threshold:
+                # 추가 확인: 이전 캔들들도 낮은 RSI인지
                 low_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-6:] if rsi <= 20)
                 
-                if low_rsi_count >= 4:  # 최소 4개 캔들에서 낮은 RSI 확인
+                if low_rsi_count >= min_candles_count:
                     # 상위 타임프레임 추세 반영
                     apply_full_weight = higher_timeframe_trend != "bullish"
                     
                     exit_signals.append(f"RSI 극단적 과매도 상태 ({rsi_value:.1f}), {low_rsi_count}개 캔들 지속")
-                    weight = 0.75 * trend_strength if apply_full_weight else 0.65 * trend_strength  # 가중치 감소 (0.85->0.75, 0.7->0.65)
+                    
+                    # PnL에 따른 가중치 조정
+                    base_weight = 0.75 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
             
             # Short position - RSI 극단적 과매수
-            elif position_side == 'short' and rsi_value >= 85:
-                # 추가 확인: 이전 캔들들도 높은 RSI인지 - 더 많은 캔들 요구 (3->4)
+            elif position_side == 'short' and rsi_value >= short_rsi_threshold:
+                # 추가 확인: 이전 캔들들도 높은 RSI인지
                 high_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-6:] if rsi >= 80)
                 
-                if high_rsi_count >= 4:  # 최소 4개 캔들에서 높은 RSI 확인
+                if high_rsi_count >= min_candles_count:
                     # 상위 타임프레임 추세 반영
                     apply_full_weight = higher_timeframe_trend != "bearish"
                     
                     exit_signals.append(f"RSI 극단적 과매수 상태 ({rsi_value:.1f}), {high_rsi_count}개 캔들 지속")
-                    weight = 0.75 * trend_strength if apply_full_weight else 0.65 * trend_strength  # 가중치 감소 (0.85->0.75, 0.7->0.65)
+                    
+                    # PnL에 따른 가중치 조정
+                    base_weight = 0.75 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"RSI 극단 확인 중 오류: {e}")
     
-    # 8. 패턴 연속성 확인 - 여러 지표의 일관된 신호 분석 (신호 수 증가)
+    # 8. 패턴 연속성 확인 - 여러 지표의 일관된 신호 분석 - PnL 기반 차별화
     try:
         # 신호의 일관성 수준 계산
         consistent_bearish_signals = 0
         consistent_bullish_signals = 0
         
+        # PnL에 따른 임계값 차별화
+        if unrealized_pnl is not None and unrealized_pnl < 0:
+            # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
+            rsi_change_threshold = 3.0    # 3.5 -> 3.0으로 완화
+            macd_change_threshold = 0.3    # 0.4 -> 0.3으로 완화
+            bbm_distance_threshold = 0.35  # 0.4 -> 0.35로 완화
+            di_diff_threshold = 6          # 7 -> 6으로 완화
+            obv_change_threshold = 1.8     # 2.0 -> 1.8로 완화
+            min_consistent_signals = 3     # 4 -> 3으로 완화
+        elif unrealized_pnl is not None and unrealized_pnl > 5:
+            # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+            rsi_change_threshold = 4.0     # 3.5 -> 4.0으로 강화
+            macd_change_threshold = 0.5    # 0.4 -> 0.5로 강화
+            bbm_distance_threshold = 0.45  # 0.4 -> 0.45로 강화
+            di_diff_threshold = 8          # 7 -> 8로 강화
+            obv_change_threshold = 2.2     # 2.0 -> 2.2로 강화
+            min_consistent_signals = 5     # 4 -> 5로 강화
+        else:
+            # 기본 임계값 유지
+            rsi_change_threshold = 3.5
+            macd_change_threshold = 0.4
+            bbm_distance_threshold = 0.4
+            di_diff_threshold = 7
+            obv_change_threshold = 2.0
+            min_consistent_signals = 4
+        
         # A. RSI 방향
         if 'rsi' in df_5min.columns:
-            # 더 명확한 움직임 요구 (-2.5->-3.5, 2.5->3.5)
             rsi_direction = df_5min['rsi'].iloc[-1] - df_5min['rsi'].iloc[-2]
-            if rsi_direction < -3.5:  # RSI가 명확하게 하락 중
+            if rsi_direction < -rsi_change_threshold:  # RSI가 명확하게 하락 중
                 consistent_bearish_signals += 1
-            elif rsi_direction > 3.5:  # RSI가 명확하게 상승 중
+            elif rsi_direction > rsi_change_threshold:  # RSI가 명확하게 상승 중
                 consistent_bullish_signals += 1
         
         # B. MACD 방향
         if 'macd' in df_5min.columns and 'macd_signal' in df_5min.columns:
-            # 더 명확한 움직임 요구 (-0.25->-0.4, 0.25->0.4)
             macd_direction = df_5min['macd'].iloc[-1] - df_5min['macd'].iloc[-2]
             macd_signal_cross = (df_5min['macd'].iloc[-2] > df_5min['macd_signal'].iloc[-2] and 
                                 df_5min['macd'].iloc[-1] < df_5min['macd_signal'].iloc[-1])  # 베어리시 크로스
             macd_signal_cross_bullish = (df_5min['macd'].iloc[-2] < df_5min['macd_signal'].iloc[-2] and 
                                         df_5min['macd'].iloc[-1] > df_5min['macd_signal'].iloc[-1])  # 불리시 크로스
             
-            if macd_direction < -0.4 or macd_signal_cross:  # MACD가 명확하게 하락 중이거나 베어리시 크로스
+            if macd_direction < -macd_change_threshold or macd_signal_cross:  # MACD가 명확하게 하락 중이거나 베어리시 크로스
                 consistent_bearish_signals += 1
-            elif macd_direction > 0.4 or macd_signal_cross_bullish:  # MACD가 명확하게 상승 중이거나 불리시 크로스
+            elif macd_direction > macd_change_threshold or macd_signal_cross_bullish:  # MACD가 명확하게 상승 중이거나 불리시 크로스
                 consistent_bullish_signals += 1
         
         # C. 볼린저 밴드 위치
         if 'bb_bbm' in df_5min.columns:
             price_to_bbm = latest['close'] - latest['bb_bbm']
-            # 더 큰 이격 요구 (0.33->0.4)
-            if price_to_bbm < 0 and abs(price_to_bbm) > (latest['bb_bbh'] - latest['bb_bbl']) * 0.4:
-                # 가격이 중앙선보다 밴드 폭의 40% 이상 아래
+            if price_to_bbm < 0 and abs(price_to_bbm) > (latest['bb_bbh'] - latest['bb_bbl']) * bbm_distance_threshold:
+                # 가격이 중앙선보다 밴드 폭의 지정된 비율 이상 아래
                 consistent_bearish_signals += 1
-            elif price_to_bbm > 0 and abs(price_to_bbm) > (latest['bb_bbh'] - latest['bb_bbl']) * 0.4:
-                # 가격이 중앙선보다 밴드 폭의 40% 이상 위
+            elif price_to_bbm > 0 and abs(price_to_bbm) > (latest['bb_bbh'] - latest['bb_bbl']) * bbm_distance_threshold:
+                # 가격이 중앙선보다 밴드 폭의 지정된 비율 이상 위
                 consistent_bullish_signals += 1
         
-        # D. ADX & DI 방향 (더 강한 ADX 요구 25->30)
+        # D. ADX & DI 방향
         if 'adx' in df_5min.columns and 'di_plus' in df_5min.columns and 'di_minus' in df_5min.columns:
-            # ADX 임계값 증가 (25->30)
-            if df_5min['adx'].iloc[-1] > 30 and df_5min['di_minus'].iloc[-1] > df_5min['di_plus'].iloc[-1]:
-                # 추가 검증: DI 차이가 충분한지 (5->7)
+            # ADX 임계값 - 완화: 30 -> 28
+            if df_5min['adx'].iloc[-1] > 28 and df_5min['di_minus'].iloc[-1] > df_5min['di_plus'].iloc[-1]:
+                # 추가 검증: DI 차이가 충분한지
                 di_diff = df_5min['di_minus'].iloc[-1] - df_5min['di_plus'].iloc[-1]
-                if di_diff > 7:  # 최소 7 포인트 차이
+                if di_diff > di_diff_threshold:
                     consistent_bearish_signals += 1
-            elif df_5min['adx'].iloc[-1] > 30 and df_5min['di_plus'].iloc[-1] > df_5min['di_minus'].iloc[-1]:
-                # 추가 검증: DI 차이가 충분한지 (5->7)
+            elif df_5min['adx'].iloc[-1] > 28 and df_5min['di_plus'].iloc[-1] > df_5min['di_minus'].iloc[-1]:
+                # 추가 검증: DI 차이가 충분한지
                 di_diff = df_5min['di_plus'].iloc[-1] - df_5min['di_minus'].iloc[-1]
-                if di_diff > 7:  # 최소 7 포인트 차이
+                if di_diff > di_diff_threshold:
                     consistent_bullish_signals += 1
         
         # E. 볼륨 기반 지표
@@ -4782,42 +5267,57 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             obv_direction = df_5min['obv'].iloc[-1] - df_5min['obv'].iloc[-2]
             obv_avg_change = abs(df_5min['obv'].diff().iloc[-10:].mean())
             
-            if obv_direction < -obv_avg_change * 2.0:  # OBV 하락이 평균 변화의 2.0배 이상 (1.5->2.0)
+            if obv_direction < -obv_avg_change * obv_change_threshold:  # OBV 하락이 평균 변화의 지정된 배수 이상
                 consistent_bearish_signals += 1
-            elif obv_direction > obv_avg_change * 2.0:  # OBV 상승이 평균 변화의 2.0배 이상 (1.5->2.0)
+            elif obv_direction > obv_avg_change * obv_change_threshold:  # OBV 상승이 평균 변화의 지정된 배수 이상
                 consistent_bullish_signals += 1
 
         # 일관된 신호 분석 결과를 바탕으로 출구 신호 평가
-        # 더 많은 신호 요구 (3->4)
-        if position_side == 'long' and consistent_bearish_signals >= 4:
+        if position_side == 'long' and consistent_bearish_signals >= min_consistent_signals:
             # 상위 타임프레임 추세 반영
             apply_full_weight = higher_timeframe_trend != "bullish"
             
             exit_signals.append(f"여러 지표에서 {consistent_bearish_signals}개의 일관된 베어리시 신호 감지")
             # 신호 수에 따라 가중치 증가하되 상위 타임프레임 고려
-            base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength  # 가중치 감소 (0.75->0.7, 0.6->0.55)
-            weight = min(base_weight + (consistent_bearish_signals - 4) * 0.05, 0.9)  # 증분 감소 (0.07->0.05)
+            base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength
+            
+            # 추가 신호에 따른 가중치 증분 - 완화: 0.05 -> 0.045
+            add_weight = (consistent_bearish_signals - min_consistent_signals) * 0.045
+            
+            # PnL에 따른 가중치 조정
+            weight = (base_weight + add_weight) * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else (base_weight + add_weight)
+            # 최대 가중치 제한
+            weight = min(weight, 0.9)
+            
             exit_signal_weights.append(weight)
             
-        elif position_side == 'short' and consistent_bullish_signals >= 4:
+        elif position_side == 'short' and consistent_bullish_signals >= min_consistent_signals:
             # 상위 타임프레임 추세 반영
             apply_full_weight = higher_timeframe_trend != "bearish"
             
             exit_signals.append(f"여러 지표에서 {consistent_bullish_signals}개의 일관된 불리시 신호 감지")
             # 신호 수에 따라 가중치 증가하되 상위 타임프레임 고려
-            base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength  # 가중치 감소 (0.75->0.7, 0.6->0.55)
-            weight = min(base_weight + (consistent_bullish_signals - 4) * 0.05, 0.9)  # 증분 감소 (0.07->0.05)
+            base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength
+            
+            # 추가 신호에 따른 가중치 증분 - 완화: 0.05 -> 0.045
+            add_weight = (consistent_bullish_signals - min_consistent_signals) * 0.045
+            
+            # PnL에 따른 가중치 조정
+            weight = (base_weight + add_weight) * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else (base_weight + add_weight)
+            # 최대 가중치 제한
+            weight = min(weight, 0.9)
+            
             exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"패턴 일관성 확인 중 오류: {e}")
     
-    # 9. 추가 - 중장기 트렌드 변화 감지 (1시간 차트에서 반전 신호)
+    # 9. 중장기 트렌드 변화 감지 (1시간 차트에서 반전 신호) - PnL 기반 차별화
     try:
         if df_hourly is not None and len(df_hourly) >= 10:
             # 1시간 차트에서 주요 반전 신호 확인
             hourly_latest = df_hourly.iloc[-1]
             
-            # A. 1시간 차트 RSI 다이버전스 확인 (더 강력한 출구 신호)
+            # A. 1시간 차트 RSI 다이버전스 확인 - PnL 기반 차별화
             if 'rsi' in df_hourly.columns:
                 # 가격과 RSI 고점/저점 찾기 (1시간 차트)
                 hourly_price_peaks = []
@@ -4838,37 +5338,78 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     if df_hourly['rsi'].iloc[-i] < df_hourly['rsi'].iloc[-(i+1)] and df_hourly['rsi'].iloc[-i] < df_hourly['rsi'].iloc[-(i-1)]:
                         hourly_rsi_troughs.append((i, df_hourly['rsi'].iloc[-i]))
                 
+                # PnL에 따른 임계값 차별화
+                if unrealized_pnl is not None and unrealized_pnl < 0:
+                    # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
+                    hourly_price_threshold = 1.01  # 1.015 -> 1.01로 완화
+                    hourly_rsi_threshold = 0.96    # 0.95 -> 0.96으로 완화
+                elif unrealized_pnl is not None and unrealized_pnl > 5:
+                    # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                    hourly_price_threshold = 1.02  # 1.015 -> 1.02로 강화
+                    hourly_rsi_threshold = 0.93    # 0.95 -> 0.93으로 강화
+                else:
+                    # 기본 임계값 유지
+                    hourly_price_threshold = 1.015
+                    hourly_rsi_threshold = 0.95
+                
                 # 롱 포지션에서 베어리시 다이버전스 확인
                 if position_side == 'long' and len(hourly_price_peaks) >= 2 and len(hourly_rsi_peaks) >= 2:
                     price_peak1, price_peak2 = hourly_price_peaks[1], hourly_price_peaks[0]  # 오래된 것, 최근 것
                     rsi_peak1, rsi_peak2 = hourly_rsi_peaks[1], hourly_rsi_peaks[0]  # 오래된 것, 최근 것
                     
                     # 가격은 상승 중이지만 RSI는 하락 중인 경우 (1시간 차트에서 더 강력한 신호)
-                    if price_peak2[1] > price_peak1[1] * 1.015 and rsi_peak2[1] < rsi_peak1[1] * 0.95:
-                        exit_signals.append("1시간 차트에서 명확한 베어리시 다이버전스 감지 (가격 +1.5%, RSI -5%)")
-                        exit_signal_weights.append(0.9 * trend_strength)  # 1시간 차트에서의 다이버전스는 중요한 신호
+                    if price_peak2[1] > price_peak1[1] * hourly_price_threshold and rsi_peak2[1] < rsi_peak1[1] * hourly_rsi_threshold:
+                        exit_signals.append(f"1시간 차트에서 명확한 베어리시 다이버전스 감지 (가격 +{(hourly_price_threshold-1)*100:.1f}%, RSI -{(1-hourly_rsi_threshold)*100:.1f}%)")
+                        
+                        # PnL에 따른 가중치 조정
+                        base_weight = 0.9 * trend_strength
+                        weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
+                        exit_signal_weights.append(weight)
                 
                 # 숏 포지션에서 불리시 다이버전스 확인
                 if position_side == 'short' and len(hourly_price_troughs) >= 2 and len(hourly_rsi_troughs) >= 2:
                     price_trough1, price_trough2 = hourly_price_troughs[1], hourly_price_troughs[0]  # 오래된 것, 최근 것
                     rsi_trough1, rsi_trough2 = hourly_rsi_troughs[1], hourly_rsi_troughs[0]  # 오래된 것, 최근 것
                     
+                    # 역수 변환을 통한 임계값 조정
+                    inv_price_threshold = 1 / hourly_price_threshold
+                    inv_rsi_threshold = 1 / hourly_rsi_threshold
+                    
                     # 가격은 하락 중이지만 RSI는 상승 중인 경우
-                    if price_trough2[1] < price_trough1[1] * 0.985 and rsi_trough2[1] > rsi_trough1[1] * 1.05:
-                        exit_signals.append("1시간 차트에서 명확한 불리시 다이버전스 감지 (가격 -1.5%, RSI +5%)")
-                        exit_signal_weights.append(0.9 * trend_strength)
+                    if price_trough2[1] < price_trough1[1] * inv_price_threshold and rsi_trough2[1] > rsi_trough1[1] * inv_rsi_threshold:
+                        exit_signals.append(f"1시간 차트에서 명확한 불리시 다이버전스 감지 (가격 -{(1-inv_price_threshold)*100:.1f}%, RSI +{(inv_rsi_threshold-1)*100:.1f}%)")
+                        
+                        # PnL에 따른 가중치 조정
+                        base_weight = 0.9 * trend_strength
+                        weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
+                        exit_signal_weights.append(weight)
             
-            # B. 1시간 차트 중요 이동평균선 돌파 확인
+            # B. 1시간 차트 중요 이동평균선 돌파 확인 - PnL 기반 차별화
             if 'ema_50' in df_hourly.columns:
+                # PnL에 따른 임계값 차별화
+                if unrealized_pnl is not None and unrealized_pnl < 0:
+                    # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
+                    hourly_ema_breach_threshold = 0.25  # 0.3 -> 0.25로 완화
+                elif unrealized_pnl is not None and unrealized_pnl > 5:
+                    # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                    hourly_ema_breach_threshold = 0.35  # 0.3 -> 0.35로 강화
+                else:
+                    # 기본 임계값 유지
+                    hourly_ema_breach_threshold = 0.3
+                
                 # 롱 포지션 - 가격이 50 EMA 하향 돌파
                 if position_side == 'long':
                     # 현재 캔들이 EMA 아래에 있고, 이전 캔들은 위에 있었는지 확인
                     if hourly_latest['close'] < hourly_latest['ema_50'] and df_hourly['close'].iloc[-2] > df_hourly['ema_50'].iloc[-2]:
                         # 추가 확인: 돌파 폭이 충분한지
                         ema_breach_pct = (hourly_latest['ema_50'] - hourly_latest['close']) / hourly_latest['ema_50'] * 100
-                        if ema_breach_pct > 0.3:  # 0.3% 이상 돌파
+                        if ema_breach_pct > hourly_ema_breach_threshold:
                             exit_signals.append(f"1시간 차트에서 가격이 50 EMA 하향 돌파 ({ema_breach_pct:.2f}%)")
-                            exit_signal_weights.append(0.85 * trend_strength)  # 중요한 중기 신호
+                            
+                            # PnL에 따른 가중치 조정
+                            base_weight = 0.85 * trend_strength
+                            weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
+                            exit_signal_weights.append(weight)
                 
                 # 숏 포지션 - 가격이 50 EMA 상향 돌파
                 elif position_side == 'short':
@@ -4876,33 +5417,77 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     if hourly_latest['close'] > hourly_latest['ema_50'] and df_hourly['close'].iloc[-2] < df_hourly['ema_50'].iloc[-2]:
                         # 추가 확인: 돌파 폭이 충분한지
                         ema_breach_pct = (hourly_latest['close'] - hourly_latest['ema_50']) / hourly_latest['ema_50'] * 100
-                        if ema_breach_pct > 0.3:  # 0.3% 이상 돌파
+                        if ema_breach_pct > hourly_ema_breach_threshold:
                             exit_signals.append(f"1시간 차트에서 가격이 50 EMA 상향 돌파 ({ema_breach_pct:.2f}%)")
-                            exit_signal_weights.append(0.85 * trend_strength)  # 중요한 중기 신호
+                            
+                            # PnL에 따른 가중치 조정
+                            base_weight = 0.85 * trend_strength
+                            weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
+                            exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"중장기 추세 변화 감지 중 오류: {e}")
     
     # 신호 가중치 합산하여 최종 결정
     exit_score = sum(exit_signal_weights)
     
-    # 손실 포지션을 위한 임계값 조정
-    exit_threshold = 2.0  # 기본 임계값
-    single_signal_threshold = 0.95  # 기본 단일 신호 임계값
-    
-    # PnL 기반 임계값 조정
+    # PnL 기반 임계값 차별화 - 트레일링 스탑로스 고려
     if unrealized_pnl is not None and unrealized_pnl < 0:
-        # 손실이 클수록 임계값 감소 (더 쉽게 종료)
-        loss_severity = min(abs(unrealized_pnl) / 8.0, 1.0)  # 0~1 사이 값으로 정규화
+        # 손실 포지션에 대한 임계값 완화 - 더 빠른 종료
+        loss_severity = min(abs(unrealized_pnl) / 6.0, 1.0)  # 기존 8.0 -> 6.0으로 변경
         
-        # 손실 수준에 따른 임계값 조정
-        if loss_severity >= 0.8:  # 심각한 손실 (-6.4% 이상)
-            exit_threshold = 1.5  # 25% 감소된 임계값
-            single_signal_threshold = 0.8  # 더 낮은 단일 신호 임계값
-            logger.warning(f"심각한 손실로 인해 종료 임계값 하향 조정: {exit_threshold:.1f} (원래 2.0)")
-        elif loss_severity >= 0.4:  # 중간 수준 손실 (-3.2% 이상)
-            exit_threshold = 1.7  # 15% 감소된 임계값
-            single_signal_threshold = 0.85  # 조금 낮은 단일 신호 임계값
-            logger.info(f"중간 수준 손실로 인해 종료 임계값 하향 조정: {exit_threshold:.1f} (원래 2.0)")
+        # 손실 수준에 따른 임계값 조정 - 완화
+        if loss_severity >= 0.7:  # 심각한 손실 (-4.2% 이상)
+            exit_threshold = 1.3  # 기존 1.5 -> 1.3으로 완화
+            single_signal_threshold = 0.75  # 기존 0.8 -> 0.75로 완화
+            logger.warning(f"심각한 손실로 인해 종료 임계값 크게 하향 조정: {exit_threshold:.1f}")
+        elif loss_severity >= 0.3:  # 중간 수준 손실 (-1.8% 이상)
+            exit_threshold = 1.5  # 기존 1.7 -> 1.5로 완화
+            single_signal_threshold = 0.8  # 기존 0.85 -> 0.8로 완화
+            logger.info(f"중간 수준 손실로 인해 종료 임계값 하향 조정: {exit_threshold:.1f}")
+        else:  # 가벼운 손실
+            exit_threshold = 1.8  # 기존 2.0 -> 1.8로 완화
+            single_signal_threshold = 0.85  # 기존 0.95 -> 0.85로 완화
+            logger.info(f"가벼운 손실로 인해 종료 임계값 소폭 하향 조정: {exit_threshold:.1f}")
+    elif unrealized_pnl is not None and unrealized_pnl > 0:
+        # 이익 포지션에 대한 임계값 차별화 - 트레일링 스탑로스 고려하여 크게 완화
+        profit_level = min(unrealized_pnl / 30.0, 1.0)  # 0~1 사이 값으로 정규화
+        
+        if unrealized_pnl > 30:  # 매우 높은 수익 (30% 이상)
+            # 트레일링 스탑로스가 있으므로 출구 임계값 크게 상향
+            exit_threshold = 3.0  # 2.5 → 3.0으로 크게 강화
+            single_signal_threshold = 0.97  # 0.95 → 0.97로 강화
+            logger.info(f"매우 큰 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
+        elif unrealized_pnl > 20:  # 높은 수익 (20-30%)
+            # 트레일링 스탑로스가 있으므로 출구 임계값 상향
+            exit_threshold = 2.7  # 2.2 → 2.7로 강화
+            single_signal_threshold = 0.96  # 0.94 → 0.96으로 강화
+            logger.info(f"높은 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
+        elif unrealized_pnl > 10:  # 중간 수익 (10-20%)
+            # 트레일링 스탑로스가 있으므로 출구 임계값 상향
+            exit_threshold = 2.4  # 2.2 → 2.4로 강화
+            single_signal_threshold = 0.95  # 0.94 → 0.95로 강화
+            logger.info(f"중간 수준 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
+        elif unrealized_pnl > 5:  # 적당한 수익 (5-10%)
+            # 트레일링 스탑로스가 있으므로 출구 임계값 상향
+            exit_threshold = 2.3  # 2.4 → 2.3으로 소폭 조정
+            single_signal_threshold = 0.97  # 0.99 → 0.97로 소폭 조정
+            logger.info(f"적당한 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
+        else:  # 소소한 수익 (5% 미만)
+            # 기본 임계값보다 약간 높게 설정
+            exit_threshold = 2.1  # 유지
+            single_signal_threshold = 0.96  # 유지
+            logger.info(f"소소한 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
+    else:
+        # 기본 임계값
+        exit_threshold = 2.0
+        single_signal_threshold = 0.95
+    
+    # 새로 추가: 횡보장 감지 시 임계값 조정
+    if is_ranging_market:
+        # 횡보장에서는 빠르게 출구 찾기
+        exit_threshold *= 0.7  # 임계값 30% 감소
+        single_signal_threshold *= 0.9  # 단일 신호 임계값 10% 감소
+        logger.info(f"횡보장 감지로 인한 출구 임계값 조정: {exit_threshold:.1f} (단일 신호: {single_signal_threshold:.2f})")
     
     # 최종 결정
     should_exit = exit_score >= exit_threshold or any(w >= single_signal_threshold for w in exit_signal_weights)
@@ -4912,8 +5497,8 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
         logger.info(f"출구 신호 감지: {exit_signals}")
         logger.info(f"출구 신호 가중치: {exit_signal_weights}, 총점: {exit_score}")
         logger.info(f"임계값: {exit_threshold:.1f} (단일 신호: {single_signal_threshold:.2f})")
-        logger.info(f"최종 결정: {'EXIT' if should_exit else 'HOLD'}")
-    
+        logger.info(f"최종 결정: {'EXIT' if should_exit else 'HOLD'} - PnL: {unrealized_pnl if unrealized_pnl is not None else 'None'}")
+
     # 결과 반환
     result = {
         "should_exit": should_exit,
@@ -4926,6 +5511,7 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
     }
     
     return result
+
 
 ### 메인 AI 트레이딩 로직
 def ai_trading():
@@ -4953,6 +5539,10 @@ def ai_trading():
         
         if chart_image:
             logger.info("TradingView screenshot capture and analysis completed")
+            if signals_analysis:
+                logger.info("Chart signals analysis results received:")
+                logger.info(f"  - TimeframeSignals: {signals_analysis.get('TimeframeSignals', {}).get('bullish_count', 0)} bullish, {signals_analysis.get('TimeframeSignals', {}).get('bearish_count', 0)} bearish")
+                logger.info(f"  - IsRangingMarket: {signals_analysis.get('IsRangingMarket', False)}")
         else:
             logger.error("Screenshot capture failed after maximum retries")
             
@@ -5084,7 +5674,15 @@ def ai_trading():
 
     # 2. Assess exit signals
     try:
-        exit_assessment = assess_exit_signals(df_5min, signals_data, position_side)
+        exit_assessment = assess_exit_signals(
+            df_5min, 
+            signals_data, 
+            position_side, 
+            unrealized_pnl, 
+            df_hourly, 
+            df_4h,
+            signals_analysis  # signals_analysis 매개변수 명시적 전달
+        )
         if isinstance(exit_assessment, dict):
             should_exit = exit_assessment.get("should_exit", False)
             exit_signals_list = exit_assessment.get("exit_signals", [])
@@ -5144,10 +5742,10 @@ def ai_trading():
         logger.error(f"Error assessing market overheating: {e}")
 
     # 추가: 진입 조건 검증 함수
-    # 수정: Volume Oscillator 조건 완화
-    def verify_entry_conditions(signals_data, trend_strength_result, decision, current_position_side, df_5min, entry_price):
+    # 수정: verify_entry_conditions 함수에 횡보장 감지와 타임프레임 신호 테이블 검사 추가
+    def verify_entry_conditions(signals_data, trend_strength_result, decision, current_position_side, df_5min, entry_price, signals_analysis=None):
         """
-        진입 조건 검증 함수 - 단기 조정 징후를 고려하도록 개선
+        진입 조건 검증 함수 - 횡보장 감지와 타임프레임 신호 테이블 검사 추가
         
         Args:
             signals_data: 트레이딩 신호 데이터
@@ -5156,10 +5754,22 @@ def ai_trading():
             current_position_side: 현재 포지션 방향 ('long', 'short', None)
             df_5min: 5분 캔들 데이터프레임
             entry_price: 현재 가격
-        
+            signals_analysis: analyze_chart_signals 함수의 반환 결과
+            
         Returns:
             bool: 진입 조건 충족 여부
         """
+        # 새로 추가: signals_analysis가 None이 아닌 경우 횡보장 감지 및 타임프레임 신호 테이블 검사
+        is_ranging_market = False
+        timeframe_signals = None
+        
+        if signals_analysis is not None:
+            # 횡보장 감지 결과 확인
+            is_ranging_market = signals_analysis.get("IsRangingMarket", False)
+            
+            # 타임프레임 신호 테이블 결과 확인
+            timeframe_signals = signals_analysis.get("TimeframeSignals", {})
+        
         # 롱 포지션 진입 조건 검증
         if decision == "buy" and current_position_side is None:
             # 신호 유효성 확인 (캔들 수 40으로 확장)
@@ -5190,8 +5800,8 @@ def ai_trading():
             
             trend_valid = trend_strength_result.get("long_trend_strong", False)
             
-            # 가격 변화 조건 (1% 이상 상승하면 진입하지 않음)
-            price_valid = price_change_pct < 1.0
+            # 가격 변화 조건 (2% 이상 상승하면 진입하지 않음)
+            price_valid = price_change_pct < 2.0
             
             # 중요: 단기 조정 신호 확인 - short_term_correction 데이터 활용
             correction_signals = []
@@ -5202,16 +5812,52 @@ def ai_trading():
                 correction_signals = trend_strength_result["short_term_correction"].get("long_entry_correction_signals", [])
                 correction_likely = trend_strength_result["short_term_correction"].get("long_correction_likely", False)
             
+            # 새로 추가: 횡보장 감지 결과 기반 검증
+            ranging_valid = not is_ranging_market
+            if not ranging_valid:
+                logger.info("롱 진입 제한: 현재 시장이 횡보장 상태임")
+            
+            # 새로 추가: 타임프레임 신호 테이블 검증
+            timeframe_valid = True
+            
+            if timeframe_signals:
+                bullish_count = timeframe_signals.get("bullish_count", 0)
+                details = timeframe_signals.get("details", [])
+                
+                # 1. 상승 신호가 3개 이상인지 확인
+                timeframe_count_valid = bullish_count >= 3
+                
+                # 2. 5분봉 신호가 "Bullish"인지 확인
+                five_min_valid = False
+                for tf_signal in details:
+                    if tf_signal.get("timeframe") == "5" and tf_signal.get("signal") == "Bullish":
+                        five_min_valid = True
+                        break
+                
+                # 두 조건 모두 만족해야 함
+                timeframe_valid = timeframe_count_valid and five_min_valid
+                
+                if not timeframe_valid:
+                    if not timeframe_count_valid:
+                        logger.info(f"롱 진입 제한: 충분한 타임프레임 상승 신호가 없음 (bullish_count: {bullish_count})")
+                    if not five_min_valid:
+                        logger.info("롱 진입 제한: 5분봉 상승 신호가 없음")
+            
             # 단기 조정 가능성 로깅
             if correction_signals:
                 logger.info(f"롱 진입 전 단기 조정 신호 감지: {correction_signals}")
                 logger.info(f"단기 조정 가능성: {'높음' if correction_likely else '낮음'}")
             
             # 추가 로깅
-            logger.info(f"롱 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}")
+            logger.info(f"롱 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, " +
+                        f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
+                        f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}")
             
-            # 모든 기본 조건이 충족되는지 확인
-            base_conditions_met = blackflag_valid and utbot_valid and volume_valid and trend_valid and price_valid
+            # 모든 기본 조건이 충족되는지 확인 (횡보장 및 타임프레임 검증 추가)
+            base_conditions_met = (blackflag_valid and utbot_valid and 
+                                volume_valid and trend_valid and 
+                                price_valid and ranging_valid and 
+                                timeframe_valid)
             
             # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
             if base_conditions_met and correction_likely:
@@ -5222,7 +5868,7 @@ def ai_trading():
         
         # 숏 포지션 진입 조건 검증
         elif decision == "sell" and current_position_side is None:
-            # 신호 유효성 확인 (캔들 수 20으로 확장)
+            # 신호 유효성 확인 (캔들 수 40으로 확장)
             blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 40
             utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 40
             
@@ -5250,8 +5896,8 @@ def ai_trading():
             
             trend_valid = trend_strength_result.get("short_trend_strong", False)
             
-            # 가격 변화 조건 (1% 이상 하락하면 진입하지 않음)
-            price_valid = price_change_pct < 1.0
+            # 가격 변화 조건 (2% 이상 하락하면 진입하지 않음)
+            price_valid = price_change_pct < 2.0
             
             # 중요: 단기 조정 신호 확인 - short_term_correction 데이터 활용
             correction_signals = []
@@ -5262,16 +5908,52 @@ def ai_trading():
                 correction_signals = trend_strength_result["short_term_correction"].get("short_entry_correction_signals", [])
                 correction_likely = trend_strength_result["short_term_correction"].get("short_correction_likely", False)
             
+            # 새로 추가: 횡보장 감지 결과 기반 검증
+            ranging_valid = not is_ranging_market
+            if not ranging_valid:
+                logger.info("숏 진입 제한: 현재 시장이 횡보장 상태임")
+            
+            # 새로 추가: 타임프레임 신호 테이블 검증
+            timeframe_valid = True
+            
+            if timeframe_signals:
+                bearish_count = timeframe_signals.get("bearish_count", 0)
+                details = timeframe_signals.get("details", [])
+                
+                # 1. 하락 신호가 3개 이상인지 확인
+                timeframe_count_valid = bearish_count >= 3
+                
+                # 2. 5분봉 신호가 "Bearish"인지 확인
+                five_min_valid = False
+                for tf_signal in details:
+                    if tf_signal.get("timeframe") == "5" and tf_signal.get("signal") == "Bearish":
+                        five_min_valid = True
+                        break
+                
+                # 두 조건 모두 만족해야 함
+                timeframe_valid = timeframe_count_valid and five_min_valid
+                
+                if not timeframe_valid:
+                    if not timeframe_count_valid:
+                        logger.info(f"숏 진입 제한: 충분한 타임프레임 하락 신호가 없음 (bearish_count: {bearish_count})")
+                    if not five_min_valid:
+                        logger.info("숏 진입 제한: 5분봉 하락 신호가 없음")
+            
             # 단기 조정 가능성 로깅
             if correction_signals:
                 logger.info(f"숏 진입 전 단기 조정 신호 감지: {correction_signals}")
                 logger.info(f"단기 조정 가능성: {'높음' if correction_likely else '낮음'}")
             
             # 추가 로깅
-            logger.info(f"숏 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}")
+            logger.info(f"숏 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, " +
+                        f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
+                        f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}")
             
-            # 모든 기본 조건이 충족되는지 확인
-            base_conditions_met = blackflag_valid and utbot_valid and volume_valid and trend_valid and price_valid
+            # 모든 기본 조건이 충족되는지 확인 (횡보장 및 타임프레임 검증 추가)
+            base_conditions_met = (blackflag_valid and utbot_valid and 
+                                volume_valid and trend_valid and 
+                                price_valid and ranging_valid and 
+                                timeframe_valid)
             
             # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
             if base_conditions_met and correction_likely:
@@ -5285,8 +5967,8 @@ def ai_trading():
             return True
         
         # 다른 모든 경우 (e.g., "hold")
-        return True
-        
+        return True  
+
     def verify_exit_conditions(exit_assessment, decision, position_side):
         """
         AI의 출구(청산) 결정이 실제 출구 조건과 일치하는지 확인하는 함수
@@ -5486,6 +6168,15 @@ The data below must be considered in your analysis.
 - Long Correction Likely: {"YES" if long_correction_likely else "NO"}
 - Short Correction Likely: {"YES" if short_correction_likely else "NO"}
 
+**NEW - RANGING MARKET DETECTION (PRE-CALCULATED):**
+- Is Market in Ranging State: {"YES" if signals_analysis.get('IsRangingMarket', False) else "NO"}
+
+**NEW - TIMEFRAME SIGNALS TABLE (PRE-CALCULATED):**
+- Bullish Count: {signals_analysis.get('TimeframeSignals', {}).get('bullish_count', 0)}/5 timeframes
+- Bearish Count: {signals_analysis.get('TimeframeSignals', {}).get('bearish_count', 0)}/5 timeframes
+- Ranging Count: {signals_analysis.get('TimeframeSignals', {}).get('ranging_count', 0)}/5 timeframes
+- 5-Min Timeframe Signal: {next((tf.get('signal', 'Unknown') for tf in signals_analysis.get('TimeframeSignals', {}).get('details', []) if tf.get('timeframe') == '5'), 'Unknown')}
+
 **EXIT SIGNALS ASSESSMENT (PRE-CALCULATED):**
 - Should Exit Current Position: {"YES" if should_exit else "NO"}
 - Exit Signals Detected: {len(exit_signals_list)}
@@ -5503,12 +6194,16 @@ For a valid PRIMARY entry, ALL of the following must be true:
 2. **UT Bot Alerts:** Must display a BUY alert within the last 40 candles.
 3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"}).
+5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
+6. **NEW - Timeframe Signals:** At least 3 timeframes must show bullish signals AND the 5-minute timeframe MUST be bullish.
 
 **For Short Entry:**
 1. **BlackFlag FTS:** Must show a SELL signal within the last 40 candles.
 2. **UT Bot Alerts:** Must display a SELL alert within the last 40 candles.
 3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"}).
+5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
+6. **NEW - Timeframe Signals:** At least 3 timeframes must show bearish signals AND the 5-minute timeframe MUST be bearish.
 
 **Additional Rule: Short-Term Correction Detection:**
 1. If short-term correction signals are detected for the direction you are considering entering:
@@ -5517,44 +6212,20 @@ For a valid PRIMARY entry, ALL of the following must be true:
    - Provide specific reasoning referencing which correction signals were detected.
    - Recommend waiting for the temporary reversal to complete for better entry price.
 
-**Specific Correction Signals to Watch For:**
-- RSI overbought/oversold extremes (>75 / <25)
-- Price moving above/below Bollinger Bands by more than 0.2%
-- Three or more consecutive candles with increasing body size
-- Divergence between price and RSI/MACD
-- Volume spikes (200%+ of average) with counter-trend price movement
-- MACD histogram showing decreasing momentum despite price movement
+## 5. UPDATED: TREND STRENGTH ASSESSMENT RULES
+The trend strength assessment is pre-calculated and provided as Boolean variables:
+- Long Trend Strength: {"STRONG" if long_trend_strong else "WEAK"}
+- Short Trend Strength: {"STRONG" if short_trend_strong else "WEAK"}
 
-## 5. NEW: SHORT-TERM CORRECTION DETECTION RULES
+These values already incorporate the following refined criteria:
+- Updated volatility thresholds for Bollinger Bands
+- Adjusted RSI thresholds for potential overheating/oversold conditions
+- Modified price extreme detection parameters
+- Enhanced extended trend requirements
+- Optimized moving average interaction calculations
+- Refined momentum detection parameters
 
-**CRITICAL: Even when primary entry conditions are met, check for short-term correction signals before entry:**
-
-**Signs of Imminent Corrections for LONG Entries:**
-1. RSI(5-min) > 75 (Overbought condition)
-2. Price is above upper Bollinger Band by more than 0.2%
-3. Three or more consecutive green candles with increasing body size
-4. Bearish divergence between price and RSI or MACD on 5-min chart
-5. Sudden volume spike (200%+ of average) on last candle with price rise
-6. MACD histogram showing decreasing momentum despite price increase
-
-**Signs of Imminent Corrections for SHORT Entries:**
-1. RSI(5-min) < 25 (Oversold condition)
-2. Price is below lower Bollinger Band by more than 0.2%
-3. Three or more consecutive red candles with increasing body size
-4. Bullish divergence between price and RSI or MACD on 5-min chart
-5. Sudden volume spike (200%+ of average) on last candle with price drop
-6. MACD histogram showing decreasing momentum despite price decrease
-
-**If 2 or more correction signals are present:**
-- Issue "hold" decision even if primary entry conditions are met
-- Explain which correction signals were detected
-- Recommend waiting for potential local extrema (correction completion)
-
-**Optimal Entry Timing After Correction:**
-1. For LONG: Enter after temporary dip shows signs of reversal (price bouncing off support, RSI moving up from <40, bullish candle after series of bearish ones)
-2. For SHORT: Enter after temporary rise shows signs of reversal (price bouncing off resistance, RSI moving down from >60, bearish candle after series of bullish ones)
-
-## 6. Exit Rules:
+## 6. UPDATED: EXIT SIGNALS ASSESSMENT RULES
 1. If exit signals are detected (pre-calculated as {"YES" if should_exit else "NO"}), exit the current position immediately using the correct command (sell to exit long, buy to exit short).
 
 ## 7. Position Sizing Rules:
@@ -5625,9 +6296,11 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                                 Recent news headlines: {json.dumps(news_headlines)}
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}
                                 
-                                Core indicators & Stop Loss Price: {trading_signals_text}
-                                
-                                # Short-Term Correction Signals (추가)
+                                # Chart Analysis Results
+                                Timeframe Signals: {json.dumps(signals_analysis.get('TimeframeSignals', {}) if signals_analysis else {})}
+                                Is Ranging Market: {signals_analysis.get('IsRangingMarket', False) if signals_analysis else False}
+
+                                # Short-Term Correction Signals
                                 Long Entry Correction Signals: {json.dumps(long_correction_signals)}
                                 Short Entry Correction Signals: {json.dumps(short_correction_signals)}
                                 Long Correction Likely: {"YES" if long_correction_likely else "NO"} ({len(long_correction_signals)} signals)
@@ -5668,7 +6341,15 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
 
             # 여기에 추가: 진입 조건 검증
             # ai_trading 함수 내 verify_entry_conditions 호출 부분 변경
-            if not verify_entry_conditions(signals_data, trend_strength_result, result.decision, position_side, df_5min, current_price):
+            if not verify_entry_conditions(
+                signals_data, 
+                trend_strength_result, 
+                result.decision, 
+                position_side, 
+                df_5min, 
+                current_price,
+                signals_analysis  # signals_analysis 매개변수 명시적 전달
+            ):
                 logger.warning(f"AI 결정 '{result.decision}'이 모든 진입 조건을 충족하지 않음. 'hold'로 변경됩니다.")
                 original_decision = result.decision
                 original_reason = result.reason
