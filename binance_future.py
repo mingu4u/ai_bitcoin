@@ -4352,7 +4352,7 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
 
 def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=None, df_hourly=None, df_4h=None, signals_analysis=None):
     """
-    출구 신호 평가 - 추가된 횡보장 감지 및 타임프레임 신호 테이블 고려
+    출구 신호 평가 - 좀 더 엄격한 기준 적용 및 중장기적 신호 우선시
     
     Args:
         df_5min: 5분 OHLCV 데이터프레임 (지표 포함)
@@ -4382,7 +4382,7 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
     trend_strength = 1.0  # 기본 강도
     higher_timeframe_signals = []  # 상위 타임프레임 신호
     
-    # 새로 추가: 횡보장 감지 및 타임프레임 신호 테이블 결과 파싱
+    # 횡보장 감지 및 타임프레임 신호 테이블 결과 파싱
     is_ranging_market = False
     timeframe_signals = None
     
@@ -4397,79 +4397,49 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
         if is_ranging_market:
             logger.info("현재 시장이 횡보장 상태로 감지됨")
             exit_signals.append("횡보장 상태 감지")
-            # 손실일 경우 횡보장에서 빠르게 탈출
-            weight = 0.9 if unrealized_pnl is not None and unrealized_pnl < 0 else 0.7
+            # 손실일 경우에도 횡보장에서 더 참고 기다림 - 가중치 감소
+            weight = 0.5 if unrealized_pnl is not None and unrealized_pnl < 0 else 0.4
             exit_signal_weights.append(weight)
     
-    # PnL 기반 가중치 조정
+    # PnL 기반 가중치 조정 - 손실에 덜 민감하게 조정
     pnl_multiplier = 1.0  # 기본값
     
-    # 손실 포지션에 대한 가중치 증가 (더 신속한 종료를 위해) - 강화
+    # 손실 포지션에 대한 가중치 증가 (더 신중한 종료를 위해) - 강화
     if unrealized_pnl is not None and unrealized_pnl < 0:
-        # 손실이 클수록 가중치 증가 (손실폭 -8% -> -6%일 때 최대 가중치)
-        loss_severity = min(abs(unrealized_pnl) / 6.0, 1.0)  # 8.0 -> 6.0으로 변경
-        pnl_multiplier = 1.0 + (loss_severity * 0.7)  # 0.5 -> 0.7로 증가 (최대 1.7배 가중치)
+        # 손실이 클수록 가중치 증가 (손실폭 -12% -> -10%일 때 최대 가중치)
+        loss_severity = min(abs(unrealized_pnl) / 10.0, 1.0)  # 10.0으로 변경 (이전 6.0)
+        pnl_multiplier = 1.0 + (loss_severity * 0.5)  # 0.7 -> 0.5로 감소 (최대 1.5배 가중치)
         
         # 손실 수준에 따른 로깅
-        if loss_severity >= 0.7:  # 심각한 손실 (-4.2% 이상)
+        if loss_severity >= 0.8:  # 심각한 손실 (-8.0% 이상)
             logger.warning(f"심각한 손실 감지: PnL {unrealized_pnl:.2f}%, 가중치 {pnl_multiplier:.2f}배 증가")
             exit_signals.append(f"심각한 손실 감지 (PnL: {unrealized_pnl:.2f}%)")
-            exit_signal_weights.append(1.0 * pnl_multiplier)  # 0.9 -> 1.0으로 증가
-        elif loss_severity >= 0.3:  # 중간 수준 손실 (-1.8% 이상)
+            exit_signal_weights.append(0.9 * pnl_multiplier)  # 1.0 -> 0.9로 감소
+        elif loss_severity >= 0.5:  # 중간 수준 손실 (-5.0% 이상)
             logger.info(f"중간 수준 손실 감지: PnL {unrealized_pnl:.2f}%, 가중치 {pnl_multiplier:.2f}배 증가")
             exit_signals.append(f"중간 수준 손실 감지 (PnL: {unrealized_pnl:.2f}%)")
-            exit_signal_weights.append(0.7 * pnl_multiplier)  # 0.6 -> 0.7로 증가
+            exit_signal_weights.append(0.6 * pnl_multiplier)  # 0.7 -> 0.6으로 감소
     elif unrealized_pnl is not None and unrealized_pnl > 0:
         # 트레일링 스탑로스를 고려한 더 너그러운 가중치 적용
-        profit_level = min(unrealized_pnl / 30.0, 1.0)  # 0~1 사이 값으로 정규화 (10.0 → 30.0으로 변경)
+        profit_level = min(unrealized_pnl / 40.0, 1.0)  # 30.0 → 40.0으로 변경 (더 높은 이익 허용)
         
-        # pnl_multiplier 크게 감소 (0.7 → 0.5)
-        pnl_multiplier = max(1.0 - (profit_level * 0.5), 0.5)  # 최소 0.5배로 가중치 더 축소
+        # pnl_multiplier 크게 감소 (0.5 → 0.4)
+        pnl_multiplier = max(1.0 - (profit_level * 0.6), 0.4)  # 최소 0.4배로 가중치 더 축소
         
-        if unrealized_pnl > 30:  # 매우 높은 수익 (30% 이상)
+        if unrealized_pnl > 40:  # 매우 높은 수익 (40% 이상)
             # 매우 높은 수익에서 출구 신호 가중치 크게 감소
             logger.info(f"매우 큰 수익 감지: PnL {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화됨")
             exit_signals.append(f"매우 큰 수익 감지 (PnL: {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화)")
-            exit_signal_weights.append(0.35)  # 0.4 → 0.35로 감소
-        elif unrealized_pnl > 20:  # 높은 수익 (20-30%)
+            exit_signal_weights.append(0.3)  # 0.35 → 0.3으로 감소
+        elif unrealized_pnl > 30:  # 높은 수익 (30-40%)
             logger.info(f"높은 수익 감지: PnL {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화됨")
             exit_signals.append(f"높은 수익 감지 (PnL: {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화)")
-            exit_signal_weights.append(0.4)  # 중간 수준 가중치
-        elif unrealized_pnl > 10:  # 중간 수익 (10-20%)
+            exit_signal_weights.append(0.35)  # 0.4 → 0.35로 감소
+        elif unrealized_pnl > 15:  # 중간 수익 (15-30%), 이전 10-20%에서 변경
             logger.info(f"중간 수준 수익 감지: PnL {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화됨")
             # 추가 신호 없음 - 트레일링 스탑로스에 의존
-        elif unrealized_pnl > 5:  # 적당한 수익 (5-10%)
-            logger.info(f"적당한 수익 상태: PnL {unrealized_pnl:.2f}%, 트레일링 스탑로스 활성화됨")
-            # 추가 신호 없음 - 트레일링 스탑로스에 의존
 
-    # 새로 추가: 타임프레임 신호 테이블 기반 출구 신호 평가
-    if timeframe_signals and position_side:
-        bullish_count = timeframe_signals.get("bullish_count", 0)
-        bearish_count = timeframe_signals.get("bearish_count", 0)
-        details = timeframe_signals.get("details", [])
-        
-        # 5분봉 신호 상태 확인
-        five_min_signal = None
-        for tf_signal in details:
-            if tf_signal.get("timeframe") == "5":
-                five_min_signal = tf_signal.get("signal")
-                break
-                
-        # 롱 포지션 & 하락 신호 다수
-        if position_side == 'long' and bearish_count >= 3 and five_min_signal == "Bearish":
-            logger.info(f"롱 포지션에 대한 다수의 하락 신호 감지 (bearish_count: {bearish_count}, 5분봉: {five_min_signal})")
-            exit_signals.append(f"다수의 타임프레임에서 하락 신호 감지 ({bearish_count}/5 타임프레임)")
-            weight = 0.85 * pnl_multiplier
-            exit_signal_weights.append(weight)
-            
-        # 숏 포지션 & 상승 신호 다수
-        elif position_side == 'short' and bullish_count >= 3 and five_min_signal == "Bullish":
-            logger.info(f"숏 포지션에 대한 다수의 상승 신호 감지 (bullish_count: {bullish_count}, 5분봉: {five_min_signal})")
-            exit_signals.append(f"다수의 타임프레임에서 상승 신호 감지 ({bullish_count}/5 타임프레임)")
-            weight = 0.85 * pnl_multiplier
-            exit_signal_weights.append(weight)
-    
-    # 0. 중요: 상위 타임프레임 추세 강화 (1시간 및 4시간 차트 분석)
+    # 상위 타임프레임 추세 확인 - 4시간 차트에 더 높은 가중치 부여
     if df_hourly is not None:
         try:
             latest_hourly = df_hourly.iloc[-1]
@@ -4487,39 +4457,39 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                 latest_hourly = df_hourly.iloc[-1]
                 ema_sma_ratio = latest_hourly['ema_50'] / latest_hourly['sma_200']
                 
-                # 상승 추세 (EMA50 > SMA200) - 완화: 1.01 -> 1.015
-                if ema_sma_ratio > 1.015:
+                # 상승 추세 (EMA50 > SMA200) - 더 엄격하게: 1.015 -> 1.025
+                if ema_sma_ratio > 1.025:
                     higher_timeframe_trend = "bullish"
-                    # 추세가 강할수록 신호 가중치를 더 낮춤 - 완화: 0.7 -> 0.65
-                    trend_strength = 0.65
+                    # 추세가 강할수록 신호 가중치를 더 낮춤 - 더 엄격하게: 0.65 -> 0.6
+                    trend_strength = 0.6
                     higher_timeframe_signals.append(f"1시간 차트 강한 상승 추세: EMA50/SMA200 = {ema_sma_ratio:.3f}")
                     
-                    # 롱 포지션의 경우 상승 추세에서 출구 신호 가중치 추가 감소 - 완화: 0.6 -> 0.55
+                    # 롱 포지션의 경우 상승 추세에서 출구 신호 가중치 추가 감소 - 더 엄격하게: 0.55 -> 0.5
                     if position_side == 'long':
-                        trend_strength = 0.55
+                        trend_strength = 0.5
                 
-                # 하락 추세 (EMA50 < SMA200) - 완화: 0.99 -> 0.985
-                elif ema_sma_ratio < 0.985:
+                # 하락 추세 (EMA50 < SMA200) - 더 엄격하게: 0.985 -> 0.975
+                elif ema_sma_ratio < 0.975:
                     higher_timeframe_trend = "bearish"
-                    # 추세가 강할수록 신호 가중치를 더 낮춤 - 완화: 0.7 -> 0.65
-                    trend_strength = 0.65
+                    # 추세가 강할수록 신호 가중치를 더 낮춤 - 더 엄격하게: 0.65 -> 0.6
+                    trend_strength = 0.6
                     higher_timeframe_signals.append(f"1시간 차트 강한 하락 추세: EMA50/SMA200 = {ema_sma_ratio:.3f}")
                     
-                    # 숏 포지션의 경우 하락 추세에서 출구 신호 가중치 추가 감소 - 완화: 0.6 -> 0.55
+                    # 숏 포지션의 경우 하락 추세에서 출구 신호 가중치 추가 감소 - 더 엄격하게: 0.55 -> 0.5
                     if position_side == 'short':
-                        trend_strength = 0.55
+                        trend_strength = 0.5
             
-            # 1시간 ADX로 추세 강도 평가 - 완화: 35 -> 30
+            # 1시간 ADX로 추세 강도 평가 - 더 엄격하게: 30 -> 35
             if 'adx' in df_hourly.columns:
                 hourly_adx = df_hourly['adx'].iloc[-1]
-                if hourly_adx > 30:
-                    # 가중치 추가 감소 - 완화: 0.8 -> 0.75
-                    trend_strength *= 0.75
+                if hourly_adx > 35:
+                    # 가중치 추가 감소 - 더 엄격하게: 0.75 -> 0.7
+                    trend_strength *= 0.7
                     higher_timeframe_signals.append(f"1시간 ADX 매우 높음 ({hourly_adx:.1f}) - 더 강한 추세 확인")
         except Exception as e:
             logger.error(f"1시간 차트 추세 확인 중 오류: {e}")
 
-    # 4시간 차트 분석 (더 장기적 관점) - 완화
+    # 4시간 차트 분석 (더 장기적 관점) - 더 큰 가중치 부여
     if df_4h is not None:
         try:
             latest_4h = df_4h.iloc[-1]
@@ -4535,34 +4505,34 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             if 'ema_50' in df_4h.columns and 'sma_100' in df_4h.columns:
                 ema_sma_ratio_4h = latest_4h['ema_50'] / latest_4h['sma_100']
                 
-                # 상승 추세 (EMA50 > SMA100) - 완화: 1.015 -> 1.02
-                if ema_sma_ratio_4h > 1.02:
+                # 상승 추세 (EMA50 > SMA100) - 더 엄격하게: 1.02 -> 1.025
+                if ema_sma_ratio_4h > 1.025:
                     if higher_timeframe_trend == "bullish":
-                        # 1시간 + 4시간 모두 상승 추세 = 추가 가중치 감소 - 완화: 0.8 -> 0.75
-                        trend_strength *= 0.75
+                        # 1시간 + 4시간 모두 상승 추세 = 추가 가중치 감소 - 더 엄격하게: 0.75 -> 0.65
+                        trend_strength *= 0.65
                         higher_timeframe_signals.append(f"4시간 차트도 강한 상승 추세 확인: EMA50/SMA100 = {ema_sma_ratio_4h:.3f}")
                         
-                        # 롱 포지션의 경우 두 타임프레임 모두 강한 상승 추세면 출구 신호 가중치 크게 감소 - 완화: 0.8 -> 0.75
+                        # 롱 포지션의 경우 두 타임프레임 모두 강한 상승 추세면 출구 신호 가중치 크게 감소 - 더 엄격하게: 0.75 -> 0.65
                         if position_side == 'long':
-                            trend_strength *= 0.75
+                            trend_strength *= 0.65
                     else:
-                        # 1시간은 다른 추세, 4시간은 상승 추세 = 중간 레벨 가중치 - 완화: 0.8 -> 0.75
-                        trend_strength = 0.75
+                        # 1시간은 다른 추세, 4시간은 상승 추세 = 중간 레벨 가중치 - 더 엄격하게: 0.75 -> 0.7
+                        trend_strength = 0.7
                         higher_timeframe_signals.append(f"4시간 차트는 상승 추세: EMA50/SMA100 = {ema_sma_ratio_4h:.3f}")
                 
-                # 하락 추세 (EMA50 < SMA100) - 완화: 0.985 -> 0.98
-                elif ema_sma_ratio_4h < 0.98:
+                # 하락 추세 (EMA50 < SMA100) - 더 엄격하게: 0.98 -> 0.975
+                elif ema_sma_ratio_4h < 0.975:
                     if higher_timeframe_trend == "bearish":
-                        # 1시간 + 4시간 모두 하락 추세 = 추가 가중치 감소 - 완화: 0.8 -> 0.75
-                        trend_strength *= 0.75
+                        # 1시간 + 4시간 모두 하락 추세 = 추가 가중치 감소 - 더 엄격하게: 0.75 -> 0.65
+                        trend_strength *= 0.65
                         higher_timeframe_signals.append(f"4시간 차트도 강한 하락 추세 확인: EMA50/SMA100 = {ema_sma_ratio_4h:.3f}")
                         
-                        # 숏 포지션의 경우 두 타임프레임 모두 강한 하락 추세면 출구 신호 가중치 크게 감소 - 완화: 0.8 -> 0.75
+                        # 숏 포지션의 경우 두 타임프레임 모두 강한 하락 추세면 출구 신호 가중치 크게 감소 - 더 엄격하게: 0.75 -> 0.65
                         if position_side == 'short':
-                            trend_strength *= 0.75
+                            trend_strength *= 0.65
                     else:
-                        # 1시간은 다른 추세, 4시간은 하락 추세 = 중간 레벨 가중치 - 완화: 0.8 -> 0.75
-                        trend_strength = 0.75
+                        # 1시간은 다른 추세, 4시간은 하락 추세 = 중간 레벨 가중치 - 더 엄격하게: 0.75 -> 0.7
+                        trend_strength = 0.7
                         higher_timeframe_signals.append(f"4시간 차트는 하락 추세: EMA50/SMA100 = {ema_sma_ratio_4h:.3f}")
         except Exception as e:
             logger.error(f"4시간 차트 추세 확인 중 오류: {e}")
@@ -4574,19 +4544,18 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             logger.info(f"  - {signal}")
             
     # 1. 핵심 신호의 명확한 반전 확인 (BlackFlag와 UTBot) 
-    # - 손실 포지션의 경우 캔들 임계값 축소 (더 빠른 반응)
-    # - 이익 포지션의 경우 임계값 확대 (더 늦은 반응)
+    # - 캔들 임계값 확대 (더 오래 기다리도록)
     try:
-        # 캔들 임계값 설정 - PnL 기반 차별화
+        # 캔들 임계값 설정 - PnL 기반 차별화 및 상향 조정
         if unrealized_pnl is not None and unrealized_pnl < 0:
-            # 손실 포지션일 경우, 더 빠른 반응을 위해 캔들 임계값 축소
-            candle_threshold = 3  # 기존 5에서 3으로 축소 (빠른 대응)
+            # 손실 포지션일 경우에도 더 신중하게: 3 -> 5
+            candle_threshold = 5
         elif unrealized_pnl is not None and unrealized_pnl > 5:
             # 상당한 이익 포지션일 경우, 더 늦은 반응을 위해 캔들 임계값 확대
-            candle_threshold = 7  # 기존 5에서 7로 확대 (더 오래 보유)
+            candle_threshold = 9  # 7 -> 9로 확대 (더 오래 보유)
         else:
-            # 기본 임계값 유지
-            candle_threshold = 5
+            # 기본 임계값 상향 조정
+            candle_threshold = 7  # 5 -> 7로 확대
         
         if position_side == 'long':
             bf_reversed = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= candle_threshold
@@ -4597,24 +4566,24 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             
             if bf_reversed and ut_reversed:  # 두 신호 모두 반전되고 최근인 경우
                 exit_signals.append(f"BlackFlag 및 UTBot 신호가 최근에 Sell로 반전됨 ({candle_threshold} 캔들 이내)")
-                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
-                base_weight = 1.0 * trend_strength if apply_full_weight else 0.8 * trend_strength
+                # 상위 타임프레임 추세 반영 - 가중치 감소
+                base_weight = 0.9 * trend_strength if apply_full_weight else 0.7 * trend_strength  # 0.8 -> 0.7로 감소
                 weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
                 
             elif bf_reversed and signals_data.get("BlackFlag_CandlesAgo", 999) <= max(1, candle_threshold // 2):  
                 # BlackFlag만 반전되었지만 매우 최근인 경우
                 exit_signals.append(f"최근 BlackFlag FTS 신호가 Sell로 반전됨 ({max(1, candle_threshold // 2)} 캔들 이내)")
-                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
-                base_weight = 0.8 * trend_strength if apply_full_weight else 0.7 * trend_strength
+                # 상위 타임프레임 추세 반영 - 가중치 감소
+                base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength  # 0.7 -> 0.6으로 감소
                 weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
                 
             elif ut_reversed and signals_data.get("UTBot_CandlesAgo", 999) <= max(1, candle_threshold // 2):  
                 # UTBot만 반전되었지만 매우 최근인 경우
                 exit_signals.append(f"최근 UTBot 신호가 Sell로 반전됨 ({max(1, candle_threshold // 2)} 캔들 이내)")
-                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
-                base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength
+                # 상위 타임프레임 추세 반영 - 가중치 감소
+                base_weight = 0.6 * trend_strength if apply_full_weight else 0.5 * trend_strength  # 0.6 -> 0.5로 감소
                 weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
             
@@ -4627,47 +4596,47 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             
             if bf_reversed and ut_reversed:  # 두 신호 모두 반전되고 최근인 경우
                 exit_signals.append(f"BlackFlag 및 UTBot 신호가 최근에 Buy로 반전됨 ({candle_threshold} 캔들 이내)")
-                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
-                base_weight = 1.0 * trend_strength if apply_full_weight else 0.8 * trend_strength
+                # 상위 타임프레임 추세 반영 - 가중치 감소
+                base_weight = 0.9 * trend_strength if apply_full_weight else 0.7 * trend_strength  # 0.8 -> 0.7로 감소
                 weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
                 
             elif bf_reversed and signals_data.get("BlackFlag_CandlesAgo", 999) <= max(1, candle_threshold // 2):  
                 # BlackFlag만 반전되었지만 매우 최근인 경우
                 exit_signals.append(f"최근 BlackFlag FTS 신호가 Buy로 반전됨 ({max(1, candle_threshold // 2)} 캔들 이내)")
-                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
-                base_weight = 0.8 * trend_strength if apply_full_weight else 0.7 * trend_strength
+                # 상위 타임프레임 추세 반영 - 가중치 감소
+                base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength  # 0.7 -> 0.6으로 감소
                 weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
                 
             elif ut_reversed and signals_data.get("UTBot_CandlesAgo", 999) <= max(1, candle_threshold // 2):  
                 # UTBot만 반전되었지만 매우 최근인 경우
                 exit_signals.append(f"최근 UTBot 신호가 Buy로 반전됨 ({max(1, candle_threshold // 2)} 캔들 이내)")
-                # 상위 타임프레임 추세 반영 - PnL이 음수면 가중치 강화
-                base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength
+                # 상위 타임프레임 추세 반영 - 가중치 감소
+                base_weight = 0.6 * trend_strength if apply_full_weight else 0.5 * trend_strength  # 0.6 -> 0.5로 감소
                 weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"핵심 신호 반전 확인 중 오류: {e}")
     
-    # 2. Volume Oscillator 확인 - 임계값 및 조건 차별화
+    # 2. Volume Oscillator 확인 - 임계값 및 조건 강화
     try:
         volume_osc_current = signals_data.get("VolumeOsc_Current")
         volume_osc_history = signals_data.get("VolumeOsc_History", [])
         
-        # PnL에 따라 연속성 조건 차별화
+        # PnL에 따라 연속성 조건 차별화 (모두 강화)
         if unrealized_pnl is not None and unrealized_pnl < 0:
-            # 손실 포지션일 경우, 더 빠른 감지를 위해 조건 완화
-            required_consecutive = 4  # 5 -> 4로 감소
-            threshold_value = -20     # -25 -> -20으로 완화
+            # 손실 포지션일 경우에도 더 신중하게
+            required_consecutive = 5  # 4 -> 5로 증가
+            threshold_value = -25     # -20 -> -25로 강화
         elif unrealized_pnl is not None and unrealized_pnl > 5:
             # 이익 포지션일 경우, 더 오래 보유하기 위해 조건 강화
+            required_consecutive = 7  # 6 -> 7로 증가
+            threshold_value = -35     # -30 -> -35로 강화
+        else:
+            # 기본 조건 강화
             required_consecutive = 6  # 5 -> 6으로 증가
             threshold_value = -30     # -25 -> -30으로 강화
-        else:
-            # 기본 조건 유지
-            required_consecutive = 5
-            threshold_value = -25
         
         consecutive_negative = 0
         
@@ -4690,44 +4659,44 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                 
             exit_signals.append(f"Volume Oscillator가 연속적으로 매우 음수 ({threshold_value} 미만): {consecutive_negative}개 연속 캔들")
             
-            # PnL에 따른 가중치 조정
-            base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength
+            # PnL에 따른 가중치 조정 - 감소
+            base_weight = 0.6 * trend_strength if apply_full_weight else 0.5 * trend_strength  # 0.7/0.6 -> 0.6/0.5로 감소
             weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
             exit_signal_weights.append(weight)
             
-        # 현재 값이 매우 낮은 경우 - PnL에 따라 임계값 차별화
+        # 현재 값이 매우 낮은 경우 - PnL에 따라 임계값 차별화 (모두 강화)
         elif volume_osc_current is not None:
-            extreme_threshold = -35  # 기본값
+            extreme_threshold = -40  # -35 -> -40으로 강화
             
             if unrealized_pnl is not None and unrealized_pnl < 0:
-                # 손실 포지션일 경우 임계값 완화
-                extreme_threshold = -30  # -40 -> -30으로 완화
+                # 손실 포지션일 경우에도 임계값 강화
+                extreme_threshold = -35  # -30 -> -35로 강화
             elif unrealized_pnl is not None and unrealized_pnl > 5:
                 # 이익 포지션일 경우 임계값 강화
-                extreme_threshold = -45  # -40 -> -45로 강화
+                extreme_threshold = -50  # -45 -> -50으로 강화
                 
             if float(volume_osc_current) < extreme_threshold:
                 exit_signals.append(f"Volume Oscillator 극도로 낮은 값 ({extreme_threshold} 미만): {volume_osc_current}")
                 
-                # PnL에 따른 가중치 조정
-                base_weight = 0.6 * trend_strength
+                # PnL에 따른 가중치 조정 - 감소
+                base_weight = 0.5 * trend_strength  # 0.6 -> 0.5로 감소
                 weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                 exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"Volume Oscillator 확인 중 오류: {e}")
 
-    # 3. 다이버전스 감지 - PnL에 따라 차별화된 임계치 적용
+    # 3. 다이버전스 감지 - 더 명확한 다이버전스만 감지하도록 강화
     try:
-        # 다이버전스 체크를 위한 캔들 수 설정 - PnL 기반 차별화
+        # 다이버전스 체크를 위한 캔들 수 설정 - 더 넓은 범위로 확장
         if unrealized_pnl is not None and unrealized_pnl < 0:
-            # 손실 포지션일 경우, 더 민감하게 반응하도록 캔들 수 증가
-            divergence_candles = 12  # 15 -> 12로 감소
+            # 손실 포지션일 경우에도 더 신중하게 - 기간 확대
+            divergence_candles = 20  # 12 -> 20으로 증가
         elif unrealized_pnl is not None and unrealized_pnl > 5:
             # 이익 포지션일 경우, 덜 민감하게 반응하도록 캔들 수 증가
-            divergence_candles = 18  # 15 -> 18로 증가
+            divergence_candles = 25  # 18 -> 25로 증가
         else:
-            # 기본 캔들 수 유지
-            divergence_candles = 15
+            # 기본 캔들 수 확대
+            divergence_candles = 20  # 15 -> 20으로 증가
             
         # 다이버전스 체크를 위한 캔들 준비
         recent_df = df_5min.iloc[-divergence_candles:].copy()
@@ -4746,24 +4715,24 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                 if recent_df['rsi'].iloc[i] > recent_df['rsi'].iloc[i-1] and recent_df['rsi'].iloc[i] > recent_df['rsi'].iloc[i+1]:
                     rsi_peaks.append((i, recent_df['rsi'].iloc[i]))
             
-            # 피크가 더 명확해야 함 - PnL 기반 차별화
+            # 피크가 더 명확해야 함 - PnL 기반 차별화 및 모두 강화
             if len(price_peaks) >= 2 and len(rsi_peaks) >= 2:
                 # 최근 두 개의 가격 피크와 RSI 피크 비교
                 price_peak1, price_peak2 = price_peaks[-2:]
                 rsi_peak1, rsi_peak2 = rsi_peaks[-2:]
                 
-                # PnL 기반 임계값 차별화
-                price_threshold = 1.015  # 기본 1.02
-                rsi_threshold = 0.92     # 기본 0.9
+                # PnL 기반 임계값 차별화 - 모두 강화
+                price_threshold = 1.025  # 1.015 -> 1.025로 강화
+                rsi_threshold = 0.88     # 0.92 -> 0.88로 강화
                 
                 if unrealized_pnl is not None and unrealized_pnl < 0:
-                    # 손실 포지션일 경우 임계값 완화
-                    price_threshold = 1.01  # 1.02 -> 1.01로 완화
-                    rsi_threshold = 0.94    # 0.9 -> 0.94로 완화
+                    # 손실 포지션일 경우에도 임계값 강화
+                    price_threshold = 1.02  # 1.01 -> 1.02로 강화
+                    rsi_threshold = 0.9    # 0.94 -> 0.9으로 강화
                 elif unrealized_pnl is not None and unrealized_pnl > 5:
-                    # 이익 포지션일 경우 임계값 강화
-                    price_threshold = 1.025  # 1.02 -> 1.025로 강화
-                    rsi_threshold = 0.87     # 0.9 -> 0.87로 강화
+                    # 이익 포지션일 경우 임계값 더 강화
+                    price_threshold = 1.03  # 1.025 -> 1.03으로 강화
+                    rsi_threshold = 0.85     # 0.87 -> 0.85로 강화
                 
                 # 가격은 더 높은 고점을 만들고 RSI는 더 낮은 고점을 만드는지 확인 (명확한 다이버전스)
                 if (price_peak2[1] > price_peak1[1] * price_threshold) and (rsi_peak2[1] < rsi_peak1[1] * rsi_threshold):
@@ -4772,8 +4741,8 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     
                     exit_signals.append(f"롱 포지션에서 명확한 RSI 베어리시 다이버전스 감지 (가격 {(price_threshold-1)*100:.1f}%+ 상승, RSI {(1-rsi_threshold)*100:.1f}%+ 하락)")
                     
-                    # PnL에 따른 가중치 조정
-                    base_weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    # PnL에 따른 가중치 조정 - 감소
+                    base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength  # 0.8/0.65 -> 0.7/0.55로 감소
                     weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
 
@@ -4785,18 +4754,18 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     if recent_df['macd'].iloc[i] > recent_df['macd'].iloc[i-1] and recent_df['macd'].iloc[i] > recent_df['macd'].iloc[i+1]:
                         macd_peaks.append((i, recent_df['macd'].iloc[i]))
                 
-                # PnL 기반 임계값 차별화
-                price_threshold = 1.015  # 기본 1.02
-                macd_threshold = 0.92     # 기본 0.9
+                # PnL 기반 임계값 차별화 - 모두 강화
+                price_threshold = 1.025  # 1.015 -> 1.025로 강화
+                macd_threshold = 0.88     # 0.92 -> 0.88로 강화
                 
                 if unrealized_pnl is not None and unrealized_pnl < 0:
-                    # 손실 포지션일 경우 임계값 완화
-                    price_threshold = 1.01  # 1.02 -> 1.01로 완화
-                    macd_threshold = 0.94    # 0.9 -> 0.94로 완화
+                    # 손실 포지션일 경우에도 임계값 강화
+                    price_threshold = 1.02  # 1.01 -> 1.02로 강화
+                    macd_threshold = 0.9    # 0.94 -> 0.9으로 강화
                 elif unrealized_pnl is not None and unrealized_pnl > 5:
-                    # 이익 포지션일 경우 임계값 강화
-                    price_threshold = 1.025  # 1.02 -> 1.025로 강화
-                    macd_threshold = 0.87     # 0.9 -> 0.87로 강화
+                    # 이익 포지션일 경우 임계값 더 강화
+                    price_threshold = 1.03  # 1.025 -> 1.03으로 강화
+                    macd_threshold = 0.85     # 0.87 -> 0.85로 강화
                 
                 if len(price_peaks) >= 2 and len(macd_peaks) >= 2:
                     # 최근 두 개의 가격 피크와 MACD 피크 비교
@@ -4810,8 +4779,8 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                         
                         exit_signals.append(f"롱 포지션에서 명확한 MACD 베어리시 다이버전스 감지 (가격 {(price_threshold-1)*100:.1f}%+ 상승, MACD {(1-macd_threshold)*100:.1f}%+ 하락)")
                         
-                        # PnL에 따른 가중치 조정
-                        base_weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                        # PnL에 따른 가중치 조정 - 감소
+                        base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength  # 0.8/0.65 -> 0.7/0.55로 감소
                         weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
         
@@ -4829,18 +4798,18 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                 if recent_df['rsi'].iloc[i] < recent_df['rsi'].iloc[i-1] and recent_df['rsi'].iloc[i] < recent_df['rsi'].iloc[i+1]:
                     rsi_troughs.append((i, recent_df['rsi'].iloc[i]))
             
-            # PnL 기반 임계값 차별화
-            price_threshold = 0.985  # 기본 0.98
-            rsi_threshold = 1.08     # 기본 1.1
+            # PnL 기반 임계값 차별화 - 모두 강화
+            price_threshold = 0.975  # 0.985 -> 0.975로 강화
+            rsi_threshold = 1.12     # 1.08 -> 1.12로 강화
             
             if unrealized_pnl is not None and unrealized_pnl < 0:
-                # 손실 포지션일 경우 임계값 완화
-                price_threshold = 0.99  # 0.98 -> 0.99로 완화
-                rsi_threshold = 1.06    # 1.1 -> 1.06으로 완화
+                # 손실 포지션일 경우에도 임계값 강화
+                price_threshold = 0.98  # 0.99 -> 0.98로 강화
+                rsi_threshold = 1.1    # 1.06 -> 1.1로 강화
             elif unrealized_pnl is not None and unrealized_pnl > 5:
-                # 이익 포지션일 경우 임계값 강화
-                price_threshold = 0.975  # 0.98 -> 0.975로 강화
-                rsi_threshold = 1.13     # 1.1 -> 1.13으로 강화
+                # 이익 포지션일 경우 임계값 더 강화
+                price_threshold = 0.97  # 0.975 -> 0.97로 강화
+                rsi_threshold = 1.15     # 1.13 -> 1.15로 강화
             
             if len(price_troughs) >= 2 and len(rsi_troughs) >= 2:
                 # 최근 두 개의 가격 저점과 RSI 저점 비교
@@ -4854,8 +4823,8 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     
                     exit_signals.append(f"숏 포지션에서 명확한 RSI 불리시 다이버전스 감지 (가격 {(1-price_threshold)*100:.1f}%+ 하락, RSI {(rsi_threshold-1)*100:.1f}%+ 상승)")
                     
-                    # PnL에 따른 가중치 조정
-                    base_weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    # PnL에 따른 가중치 조정 - 감소
+                    base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength  # 0.8/0.65 -> 0.7/0.55로 감소
                     weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
             
@@ -4867,17 +4836,17 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     if recent_df['macd'].iloc[i] < recent_df['macd'].iloc[i-1] and recent_df['macd'].iloc[i] < recent_df['macd'].iloc[i+1]:
                         macd_troughs.append((i, recent_df['macd'].iloc[i]))
                 
-                # PnL 기반 임계값 차별화
-                macd_threshold = 1.08  # 기본 1.1
+                # PnL 기반 임계값 차별화 - 모두 강화
+                macd_threshold = 1.12  # 1.08 -> 1.12로 강화
                 
                 if unrealized_pnl is not None and unrealized_pnl < 0:
-                    # 손실 포지션일 경우 임계값 완화
-                    price_threshold = 0.99   # 0.98 -> 0.99로 완화
-                    macd_threshold = 1.06    # 1.1 -> 1.06으로 완화
+                    # 손실 포지션일 경우에도 임계값 강화
+                    price_threshold = 0.98   # 0.99 -> 0.98로 강화
+                    macd_threshold = 1.1    # 1.06 -> 1.1로 강화
                 elif unrealized_pnl is not None and unrealized_pnl > 5:
-                    # 이익 포지션일 경우 임계값 강화
-                    price_threshold = 0.975  # 0.98 -> 0.975로 강화
-                    macd_threshold = 1.13    # 1.1 -> 1.13으로 강화
+                    # 이익 포지션일 경우 임계값 더 강화
+                    price_threshold = 0.97  # 0.975 -> 0.97로 강화
+                    macd_threshold = 1.15    # 1.13 -> 1.15로 강화
                 
                 if len(price_troughs) >= 2 and len(macd_troughs) >= 2:
                     # 최근 두 개의 가격 저점과 MACD 저점 비교
@@ -4891,38 +4860,38 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                         
                         exit_signals.append(f"숏 포지션에서 명확한 MACD 불리시 다이버전스 감지 (가격 {(1-price_threshold)*100:.1f}%+ 하락, MACD {(macd_threshold-1)*100:.1f}%+ 상승)")
                         
-                        # PnL에 따른 가중치 조정
-                        base_weight = 0.8 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                        # PnL에 따른 가중치 조정 - 감소
+                        base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength  # 0.8/0.65 -> 0.7/0.55로 감소
                         weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"다이버전스 확인 중 오류: {e}")
     
-    # 4. 트렌드 전환 확인 - 주요 지지/저항 돌파 여부 - PnL 기반 차별화
+    # 4. 트렌드 전환 확인 - 주요 지지/저항 돌파 여부 - 더 엄격한 조건 적용
     try:
         latest = df_5min.iloc[-1]
         
-        # 이동평균선 교차 확인 - PnL 기반 차별화
+        # 이동평균선 교차 확인 - 더 강화된 조건 적용
         if 'ema_12' in df_5min.columns and 'sma_20' in df_5min.columns:
-            # 필요한 캔들 수 설정 - PnL 기반 차별화
+            # 필요한 캔들 수 설정 - 모두 증가
             if unrealized_pnl is not None and unrealized_pnl < 0:
-                # 손실 포지션일 경우, 더 빠른 감지를 위해 캔들 수 감소
-                min_cross_candles = 3  # 기본 4에서 3으로 감소
-                cross_gap_threshold = 0.002  # 0.003 -> 0.002로 완화
+                # 손실 포지션일 경우에도 더 많은 캔들 필요
+                min_cross_candles = 5  # 3 -> 5로 증가
+                cross_gap_threshold = 0.003  # 0.002 -> 0.003으로 강화
             elif unrealized_pnl is not None and unrealized_pnl > 5:
                 # 이익 포지션일 경우, 더 늦은 감지를 위해 캔들 수 증가
-                min_cross_candles = 5  # 기본 4에서 5로 증가
-                cross_gap_threshold = 0.004  # 0.003 -> 0.004로 강화
+                min_cross_candles = 7  # 5 -> 7로 증가
+                cross_gap_threshold = 0.005  # 0.004 -> 0.005로 강화
             else:
-                # 기본 캔들 수 유지
-                min_cross_candles = 4
-                cross_gap_threshold = 0.003
+                # 기본 캔들 수 증가
+                min_cross_candles = 6  # 4 -> 6으로 증가
+                cross_gap_threshold = 0.004  # 0.003 -> 0.004로 강화
                 
             # Long position - EMA가 SMA 아래로 교차
             if position_side == 'long':
                 # 최근 캔들 체크
                 cross_below_count = 0
-                for i in range(min(5, len(df_5min))):
+                for i in range(min(8, len(df_5min))):  # 더 많은 캔들 확인 (5 -> 8)
                     idx = len(df_5min) - 1 - i
                     if df_5min['ema_12'].iloc[idx] < df_5min['sma_20'].iloc[idx]:
                         cross_below_count += 1
@@ -4937,8 +4906,8 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                         
                         exit_signals.append(f"EMA12가 SMA20 아래로 명확하게 교차 확인됨 ({cross_below_count}개 캔들, 이격도 {cross_gap*100:.2f}%)")
                         
-                        # PnL에 따른 가중치 조정
-                        base_weight = 0.7 * trend_strength if apply_full_weight else 0.5 * trend_strength
+                        # PnL에 따른 가중치 조정 - 감소
+                        base_weight = 0.6 * trend_strength if apply_full_weight else 0.45 * trend_strength  # 0.7/0.5 -> 0.6/0.45로 감소
                         weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
             
@@ -4946,7 +4915,7 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             elif position_side == 'short':
                 # 최근 캔들 체크
                 cross_above_count = 0
-                for i in range(min(5, len(df_5min))):
+                for i in range(min(8, len(df_5min))):  # 더 많은 캔들 확인 (5 -> 8)
                     idx = len(df_5min) - 1 - i
                     if df_5min['ema_12'].iloc[idx] > df_5min['sma_20'].iloc[idx]:
                         cross_above_count += 1
@@ -4961,33 +4930,33 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                         
                         exit_signals.append(f"EMA12가 SMA20 위로 명확하게 교차 확인됨 ({cross_above_count}개 캔들, 이격도 {cross_gap*100:.2f}%)")
                         
-                        # PnL에 따른 가중치 조정
-                        base_weight = 0.7 * trend_strength if apply_full_weight else 0.5 * trend_strength
+                        # PnL에 따른 가중치 조정 - 감소
+                        base_weight = 0.6 * trend_strength if apply_full_weight else 0.45 * trend_strength  # 0.7/0.5 -> 0.6/0.45로 감소
                         weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
         
-        # B. 주요 지지/저항 레벨 돌파 확인 (볼린저 밴드 + 추가 확인) - PnL 기반 차별화
+        # B. 주요 지지/저항 레벨 돌파 확인 (볼린저 밴드 + 추가 확인) - 더 엄격한 조건
         # Long position - 주요 지지선 하향 돌파
         if position_side == 'long' and 'bb_bbl' in latest:
-            # PnL에 따른 임계값 차별화
+            # PnL에 따른 임계값 차별화 - 더 엄격하게
             if unrealized_pnl is not None and unrealized_pnl < 0:
-                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
-                band_breach_threshold = 0.992  # 0.99 -> 0.992로 완화
-                min_candles_below = 2     # 3 -> 2로 완화
+                # 손실 포지션일 경우에도 더 엄격하게
+                band_breach_threshold = 0.985  # 0.992 -> 0.985로 강화
+                min_candles_below = 4     # 2 -> 4로 증가
             elif unrealized_pnl is not None and unrealized_pnl > 5:
                 # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
-                band_breach_threshold = 0.985  # 0.99 -> 0.985로 강화
-                min_candles_below = 4     # 3 -> 4로 강화
+                band_breach_threshold = 0.98  # 0.985 -> 0.98로 강화
+                min_candles_below = 6     # 4 -> 6으로 증가
             else:
-                # 기본 임계값 유지
-                band_breach_threshold = 0.99
-                min_candles_below = 3
+                # 기본 임계값 강화
+                band_breach_threshold = 0.982  # 0.99 -> 0.982로 강화
+                min_candles_below = 5     # 3 -> 5로 증가
             
             # 하단 밴드 돌파 확인
             if latest['close'] < latest['bb_bbl'] * band_breach_threshold:
                 # 추가 확인: 최소 지정된 캔들 수 연속으로 밴드 아래에 있는지
                 below_band_count = 0
-                for i in range(min(4, len(df_5min))):
+                for i in range(min(7, len(df_5min))):  # 4 -> 7로 확대
                     idx = len(df_5min) - 1 - i
                     if df_5min['close'].iloc[idx] < df_5min['bb_bbl'].iloc[idx] * band_breach_threshold:
                         below_band_count += 1
@@ -5000,32 +4969,32 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     
                     exit_signals.append(f"롱 포지션에서 가격이 하단 볼린저 밴드 아래로 뚜렷하게 이탈 ({below_band_count}개 캔들 연속)")
                     
-                    # PnL에 따른 가중치 조정
-                    base_weight = 0.85 * trend_strength if apply_full_weight else 0.7 * trend_strength
+                    # PnL에 따른 가중치 조정 - 감소
+                    base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength  # 0.85/0.7 -> 0.7/0.6으로 감소
                     weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
         
         # Short position - 주요 저항선 상향 돌파
         elif position_side == 'short' and 'bb_bbh' in latest:
-            # PnL에 따른 임계값 차별화
+            # PnL에 따른 임계값 차별화 - 더 엄격하게
             if unrealized_pnl is not None and unrealized_pnl < 0:
-                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
-                band_breach_threshold = 1.008  # 1.01 -> 1.008로 완화
-                min_candles_above = 2     # 3 -> 2로 완화
+                # 손실 포지션일 경우에도 더 엄격하게
+                band_breach_threshold = 1.015  # 1.008 -> 1.015로 강화
+                min_candles_above = 4     # 2 -> 4로 증가
             elif unrealized_pnl is not None and unrealized_pnl > 5:
                 # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
-                band_breach_threshold = 1.015  # 1.01 -> 1.015로 강화
-                min_candles_above = 4     # 3 -> 4로 강화
+                band_breach_threshold = 1.02  # 1.015 -> 1.02로 강화
+                min_candles_above = 6     # 4 -> 6으로 증가
             else:
-                # 기본 임계값 유지
-                band_breach_threshold = 1.01
-                min_candles_above = 3
+                # 기본 임계값 강화
+                band_breach_threshold = 1.018  # 1.01 -> 1.018로 강화
+                min_candles_above = 5     # 3 -> 5로 증가
             
             # 상단 밴드 돌파 폭 확인
             if latest['close'] > latest['bb_bbh'] * band_breach_threshold:
                 # 추가 확인: 최소 지정된 캔들 수 연속으로 밴드 위에 있는지
                 above_band_count = 0
-                for i in range(min(4, len(df_5min))):
+                for i in range(min(7, len(df_5min))):  # 4 -> 7로 확대
                     idx = len(df_5min) - 1 - i
                     if df_5min['close'].iloc[idx] > df_5min['bb_bbh'].iloc[idx] * band_breach_threshold:
                         above_band_count += 1
@@ -5038,32 +5007,32 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     
                     exit_signals.append(f"숏 포지션에서 가격이 상단 볼린저 밴드 위로 뚜렷하게 이탈 ({above_band_count}개 캔들 연속)")
                     
-                    # PnL에 따른 가중치 조정
-                    base_weight = 0.85 * trend_strength if apply_full_weight else 0.7 * trend_strength
+                    # PnL에 따른 가중치 조정 - 감소
+                    base_weight = 0.7 * trend_strength if apply_full_weight else 0.6 * trend_strength  # 0.85/0.7 -> 0.7/0.6으로 감소
                     weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"트렌드 반전 및 지지/저항 레벨 확인 중 오류: {e}")
     
-    # 5. 볼륨 프로필 분석 - PnL 기반 차별화
+    # 5. 볼륨 프로필 분석 - 더 엄격한 조건
     try:
         if 'volume' in df_5min.columns:
             recent_volume = df_5min['volume'].iloc[-1]
             avg_volume = df_5min['volume'].iloc[-10:].mean()
             
-            # PnL에 따른 임계값 차별화
+            # PnL에 따른 임계값 차별화 - 더 엄격하게
             if unrealized_pnl is not None and unrealized_pnl < 0:
-                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
-                volume_spike_threshold = 3.5  # 4.5 -> 3.5로 완화
-                body_ratio_threshold = 0.65   # 0.7 -> 0.65로 완화
+                # 손실 포지션일 경우에도 더 엄격하게 - 더 높은 임계값
+                volume_spike_threshold = 5.0  # 3.5 -> 5.0으로 강화
+                body_ratio_threshold = 0.75   # 0.65 -> 0.75로 강화
             elif unrealized_pnl is not None and unrealized_pnl > 5:
                 # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
-                volume_spike_threshold = 5.5  # 4.5 -> 5.5로 강화
-                body_ratio_threshold = 0.75   # 0.7 -> 0.75로 강화
+                volume_spike_threshold = 7.0  # 5.5 -> 7.0으로 강화
+                body_ratio_threshold = 0.8   # 0.75 -> 0.8로 강화
             else:
-                # 기본 임계값 유지
-                volume_spike_threshold = 4.5
-                body_ratio_threshold = 0.7
+                # 기본 임계값 강화
+                volume_spike_threshold = 6.0  # 4.5 -> 6.0으로 강화
+                body_ratio_threshold = 0.78   # 0.7 -> 0.78로 강화
             
             # 볼륨 급증 확인
             if recent_volume > avg_volume * volume_spike_threshold:
@@ -5082,32 +5051,32 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     
                     exit_signals.append(f"포지션 방향과 반대되는 극단적 볼륨 스파이크 ({recent_volume/avg_volume:.1f}배) 및 강한 반전 캔들")
                     
-                    # PnL에 따른 가중치 조정
-                    base_weight = 0.75 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    # PnL에 따른 가중치 조정 - 감소
+                    base_weight = 0.65 * trend_strength if apply_full_weight else 0.55 * trend_strength  # 0.75/0.65 -> 0.65/0.55로 감소
                     weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"볼륨 프로필 확인 중 오류: {e}")
     
-    # 6. 변동성 확인 - PnL 기반 차별화
+    # 6. 변동성 확인 - 더 엄격한 조건
     try:
         if 'atr' in df_5min.columns:
             recent_atr = df_5min['atr'].iloc[-1]
             avg_atr = df_5min['atr'].iloc[-20:].mean()
             
-            # PnL에 따른 임계값 차별화
+            # PnL에 따른 임계값 차별화 - 더 엄격하게
             if unrealized_pnl is not None and unrealized_pnl < 0:
-                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
-                atr_spike_threshold = 3.0  # 4.0 -> 3.0으로 완화
-                price_move_threshold = 0.6  # 0.8 -> 0.6으로 완화
+                # 손실 포지션일 경우에도 더 엄격하게
+                atr_spike_threshold = 4.0  # 3.0 -> 4.0으로 강화
+                price_move_threshold = 0.8  # 0.6 -> 0.8로 강화
             elif unrealized_pnl is not None and unrealized_pnl > 5:
                 # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                atr_spike_threshold = 6.0  # 5.0 -> 6.0으로 강화
+                price_move_threshold = 1.2  # 1.0 -> 1.2로 강화
+            else:
+                # 기본 임계값 강화
                 atr_spike_threshold = 5.0  # 4.0 -> 5.0으로 강화
                 price_move_threshold = 1.0  # 0.8 -> 1.0으로 강화
-            else:
-                # 기본 임계값 유지
-                atr_spike_threshold = 4.0
-                price_move_threshold = 0.8
             
             # 변동성 급증 확인
             if recent_atr > avg_atr * atr_spike_threshold:
@@ -5121,39 +5090,39 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                 if is_unfavorable and price_move_pct > price_move_threshold:
                     exit_signals.append(f"극단적인 변동성 스파이크 감지 (ATR {recent_atr/avg_atr:.1f}배) 및 {price_move_pct:.1f}% 불리한 가격 움직임")
                     
-                    # PnL에 따른 가중치 조정
-                    base_weight = 0.7 * trend_strength
+                    # PnL에 따른 가중치 조정 - 감소
+                    base_weight = 0.6 * trend_strength  # 0.7 -> 0.6으로 감소
                     weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"변동성 확인 중 오류: {e}")
     
-    # 7. 과매수/과매도 확인 (RSI) - PnL 기반 차별화
+    # 7. 과매수/과매도 확인 (RSI) - 더 엄격한 조건
     try:
         if 'rsi' in df_5min.columns:
             rsi_value = df_5min['rsi'].iloc[-1]
             
-            # PnL에 따른 임계값 차별화
+            # PnL에 따른 임계값 차별화 - 모두 강화
             if unrealized_pnl is not None and unrealized_pnl < 0:
-                # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
-                long_rsi_threshold = 18  # 15 -> 18로 완화
-                short_rsi_threshold = 82  # 85 -> 82로 완화
-                min_candles_count = 3     # 4 -> 3으로 완화
+                # 손실 포지션일 경우에도 더 엄격하게
+                long_rsi_threshold = 15  # 18 -> 15로 강화
+                short_rsi_threshold = 85  # 82 -> 85로 강화
+                min_candles_count = 5     # 3 -> 5로 증가
             elif unrealized_pnl is not None and unrealized_pnl > 5:
                 # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                long_rsi_threshold = 10  # 12 -> 10으로 강화
+                short_rsi_threshold = 90  # 88 -> 90으로 강화
+                min_candles_count = 6     # 5 -> 6으로 증가
+            else:
+                # 기본 임계값 강화
                 long_rsi_threshold = 12  # 15 -> 12로 강화
                 short_rsi_threshold = 88  # 85 -> 88로 강화
-                min_candles_count = 5     # 4 -> 5로 강화
-            else:
-                # 기본 임계값 유지
-                long_rsi_threshold = 15
-                short_rsi_threshold = 85
-                min_candles_count = 4
+                min_candles_count = 5     # 4 -> 5로 증가
             
             # Long position - RSI 극단적 과매도
             if position_side == 'long' and rsi_value <= long_rsi_threshold:
                 # 추가 확인: 이전 캔들들도 낮은 RSI인지
-                low_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-6:] if rsi <= 20)
+                low_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-8:] if rsi <= 20)  # 6 -> 8로 증가
                 
                 if low_rsi_count >= min_candles_count:
                     # 상위 타임프레임 추세 반영
@@ -5161,15 +5130,15 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     
                     exit_signals.append(f"RSI 극단적 과매도 상태 ({rsi_value:.1f}), {low_rsi_count}개 캔들 지속")
                     
-                    # PnL에 따른 가중치 조정
-                    base_weight = 0.75 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    # PnL에 따른 가중치 조정 - 감소
+                    base_weight = 0.65 * trend_strength if apply_full_weight else 0.55 * trend_strength  # 0.75/0.65 -> 0.65/0.55로 감소
                     weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
             
             # Short position - RSI 극단적 과매수
             elif position_side == 'short' and rsi_value >= short_rsi_threshold:
                 # 추가 확인: 이전 캔들들도 높은 RSI인지
-                high_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-6:] if rsi >= 80)
+                high_rsi_count = sum(1 for rsi in df_5min['rsi'].iloc[-8:] if rsi >= 80)  # 6 -> 8로 증가
                 
                 if high_rsi_count >= min_candles_count:
                     # 상위 타임프레임 추세 반영
@@ -5177,44 +5146,44 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     
                     exit_signals.append(f"RSI 극단적 과매수 상태 ({rsi_value:.1f}), {high_rsi_count}개 캔들 지속")
                     
-                    # PnL에 따른 가중치 조정
-                    base_weight = 0.75 * trend_strength if apply_full_weight else 0.65 * trend_strength
+                    # PnL에 따른 가중치 조정 - 감소
+                    base_weight = 0.65 * trend_strength if apply_full_weight else 0.55 * trend_strength  # 0.75/0.65 -> 0.65/0.55로 감소
                     weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                     exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"RSI 극단 확인 중 오류: {e}")
     
-    # 8. 패턴 연속성 확인 - 여러 지표의 일관된 신호 분석 - PnL 기반 차별화
+    # 8. 패턴 연속성 확인 - 여러 지표의 일관된 신호 분석 - 더 엄격한 조건
     try:
         # 신호의 일관성 수준 계산
         consistent_bearish_signals = 0
         consistent_bullish_signals = 0
         
-        # PnL에 따른 임계값 차별화
+        # PnL에 따른 임계값 차별화 - 더 엄격하게
         if unrealized_pnl is not None and unrealized_pnl < 0:
-            # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
-            rsi_change_threshold = 3.0    # 3.5 -> 3.0으로 완화
-            macd_change_threshold = 0.3    # 0.4 -> 0.3으로 완화
-            bbm_distance_threshold = 0.35  # 0.4 -> 0.35로 완화
-            di_diff_threshold = 6          # 7 -> 6으로 완화
-            obv_change_threshold = 1.8     # 2.0 -> 1.8로 완화
-            min_consistent_signals = 3     # 4 -> 3으로 완화
+            # 손실 포지션일 경우에도 더 엄격하게
+            rsi_change_threshold = 4.0    # 3.0 -> 4.0으로 강화
+            macd_change_threshold = 0.4    # 0.3 -> 0.4로 강화
+            bbm_distance_threshold = 0.4  # 0.35 -> 0.4로 강화
+            di_diff_threshold = 8          # 6 -> 8로 강화
+            obv_change_threshold = 2.0     # 1.8 -> 2.0으로 강화
+            min_consistent_signals = 4     # 3 -> 4로 증가
         elif unrealized_pnl is not None and unrealized_pnl > 5:
             # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
-            rsi_change_threshold = 4.0     # 3.5 -> 4.0으로 강화
+            rsi_change_threshold = 5.0     # 4.0 -> 5.0으로 강화
+            macd_change_threshold = 0.6    # 0.5 -> 0.6으로 강화
+            bbm_distance_threshold = 0.5  # 0.45 -> 0.5로 강화
+            di_diff_threshold = 10          # 8 -> 10으로 강화
+            obv_change_threshold = 2.5     # 2.2 -> 2.5로 강화
+            min_consistent_signals = 6     # 5 -> 6으로 증가
+        else:
+            # 기본 임계값 강화
+            rsi_change_threshold = 4.5     # 3.5 -> 4.5로 강화
             macd_change_threshold = 0.5    # 0.4 -> 0.5로 강화
             bbm_distance_threshold = 0.45  # 0.4 -> 0.45로 강화
-            di_diff_threshold = 8          # 7 -> 8로 강화
+            di_diff_threshold = 9          # 7 -> 9로 강화
             obv_change_threshold = 2.2     # 2.0 -> 2.2로 강화
-            min_consistent_signals = 5     # 4 -> 5로 강화
-        else:
-            # 기본 임계값 유지
-            rsi_change_threshold = 3.5
-            macd_change_threshold = 0.4
-            bbm_distance_threshold = 0.4
-            di_diff_threshold = 7
-            obv_change_threshold = 2.0
-            min_consistent_signals = 4
+            min_consistent_signals = 5     # 4 -> 5로 증가
         
         # A. RSI 방향
         if 'rsi' in df_5min.columns:
@@ -5249,13 +5218,13 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
         
         # D. ADX & DI 방향
         if 'adx' in df_5min.columns and 'di_plus' in df_5min.columns and 'di_minus' in df_5min.columns:
-            # ADX 임계값 - 완화: 30 -> 28
-            if df_5min['adx'].iloc[-1] > 28 and df_5min['di_minus'].iloc[-1] > df_5min['di_plus'].iloc[-1]:
+            # ADX 임계값 강화 - 28 -> 32
+            if df_5min['adx'].iloc[-1] > 32 and df_5min['di_minus'].iloc[-1] > df_5min['di_plus'].iloc[-1]:
                 # 추가 검증: DI 차이가 충분한지
                 di_diff = df_5min['di_minus'].iloc[-1] - df_5min['di_plus'].iloc[-1]
                 if di_diff > di_diff_threshold:
                     consistent_bearish_signals += 1
-            elif df_5min['adx'].iloc[-1] > 28 and df_5min['di_plus'].iloc[-1] > df_5min['di_minus'].iloc[-1]:
+            elif df_5min['adx'].iloc[-1] > 32 and df_5min['di_plus'].iloc[-1] > df_5min['di_minus'].iloc[-1]:
                 # 추가 검증: DI 차이가 충분한지
                 di_diff = df_5min['di_plus'].iloc[-1] - df_5min['di_minus'].iloc[-1]
                 if di_diff > di_diff_threshold:
@@ -5278,16 +5247,16 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             apply_full_weight = higher_timeframe_trend != "bullish"
             
             exit_signals.append(f"여러 지표에서 {consistent_bearish_signals}개의 일관된 베어리시 신호 감지")
-            # 신호 수에 따라 가중치 증가하되 상위 타임프레임 고려
-            base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength
+            # 신호 수에 따라 가중치 증가하되 상위 타임프레임 고려 - 가중치 감소
+            base_weight = 0.65 * trend_strength if apply_full_weight else 0.5 * trend_strength  # 0.7/0.55 -> 0.65/0.5로 감소
             
-            # 추가 신호에 따른 가중치 증분 - 완화: 0.05 -> 0.045
-            add_weight = (consistent_bearish_signals - min_consistent_signals) * 0.045
+            # 추가 신호에 따른 가중치 증분 - 감소: 0.045 -> 0.04
+            add_weight = (consistent_bearish_signals - min_consistent_signals) * 0.04
             
-            # PnL에 따른 가중치 조정
+            # PnL에 따른 가중치 조정 - 감소
             weight = (base_weight + add_weight) * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else (base_weight + add_weight)
-            # 최대 가중치 제한
-            weight = min(weight, 0.9)
+            # 최대 가중치 제한 - 감소
+            weight = min(weight, 0.85)  # 0.9 -> 0.85로 감소
             
             exit_signal_weights.append(weight)
             
@@ -5296,28 +5265,28 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
             apply_full_weight = higher_timeframe_trend != "bearish"
             
             exit_signals.append(f"여러 지표에서 {consistent_bullish_signals}개의 일관된 불리시 신호 감지")
-            # 신호 수에 따라 가중치 증가하되 상위 타임프레임 고려
-            base_weight = 0.7 * trend_strength if apply_full_weight else 0.55 * trend_strength
+            # 신호 수에 따라 가중치 증가하되 상위 타임프레임 고려 - 가중치 감소
+            base_weight = 0.65 * trend_strength if apply_full_weight else 0.5 * trend_strength  # 0.7/0.55 -> 0.65/0.5로 감소
             
-            # 추가 신호에 따른 가중치 증분 - 완화: 0.05 -> 0.045
-            add_weight = (consistent_bullish_signals - min_consistent_signals) * 0.045
+            # 추가 신호에 따른 가중치 증분 - 감소: 0.045 -> 0.04
+            add_weight = (consistent_bullish_signals - min_consistent_signals) * 0.04
             
-            # PnL에 따른 가중치 조정
+            # PnL에 따른 가중치 조정 - 감소
             weight = (base_weight + add_weight) * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else (base_weight + add_weight)
-            # 최대 가중치 제한
-            weight = min(weight, 0.9)
+            # 최대 가중치 제한 - 감소
+            weight = min(weight, 0.85)  # 0.9 -> 0.85로 감소
             
             exit_signal_weights.append(weight)
     except Exception as e:
         logger.error(f"패턴 일관성 확인 중 오류: {e}")
     
-    # 9. 중장기 트렌드 변화 감지 (1시간 차트에서 반전 신호) - PnL 기반 차별화
+    # 9. 중장기 트렌드 변화 감지 (1시간 차트에서 반전 신호) - 더 엄격한 조건
     try:
         if df_hourly is not None and len(df_hourly) >= 10:
             # 1시간 차트에서 주요 반전 신호 확인
             hourly_latest = df_hourly.iloc[-1]
             
-            # A. 1시간 차트 RSI 다이버전스 확인 - PnL 기반 차별화
+            # A. 1시간 차트 RSI 다이버전스 확인 - 더 엄격한 조건
             if 'rsi' in df_hourly.columns:
                 # 가격과 RSI 고점/저점 찾기 (1시간 차트)
                 hourly_price_peaks = []
@@ -5325,7 +5294,7 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                 hourly_rsi_peaks = []
                 hourly_rsi_troughs = []
                 
-                for i in range(1, min(10, len(df_hourly) - 1)):
+                for i in range(1, min(12, len(df_hourly) - 1)):  # 10 -> 12로 증가
                     # 가격 고점/저점
                     if df_hourly['close'].iloc[-i] > df_hourly['close'].iloc[-(i+1)] and df_hourly['close'].iloc[-i] > df_hourly['close'].iloc[-(i-1)]:
                         hourly_price_peaks.append((i, df_hourly['close'].iloc[-i]))
@@ -5338,19 +5307,19 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     if df_hourly['rsi'].iloc[-i] < df_hourly['rsi'].iloc[-(i+1)] and df_hourly['rsi'].iloc[-i] < df_hourly['rsi'].iloc[-(i-1)]:
                         hourly_rsi_troughs.append((i, df_hourly['rsi'].iloc[-i]))
                 
-                # PnL에 따른 임계값 차별화
+                # PnL에 따른 임계값 차별화 - 더 엄격하게
                 if unrealized_pnl is not None and unrealized_pnl < 0:
-                    # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
-                    hourly_price_threshold = 1.01  # 1.015 -> 1.01로 완화
-                    hourly_rsi_threshold = 0.96    # 0.95 -> 0.96으로 완화
+                    # 손실 포지션일 경우에도 더 엄격하게
+                    hourly_price_threshold = 1.015  # 1.01 -> 1.015로 강화
+                    hourly_rsi_threshold = 0.94    # 0.96 -> 0.94로 강화
                 elif unrealized_pnl is not None and unrealized_pnl > 5:
                     # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
+                    hourly_price_threshold = 1.025  # 1.02 -> 1.025로 강화
+                    hourly_rsi_threshold = 0.92    # 0.93 -> 0.92로 강화
+                else:
+                    # 기본 임계값 강화
                     hourly_price_threshold = 1.02  # 1.015 -> 1.02로 강화
                     hourly_rsi_threshold = 0.93    # 0.95 -> 0.93으로 강화
-                else:
-                    # 기본 임계값 유지
-                    hourly_price_threshold = 1.015
-                    hourly_rsi_threshold = 0.95
                 
                 # 롱 포지션에서 베어리시 다이버전스 확인
                 if position_side == 'long' and len(hourly_price_peaks) >= 2 and len(hourly_rsi_peaks) >= 2:
@@ -5361,11 +5330,11 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     if price_peak2[1] > price_peak1[1] * hourly_price_threshold and rsi_peak2[1] < rsi_peak1[1] * hourly_rsi_threshold:
                         exit_signals.append(f"1시간 차트에서 명확한 베어리시 다이버전스 감지 (가격 +{(hourly_price_threshold-1)*100:.1f}%, RSI -{(1-hourly_rsi_threshold)*100:.1f}%)")
                         
-                        # PnL에 따른 가중치 조정
-                        base_weight = 0.9 * trend_strength
+                        # PnL에 따른 가중치 조정 - 감소
+                        base_weight = 0.8 * trend_strength  # 0.9 -> 0.8로 감소
                         weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
-                
+
                 # 숏 포지션에서 불리시 다이버전스 확인
                 if position_side == 'short' and len(hourly_price_troughs) >= 2 and len(hourly_rsi_troughs) >= 2:
                     price_trough1, price_trough2 = hourly_price_troughs[1], hourly_price_troughs[0]  # 오래된 것, 최근 것
@@ -5379,23 +5348,23 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                     if price_trough2[1] < price_trough1[1] * inv_price_threshold and rsi_trough2[1] > rsi_trough1[1] * inv_rsi_threshold:
                         exit_signals.append(f"1시간 차트에서 명확한 불리시 다이버전스 감지 (가격 -{(1-inv_price_threshold)*100:.1f}%, RSI +{(inv_rsi_threshold-1)*100:.1f}%)")
                         
-                        # PnL에 따른 가중치 조정
-                        base_weight = 0.9 * trend_strength
+                        # PnL에 따른 가중치 조정 - 감소
+                        base_weight = 0.8 * trend_strength  # 0.9 -> 0.8로 감소
                         weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                         exit_signal_weights.append(weight)
             
-            # B. 1시간 차트 중요 이동평균선 돌파 확인 - PnL 기반 차별화
+            # B. 1시간 차트 중요 이동평균선 돌파 확인 - 더 엄격한 조건
             if 'ema_50' in df_hourly.columns:
-                # PnL에 따른 임계값 차별화
+                # PnL에 따른 임계값 차별화 - 더 엄격하게
                 if unrealized_pnl is not None and unrealized_pnl < 0:
-                    # 손실 포지션일 경우 임계값 완화 - 더 빠른 감지
-                    hourly_ema_breach_threshold = 0.25  # 0.3 -> 0.25로 완화
+                    # 손실 포지션일 경우에도 더 엄격하게
+                    hourly_ema_breach_threshold = 0.3  # 0.25 -> 0.3으로 강화
                 elif unrealized_pnl is not None and unrealized_pnl > 5:
                     # 이익 포지션일 경우 임계값 강화 - 더 늦은 감지
-                    hourly_ema_breach_threshold = 0.35  # 0.3 -> 0.35로 강화
+                    hourly_ema_breach_threshold = 0.4  # 0.35 -> 0.4로 강화
                 else:
-                    # 기본 임계값 유지
-                    hourly_ema_breach_threshold = 0.3
+                    # 기본 임계값 강화
+                    hourly_ema_breach_threshold = 0.35  # 0.3 -> 0.35로 강화
                 
                 # 롱 포지션 - 가격이 50 EMA 하향 돌파
                 if position_side == 'long':
@@ -5406,8 +5375,8 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                         if ema_breach_pct > hourly_ema_breach_threshold:
                             exit_signals.append(f"1시간 차트에서 가격이 50 EMA 하향 돌파 ({ema_breach_pct:.2f}%)")
                             
-                            # PnL에 따른 가중치 조정
-                            base_weight = 0.85 * trend_strength
+                            # PnL에 따른 가중치 조정 - 감소
+                            base_weight = 0.75 * trend_strength  # 0.85 -> 0.75로 감소
                             weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                             exit_signal_weights.append(weight)
                 
@@ -5420,8 +5389,8 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
                         if ema_breach_pct > hourly_ema_breach_threshold:
                             exit_signals.append(f"1시간 차트에서 가격이 50 EMA 상향 돌파 ({ema_breach_pct:.2f}%)")
                             
-                            # PnL에 따른 가중치 조정
-                            base_weight = 0.85 * trend_strength
+                            # PnL에 따른 가중치 조정 - 감소
+                            base_weight = 0.75 * trend_strength  # 0.85 -> 0.75로 감소
                             weight = base_weight * pnl_multiplier if unrealized_pnl and unrealized_pnl < 0 else base_weight
                             exit_signal_weights.append(weight)
     except Exception as e:
@@ -5430,64 +5399,64 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
     # 신호 가중치 합산하여 최종 결정
     exit_score = sum(exit_signal_weights)
     
-    # PnL 기반 임계값 차별화 - 트레일링 스탑로스 고려
+    # PnL 기반 임계값 차별화 - 트레일링 스탑로스 고려 및 모두 강화
     if unrealized_pnl is not None and unrealized_pnl < 0:
-        # 손실 포지션에 대한 임계값 완화 - 더 빠른 종료
-        loss_severity = min(abs(unrealized_pnl) / 6.0, 1.0)  # 기존 8.0 -> 6.0으로 변경
+        # 손실 포지션에 대한 임계값 강화 - 손실을 더 오래 견디도록
+        loss_severity = min(abs(unrealized_pnl) / 10.0, 1.0)  # 6.0 -> 10.0으로 증가
         
-        # 손실 수준에 따른 임계값 조정 - 완화
-        if loss_severity >= 0.7:  # 심각한 손실 (-4.2% 이상)
-            exit_threshold = 1.3  # 기존 1.5 -> 1.3으로 완화
-            single_signal_threshold = 0.75  # 기존 0.8 -> 0.75로 완화
-            logger.warning(f"심각한 손실로 인해 종료 임계값 크게 하향 조정: {exit_threshold:.1f}")
-        elif loss_severity >= 0.3:  # 중간 수준 손실 (-1.8% 이상)
-            exit_threshold = 1.5  # 기존 1.7 -> 1.5로 완화
-            single_signal_threshold = 0.8  # 기존 0.85 -> 0.8로 완화
-            logger.info(f"중간 수준 손실로 인해 종료 임계값 하향 조정: {exit_threshold:.1f}")
+        # 손실 수준에 따른 임계값 조정 - 모두 강화
+        if loss_severity >= 0.8:  # 심각한 손실 (-8.0% 이상)
+            exit_threshold = 1.6  # 1.3 -> 1.6으로 강화
+            single_signal_threshold = 0.85  # 0.75 -> 0.85로 강화
+            logger.warning(f"심각한 손실이지만 더 인내하도록 종료 임계값 강화: {exit_threshold:.1f}")
+        elif loss_severity >= 0.5:  # 중간 수준 손실 (-5.0% 이상)
+            exit_threshold = 1.8  # 1.5 -> 1.8로 강화
+            single_signal_threshold = 0.9  # 0.8 -> 0.9로 강화
+            logger.info(f"중간 수준 손실이지만 더 인내하도록 종료 임계값 강화: {exit_threshold:.1f}")
         else:  # 가벼운 손실
-            exit_threshold = 1.8  # 기존 2.0 -> 1.8로 완화
-            single_signal_threshold = 0.85  # 기존 0.95 -> 0.85로 완화
-            logger.info(f"가벼운 손실로 인해 종료 임계값 소폭 하향 조정: {exit_threshold:.1f}")
+            exit_threshold = 2.0  # 1.8 -> 2.0으로 강화
+            single_signal_threshold = 0.95  # 0.85 -> 0.95로 강화
+            logger.info(f"가벼운 손실 상태에서 종료 임계값 표준으로 조정: {exit_threshold:.1f}")
     elif unrealized_pnl is not None and unrealized_pnl > 0:
-        # 이익 포지션에 대한 임계값 차별화 - 트레일링 스탑로스 고려하여 크게 완화
-        profit_level = min(unrealized_pnl / 30.0, 1.0)  # 0~1 사이 값으로 정규화
+        # 이익 포지션에 대한 임계값 차별화 - 트레일링 스탑로스 고려하여 더 강화
+        profit_level = min(unrealized_pnl / 40.0, 1.0)  # 30.0 → 40.0으로 변경 (더 높은 이익 허용)
         
-        if unrealized_pnl > 30:  # 매우 높은 수익 (30% 이상)
-            # 트레일링 스탑로스가 있으므로 출구 임계값 크게 상향
-            exit_threshold = 3.0  # 2.5 → 3.0으로 크게 강화
-            single_signal_threshold = 0.97  # 0.95 → 0.97로 강화
+        if unrealized_pnl > 40:  # 매우 높은 수익 (40% 이상)
+            # 트레일링 스탑로스가 있으므로 출구 임계값 강화
+            exit_threshold = 3.5  # 3.0 → 3.5로 강화
+            single_signal_threshold = 0.98  # 0.97 → 0.98로 강화
             logger.info(f"매우 큰 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
-        elif unrealized_pnl > 20:  # 높은 수익 (20-30%)
-            # 트레일링 스탑로스가 있으므로 출구 임계값 상향
-            exit_threshold = 2.7  # 2.2 → 2.7로 강화
-            single_signal_threshold = 0.96  # 0.94 → 0.96으로 강화
+        elif unrealized_pnl > 30:  # 높은 수익 (30-40%)
+            # 트레일링 스탑로스가 있으므로 출구 임계값 강화
+            exit_threshold = 3.2  # 2.7 → 3.2로 강화
+            single_signal_threshold = 0.97  # 0.96 → 0.97
             logger.info(f"높은 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
-        elif unrealized_pnl > 10:  # 중간 수익 (10-20%)
-            # 트레일링 스탑로스가 있으므로 출구 임계값 상향
-            exit_threshold = 2.4  # 2.2 → 2.4로 강화
-            single_signal_threshold = 0.95  # 0.94 → 0.95로 강화
+        elif unrealized_pnl > 15:  # 중간 수익 (15-30%), 이전 10-20%에서 변경
+            # 트레일링 스탑로스가 있으므로 출구 임계값 강화
+            exit_threshold = 2.8  # 2.4 → 2.8로 강화
+            single_signal_threshold = 0.96  # 0.95 → 0.96으로 강화
             logger.info(f"중간 수준 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
-        elif unrealized_pnl > 5:  # 적당한 수익 (5-10%)
-            # 트레일링 스탑로스가 있으므로 출구 임계값 상향
-            exit_threshold = 2.3  # 2.4 → 2.3으로 소폭 조정
-            single_signal_threshold = 0.97  # 0.99 → 0.97로 소폭 조정
+        elif unrealized_pnl > 5:  # 적당한 수익 (5-15%)
+            # 트레일링 스탑로스가 있으므로 출구 임계값 강화
+            exit_threshold = 2.5  # 2.3 → 2.5로 강화
+            single_signal_threshold = 0.95  # 0.97 → 0.95로 변경
             logger.info(f"적당한 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
         else:  # 소소한 수익 (5% 미만)
-            # 기본 임계값보다 약간 높게 설정
-            exit_threshold = 2.1  # 유지
-            single_signal_threshold = 0.96  # 유지
+            # 기본 임계값보다 높게 설정
+            exit_threshold = 2.3  # 2.1 → 2.3으로 강화
+            single_signal_threshold = 0.95  # 0.96 → 0.95로 변경
             logger.info(f"소소한 수익 상태 ({unrealized_pnl:.2f}%), 트레일링 스탑로스 신뢰: 종료 임계값 {exit_threshold:.1f}")
     else:
-        # 기본 임계값
-        exit_threshold = 2.0
-        single_signal_threshold = 0.95
+        # 기본 임계값 강화
+        exit_threshold = 2.2  # 2.0 → 2.2로 강화
+        single_signal_threshold = 0.95  # 유지
     
-    # 새로 추가: 횡보장 감지 시 임계값 조정
+    # 횡보장 감지 시 임계값 조정 - 덜 민감하게 변경 (더 오래 보유)
     if is_ranging_market:
-        # 횡보장에서는 빠르게 출구 찾기
-        exit_threshold *= 0.7  # 임계값 30% 감소
-        single_signal_threshold *= 0.9  # 단일 신호 임계값 10% 감소
-        logger.info(f"횡보장 감지로 인한 출구 임계값 조정: {exit_threshold:.1f} (단일 신호: {single_signal_threshold:.2f})")
+        # 횡보장에서도 신중하게 출구 찾기
+        exit_threshold *= 0.8  # 0.7 -> 0.8로 증가 (덜 감소)
+        single_signal_threshold *= 0.95  # 0.9 -> 0.95로 증가 (덜 감소)
+        logger.info(f"횡보장 감지되었지만 인내하도록 임계값 조정: {exit_threshold:.1f} (단일 신호: {single_signal_threshold:.2f})")
     
     # 최종 결정
     should_exit = exit_score >= exit_threshold or any(w >= single_signal_threshold for w in exit_signal_weights)
