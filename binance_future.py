@@ -415,7 +415,7 @@ class SignalTracker:
             if (self.signals["UTBot"]["signal"] is not None and 
                 previous_candles_ago is not None and 
                 previous_candles_ago >= 15 and 
-                previous_candles_ago < 33):
+                previous_candles_ago < 50):
                 # 기존 신호 유지하고 candles_ago는 정확히 재계산
                 if self.signals["UTBot"]["timestamp"]:
                     signal_time = datetime.fromisoformat(self.signals["UTBot"]["timestamp"])
@@ -467,7 +467,7 @@ class SignalTracker:
             if (self.signals["BlackFlag"]["signal"] is not None and 
                 previous_bf_candles_ago is not None and 
                 previous_bf_candles_ago >= 15 and 
-                previous_bf_candles_ago < 33):
+                previous_bf_candles_ago < 50):
                 # 기존 신호 유지하고 candles_ago는 정확히 재계산
                 if self.signals["BlackFlag"]["timestamp"]:
                     signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
@@ -541,7 +541,7 @@ class SignalTracker:
             self.signals["BlackFlag"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
             # 40캔들 이상 지난 신호는 None 처리
-            if self.signals["BlackFlag"]["candles_ago"] > 33:
+            if self.signals["BlackFlag"]["candles_ago"] > 50:
                 self.signals["BlackFlag"] = {
                     "signal": None,
                     "candles_ago": None,
@@ -555,7 +555,7 @@ class SignalTracker:
             self.signals["UTBot"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
             # 40캔들 이상 지난 신호는 None 처리
-            if self.signals["UTBot"]["candles_ago"] > 33:
+            if self.signals["UTBot"]["candles_ago"] > 50:
                 self.signals["UTBot"] = {
                     "signal": None,
                     "candles_ago": None,
@@ -5742,8 +5742,8 @@ def ai_trading():
         # 롱 포지션 진입 조건 검증
         if decision == "buy" and current_position_side is None:
             # 신호 유효성 확인 (캔들 수 40으로 확장)
-            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 33
-            utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 33
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
+            utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
             
             # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
             price_change_pct = 0
@@ -5838,8 +5838,8 @@ def ai_trading():
         # 숏 포지션 진입 조건 검증
         elif decision == "sell" and current_position_side is None:
             # 신호 유효성 확인 (캔들 수 40으로 확장)
-            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 33
-            utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 33
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
+            utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
             
             # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
             price_change_pct = 0
@@ -6159,16 +6159,16 @@ The data below must be considered in your analysis.
 For a valid PRIMARY entry, ALL of the following must be true:
 
 **For Long Entry:**
-1. **BlackFlag FTS:** Must show a BUY signal within the last 33 candles.
-2. **UT Bot Alerts:** Must display a BUY alert within the last 33 candles.
+1. **BlackFlag FTS:** Must show a BUY signal within the last 50 candles.
+2. **UT Bot Alerts:** Must display a BUY alert within the last 50 candles.
 3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"}).
 5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
 6. **NEW - Timeframe Signals:** At least 3 timeframes must show bullish signals AND the 5-minute timeframe MUST be bullish.
 
 **For Short Entry:**
-1. **BlackFlag FTS:** Must show a SELL signal within the last 33 candles.
-2. **UT Bot Alerts:** Must display a SELL alert within the last 33 candles.
+1. **BlackFlag FTS:** Must show a SELL signal within the last 50 candles.
+2. **UT Bot Alerts:** Must display a SELL alert within the last 50 candles.
 3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"}).
 5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
