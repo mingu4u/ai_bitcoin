@@ -1,4 +1,7 @@
 import sys
+import asyncio
+import threading
+import concurrent.futures
 import os
 from dotenv import load_dotenv
 import pandas as pd
@@ -634,7 +637,7 @@ def analyze_chart_signals(image_path,
          그 박스 중심 아래 x축 영역 OCR로 신호 시간(alert_time)을 판독.
       3) Volume Oscillator 값 – volume_roi 영역 내 파란색 박스를 찾아 그 내부 숫자(예:-11.51%)를 OCR해
          '%'제거 후 float형으로 반환.
-      4) 타임프레임 시그널 테이블 – 우측 상단의 테이블에서 5, 15, 30, 60, 240분봉에 대한
+      4) 타임프레임 시그널 테이블 – 우측 상단의 테이블에서 5, 10, 30, 60, 120분봉에 대한
          Bullish, Bearish, Ranging 상태를 감지하여 각 상태의 개수와 함께 상세 정보를 반환.
       5) 현재 횡보장 여부 – 중앙 하단 보라색 동그라미 표시 위로 보라색 횡보 박스가 있는지 감지하여
          현재 장이 횡보장인지 여부(True/False)를 반환.
@@ -982,7 +985,7 @@ def analyze_chart_signals(image_path,
     ############## 타임프레임 시그널 테이블 감지 ##############
     def detect_timeframe_signals():
         """
-        우측 상단 타임프레임 시그널 테이블을 감지하여 각 타임프레임(5, 15, 30, 60, 240)의
+        우측 상단 타임프레임 시그널 테이블을 감지하여 각 타임프레임(5, 10, 30, 60, 120)의
         신호 상태(Bullish, Bearish, Ranging)를 감지합니다.
         
         Returns:
@@ -1012,11 +1015,11 @@ def analyze_chart_signals(image_path,
                 print("타임프레임 테이블 ROI가 너무 작습니다")
                 return result
             
-            # 테이블 행 추출 (5개 행: 5분, 15분, 30분, 60분, 240분)
+            # 테이블 행 추출 (5개 행: 5분, 10분, 30분, 60분, 120분)
             h_roi, w_roi = roi_table.shape[:2]
             row_height = h_roi // 5
             
-            timeframes = ["5", "15", "30", "60", "240"]
+            timeframes = ["5", "10", "30", "60", "120"]
             
             for i, tf in enumerate(timeframes):
                 # 각 행 추출
@@ -2257,8 +2260,8 @@ class BinanceFuturesTrader:
 
         self.logger.info(f"Position opened - Side: {side}, Amount: {buy_amount} USDT")
         
-        # 결과 반환 - 중요 변경: 기존 모니터링 함수 유지 플래그 추가
-        return {
+        # 비동기 모니터링 설정 (기존 스케줄링 방식 대체)
+        result = {
             'entry': order,
             'tp': tp_order,
             'sl': sl_order,
@@ -2266,7 +2269,152 @@ class BinanceFuturesTrader:
             'entry_price': entry_price,
             'retain_existing_sl_monitor': retain_existing_sl_monitor  # 새로 추가: 기존 모니터링 유지 여부
         }
+    
+        # 비동기 모니터링 설정 (기존 스케줄링 방식 대체)
+        if 'monitor_sl' in result:
+            # 현재 포지션 방향 확인
+            current_position_side = None
+            try:
+                positions = self.exchange.fetch_positions([self.symbol])
+                for pos in positions:
+                    if float(pos.get('contracts', 0) or 0) != 0:
+                        current_position_side = pos['side']  # 'long' 또는 'short'
+                        break
+            except Exception as e:
+                self.logger.error(f"Error fetching position for monitoring: {e}")
+                
+            # 기존 모니터링 함수 유지 여부 확인
+            retain_existing = result.get('retain_existing_sl_monitor', False)
+                
+            if current_position_side:
+                # 같은 방향의 기존 모니터링 작업 처리
+                if retain_existing and current_position_side in sl_monitor_functions:
+                    self.logger.info(f"유지: 기존 {current_position_side} 포지션의 비동기 SL 모니터링")
+                else:
+                    # 새 모니터링 함수가 있고 기존에 없는 경우에만 새로 등록
+                    if 'monitor_sl' in result and (current_position_side not in sl_monitor_functions or not retain_existing):
+                        # 모니터링 함수 저장 및 비동기 모니터링 시작
+                        monitor_sl_func = result['monitor_sl']
+                        sl_monitor_functions[current_position_side] = monitor_sl_func
+                        
+                        # 비동기 모니터링 시작
+                        start_async_sl_monitoring(monitor_sl_func, current_position_side, order['id'])
+    
+        return result
 
+        # 5. 트레일링 스탑로스 모니터링 함수 개선 - 추가 진입과 기존 모니터링 유지 로직 추가
+        # 글로벌 변수를 참조하기 위한 nonlocal 사용
+    #    def monitor_and_adjust_sl():
+    #        """
+    #        트레일링 스탑로스를 모니터링하고 필요시 업데이트하는 함수
+    #        - 수정: 수익률이 TRAILING_THRESHOLD(0.4%) 이상일 때만 스탑로스 업데이트
+    #        - 수정: 같은 방향 추가 진입 시에도 모니터링 유지
+    #        """
+    #        try:
+    #            positions_ = self.exchange.fetch_positions([self.symbol])
+    #            current_pos = next((p for p in positions_ if float(p.get('contracts', 0) or 0) != 0), None)
+#
+    #            if not current_pos:
+    #                self.logger.info("포지션이 더 이상 존재하지 않음 - 모니터링 중단")
+    #                return None
+#
+    #            current_market_price = self.exchange.fetch_ticker(self.symbol)['last']
+    #            position_size = float(current_pos['contracts'])
+    #            pos_side = current_pos['side']
+#
+    #            # 새 SL 체크를 위해 현재 열린 주문 조회
+    #            open_orders_ = self.exchange.fetch_open_orders(self.symbol)
+    #            existing_sl = [o for o in open_orders_ if o.get('clientOrderId','').startswith('sl_')]
+    #            
+    #            if not existing_sl:
+    #                self.logger.warning("No existing SL order found for trailing update")
+    #                return None
+    #                
+    #            # 기존 SL 가격 가져오기 - 전체 SL 주문 중 첫 번째 사용
+    #            current_sl_price = float(existing_sl[0]['info'].get('stopPrice', 0))
+    #            
+    #            # 수익률 계산
+    #            profit_percentage = (current_market_price - entry_price) / entry_price if pos_side == 'long' \
+    #                            else (entry_price - current_market_price) / entry_price
+#
+    #            # 최소 트레일링 단계 확인 (0.4%)
+    #            if profit_percentage >= TRAILING_THRESHOLD:
+    #                # 새로운 SL 가격 계산
+    #                if pos_side == 'long':
+    #                    # 진입가와 현재가의 차이에서 TRAILING_STEP(0.4%) 단위로 나누어 몇 번째 스텝인지 계산
+    #                    step_count = int(profit_percentage / TRAILING_STEP)
+    #                    # 새로운 SL은 진입가 + (스텝 수 - 1) * 스텝 크기 * 진입가
+    #                    # 첫 번째 스텝(0.4%)에서는 SL을 진입가에 두고, 두 번째 스텝(0.8%)부터는 0.4% 간격으로 올림
+    #                    min_sl_price = entry_price * (1 + (step_count - 1) * TRAILING_STEP) if step_count > 0 else entry_price
+    #                    
+    #                    # 현재 가격에서 버퍼만큼 내린 값
+    #                    new_sl_price = current_market_price * (1 - TRAILING_BUFFER)
+    #                    
+    #                    # 기존 SL과 계산된 min_sl_price 중 높은 값만 사용 (SL은 항상 올리기만 함)
+    #                    if min_sl_price <= current_sl_price:
+    #                        # 이미 적절한 SL이 설정되어 있음
+    #                        return None
+    #                        
+    #                else:  # short position
+    #                    # 진입가와 현재가의 차이에서 TRAILING_STEP(0.4%) 단위로 나누어 몇 번째 스텝인지 계산
+    #                    step_count = int(profit_percentage / TRAILING_STEP)
+    #                    # 새로운 SL은 진입가 - (스텝 수 - 1) * 스텝 크기 * 진입가
+    #                    # 첫 번째 스텝(0.4%)에서는 SL을 진입가에 두고, 두 번째 스텝(0.8%)부터는 0.4% 간격으로 내림
+    #                    max_sl_price = entry_price * (1 - (step_count - 1) * TRAILING_STEP) if step_count > 0 else entry_price
+    #                    
+    #                    # 현재 가격에서 버퍼만큼 올린 값
+    #                    new_sl_price = current_market_price * (1 + TRAILING_BUFFER)
+    #                    
+    #                    # 기존 SL과 계산된 max_sl_price 중 낮은 값만 사용 (SL은 항상 내리기만 함)
+    #                    if max_sl_price >= current_sl_price:
+    #                        # 이미 적절한 SL이 설정되어 있음
+    #                        return None
+    #                
+    #                # 현재 SL보다 유리한 가격으로 업데이트 가능한 경우만 실행
+    #                if (pos_side == 'long' and new_sl_price > current_sl_price) or \
+    #                (pos_side == 'short' and new_sl_price < current_sl_price):
+    #                    
+    #                    # 기존 SL 주문 취소
+    #                    cancel_orders(existing_sl)
+    #                    
+    #                    # 새 SL 주문 생성
+    #                    t_side = 'sell' if pos_side == 'long' else 'buy'
+    #                    new_sl_order = self.exchange.create_order(
+    #                        symbol=self.symbol,
+    #                        type='STOP_MARKET',
+    #                        side=t_side,
+    #                        amount=position_size,
+    #                        params={
+    #                            'stopPrice': new_sl_price,
+    #                            'closePosition': True,
+    #                            'clientOrderId': f"sl_{order['id']}"
+    #                        }
+    #                    )
+    #                    
+    #                    # 로그 출력 - 현재 이익률과 업데이트된 SL 표시
+    #                    self.logger.info(f"Trailing SL updated: Price={new_sl_price:.2f}, Current Profit={profit_percentage*100:.2f}%, Step={step_count}")
+    #                    return new_sl_order
+#
+    #            else:
+    #                # 수익률이 충분하지 않으면 SL 업데이트 하지 않음
+    #                self.logger.debug(f"Profit percentage ({profit_percentage*100:.2f}%) below threshold ({TRAILING_THRESHOLD*100}%) - no SL update")
+    #                return None
+#
+    #        except Exception as e_:
+    #            self.logger.error(f"Error in SL monitoring: {e_}")
+    #            return None
+#
+    #    self.logger.info(f"Position opened - Side: {side}, Amount: {buy_amount} USDT")
+    #    
+    #    # 결과 반환 - 중요 변경: 기존 모니터링 함수 유지 플래그 추가
+    #    return {
+    #        'entry': order,
+    #        'tp': tp_order,
+    #        'sl': sl_order,
+    #        'monitor_sl': monitor_and_adjust_sl,
+    #        'entry_price': entry_price,
+    #        'retain_existing_sl_monitor': retain_existing_sl_monitor  # 새로 추가: 기존 모니터링 유지 여부
+    #    }
 
     async def close_position(self) -> Optional[Dict[str, Any]]:
         try:
@@ -2296,6 +2444,211 @@ class BinanceFuturesTrader:
         except Exception as e:
             self.logger.error(f"Error fetching balance: {e}")
             raise
+
+# 1. asyncio 이벤트 루프를 위한 전역 변수 추가
+sl_monitor_event_loop = None
+sl_monitor_threads = {}  # position_side: thread 매핑을 위한 딕셔너리
+
+
+# 비동기 모니터링 함수
+async def async_sl_monitor(monitor_func, job_id, position_side):
+    """
+    트레일링 스탑로스를 비동기적으로 모니터링하는 함수
+    
+    Args:
+        monitor_func: 원래 monitor_sl 함수
+        job_id: 모니터링 작업 ID
+        position_side: 포지션 방향 ('long' 또는 'short')
+    """
+    error_count = 0
+    
+    while True:
+        try:
+            # 현재 해당 방향의 포지션이 있는지 확인
+            positions_check = trader.exchange.fetch_positions([trader.symbol])
+            position_exists = False
+            for pos in positions_check:
+                if float(pos.get('contracts', 0) or 0) != 0 and pos['side'] == position_side:
+                    position_exists = True
+                    break
+            
+            # 포지션이 없는 경우 모니터링 중단
+            if not position_exists:
+                logger.info(f"{position_side} 포지션이 더 이상 존재하지 않음 - 비동기 모니터링 중단")
+                
+                # 함수 딕셔너리에서 제거
+                if position_side in sl_monitor_functions:
+                    del sl_monitor_functions[position_side]
+                    
+                # 스레드 딕셔너리에서 제거    
+                if position_side in sl_monitor_threads:
+                    del sl_monitor_threads[position_side]
+                
+                break
+                
+            # 모니터링 함수 실행
+            # 비동기 환경에서 동기 함수 실행을 위해 ThreadPoolExecutor 사용
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                loop = asyncio.get_event_loop()
+                new_sl_order = await loop.run_in_executor(executor, monitor_func)
+            
+            if new_sl_order:
+                logger.info(f"Trailing SL order updated (async): {new_sl_order}")
+                
+            # 오류 카운터 리셋
+            error_count = 0
+            
+            # 자원 정리 및 메모리 관리
+            memory_percent = psutil.virtual_memory().percent
+            if memory_percent > 85:
+                logger.warning(f"High memory usage in async SL monitoring: {memory_percent}%")
+                gc.collect()
+            
+            # 1분 대기
+            await asyncio.sleep(60)
+                
+        except Exception as e:
+            error_count += 1
+            logger.error(f"Error in async SL monitoring: {e}")
+            
+            # 연속 5회 이상 오류 발생 시 작업 중단
+            if error_count >= 5:
+                logger.error(f"연속 {error_count}회 오류 발생, {position_side} 비동기 SL 모니터링 중단")
+                
+                # 함수 딕셔너리에서 제거
+                if position_side in sl_monitor_functions:
+                    del sl_monitor_functions[position_side]
+                    
+                # 스레드 딕셔너리에서 제거    
+                if position_side in sl_monitor_threads:
+                    del sl_monitor_threads[position_side]
+                    
+                break
+                
+            # 오류 발생 시 짧게 대기 후 재시도
+            await asyncio.sleep(10)
+
+# 비동기 이벤트 루프를 실행할 스레드 함수
+def run_async_event_loop(loop):
+    """
+    지정된 이벤트 루프를 실행하는 스레드 함수
+    
+    Args:
+        loop: 실행할 asyncio 이벤트 루프
+    """
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+# 비동기 모니터링을 시작하는 함수
+def start_async_sl_monitoring(monitor_func, position_side, order_id):
+    """
+    비동기 트레일링 스탑로스 모니터링을 시작
+    
+    Args:
+        monitor_func: 원래 monitor_sl 함수
+        position_side: 포지션 방향 ('long' 또는 'short')
+        order_id: 주문 ID
+        
+    Returns:
+        bool: 모니터링 시작 성공 여부
+    """
+    global sl_monitor_event_loop
+    
+    # 이미 같은 방향에 대한 모니터링이 있으면 중지
+    stop_async_sl_monitoring(position_side)
+    
+    try:
+        # 이벤트 루프가 없으면 생성 및 실행
+        if sl_monitor_event_loop is None:
+            sl_monitor_event_loop = asyncio.new_event_loop()
+            loop_thread = threading.Thread(
+                target=run_async_event_loop, 
+                args=(sl_monitor_event_loop,),
+                daemon=True
+            )
+            loop_thread.start()
+            logger.info("비동기 이벤트 루프 시작됨")
+            
+        # 작업 ID 생성
+        job_id = f"async_sl_monitor_{position_side}_{order_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # 비동기 작업 예약
+        asyncio.run_coroutine_threadsafe(
+            async_sl_monitor(monitor_func, job_id, position_side),
+            sl_monitor_event_loop
+        )
+        
+        # 현재 실행 중인 모니터링 스레드를 딕셔너리에 저장
+        sl_monitor_threads[position_side] = job_id
+        
+        logger.info(f"비동기 트레일링 SL 모니터링 시작: {job_id} for {position_side} position")
+        return True
+        
+    except Exception as e:
+        logger.error(f"비동기 SL 모니터링 시작 실패: {e}")
+        return False
+
+# 비동기 모니터링을 중지하는 함수 
+def stop_async_sl_monitoring(position_side=None):
+    """
+    비동기 트레일링 스탑로스 모니터링을 중지
+    
+    Args:
+        position_side: 중지할 포지션 방향 ('long', 'short', 또는 None=모두 중지)
+        
+    Returns:
+        bool: 중지 성공 여부
+    """
+    global sl_monitor_event_loop
+    
+    if sl_monitor_event_loop is None:
+        return False
+        
+    try:
+        # 특정 방향의 모니터링만 중지
+        if position_side and position_side in sl_monitor_functions:
+            del sl_monitor_functions[position_side]
+            
+            if position_side in sl_monitor_threads:
+                logger.info(f"{position_side} 포지션의 비동기 SL 모니터링 중지")
+                del sl_monitor_threads[position_side]
+                
+            return True
+            
+        # 모든 모니터링 중지 (position_side가 None인 경우)
+        elif position_side is None:
+            sl_monitor_functions.clear()
+            sl_monitor_threads.clear()
+            
+            # 기존 작업 모두 취소 (다음 스케줄링 반복 시 종료됨)
+            logger.info("모든 비동기 SL 모니터링 중지")
+            return True
+            
+        return False
+        
+    except Exception as e:
+        logger.error(f"비동기 SL 모니터링 중지 실패: {e}")
+        return False
+
+# 프로그램 종료 시 정리 함수에 비동기 루프 중지 추가
+def cleanup_handler():
+    logger.info("Cleaning up resources before exit...")
+    
+    # 기존 정리 작업
+    cleanup_chrome_processes()
+    
+    # 비동기 이벤트 루프 정리 추가
+    global sl_monitor_event_loop
+    if sl_monitor_event_loop:
+        try:
+            # 기존 모니터링 중지
+            stop_async_sl_monitoring()
+            
+            # 이벤트 루프 중지
+            sl_monitor_event_loop.call_soon_threadsafe(sl_monitor_event_loop.stop)
+            logger.info("비동기 이벤트 루프 중지됨")
+        except Exception as e:
+            logger.error(f"비동기 이벤트 루프 중지 중 오류: {e}")
 
 # .env 파일에 저장된 환경 변수를 불러오기 (API 키 등)
 load_dotenv()
@@ -3020,10 +3373,7 @@ def setup_logging():
     
     return logger
 
-# 종료 시 정리 작업을 수행하는 함수
-def cleanup_handler():
-    logger.info("Cleaning up chrome processes before exit...")
-    cleanup_chrome_processes()
+
 
 # 시그널 핸들러 함수
 def signal_handler(signum, frame):
@@ -6827,10 +7177,14 @@ if __name__ == "__main__":
         # NOTE : (25-03-05) system_stabilization 실행 시 파이썬 코드 재실행 불가 문제 발생. 따라서, 스케줄링에서 현재는 제외
         # schedule.every(1).hours.do(system_stabilization) 
         
-        # 글로벌 변수 초기화
-        sl_monitor_jobs = []
+        # 글로벌 변수 초기화 (수정)
         trading_in_progress = False
         monitoring_in_progress = False
+        sl_monitor_functions = {}  # position_side: monitor_function 형태로 관리
+        
+        # 비동기 관련 전역 변수 초기화 (추가)
+        sl_monitor_event_loop = None
+        sl_monitor_threads = {}  # position_side: thread 매핑을 위한 딕셔너리
         
         sl_monitor_functions = {}  # position_side: monitor_function 형태로 관리
         # AI 트레이딩 작업 강화 - 실패 시 메모리 정리
