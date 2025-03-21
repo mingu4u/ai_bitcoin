@@ -4281,7 +4281,7 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
             
             # 5. 볼륨 스파이크 확인 - 완화: 2배 -> 2.2배
             if 'volume' in df_5min.columns:
-                avg_volume = df_5min['volume'].iloc[-6:-1].mean()  # 최근 5개 캔들 평균 (현재 캔들 제외)
+                candles_avg_volume = df_5min['volume'].iloc[-6:-1].mean()  # 최근 5개 캔들 평균 (현재 캔들 제외)
                 current_volume = df_5min['volume'].iloc[-1]
                 
                 if current_volume > avg_volume * 2.2:  # 220% 이상 볼륨 스파이크
