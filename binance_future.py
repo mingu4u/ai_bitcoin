@@ -7051,7 +7051,16 @@ if __name__ == "__main__":
         # 시작할 때 철저한 정리
         cleanup_chrome_processes()
         cleanup_temp_files()
-        
+
+        # 글로벌 변수 초기화 (수정)
+        trading_in_progress = False
+        monitoring_in_progress = False
+        sl_monitor_functions = {}  # position_side: monitor_function 형태로 관리
+        sl_monitor_jobs = [] 
+        # 비동기 관련 전역 변수 초기화 (추가)
+        sl_monitor_event_loop = None
+        sl_monitor_threads = {}  # position_side: thread 매핑을 위한 딕셔너리
+
         # 메모리 덤프 및 리소스 모니터링을 위한 함수
         def log_memory_usage():
             """메모리 사용량 모니터링 및 로깅 - 개선된 버전"""
@@ -7177,14 +7186,7 @@ if __name__ == "__main__":
         # NOTE : (25-03-05) system_stabilization 실행 시 파이썬 코드 재실행 불가 문제 발생. 따라서, 스케줄링에서 현재는 제외
         # schedule.every(1).hours.do(system_stabilization) 
         
-        # 글로벌 변수 초기화 (수정)
-        trading_in_progress = False
-        monitoring_in_progress = False
-        sl_monitor_functions = {}  # position_side: monitor_function 형태로 관리
-        
-        # 비동기 관련 전역 변수 초기화 (추가)
-        sl_monitor_event_loop = None
-        sl_monitor_threads = {}  # position_side: thread 매핑을 위한 딕셔너리
+
         
         sl_monitor_functions = {}  # position_side: monitor_function 형태로 관리
         # AI 트레이딩 작업 강화 - 실패 시 메모리 정리
