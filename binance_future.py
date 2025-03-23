@@ -762,13 +762,12 @@ def analyze_chart_signals(image_path,
             else:
                 i_idx += 1
 
-        # 구름대 경계 간 가격 차이 계산 - 개선된 방법
+        # 구름대 경계 간 가격 차이 계산 - 새로 추가된 코드
         cloud_gap_percent = 0
         if flip_x_local is not None:
-            # 구름대 경계 찾기를 위한 추가 처리
-            # 전환점 근처 분석 (좌우 10픽셀 내로 제한)
-            x_left = max(0, flip_x_local - 10)
-            x_right = min(roi_cloud_hsv.shape[1] - 1, flip_x_local + 10)
+            # 전환점 주변 분석
+            x_left = max(0, flip_x_local - 10)  # 전환점 왼쪽
+            x_right = min(roi_cloud_hsv.shape[1] - 1, flip_x_local + 10)  # 전환점 오른쪽
             
             if direction == "long":  # 빨간색->녹색 전환
                 # 전환점 왼쪽(빨간색)과 오른쪽(녹색)의 중앙 Y 좌표 찾기
@@ -778,16 +777,16 @@ def analyze_chart_signals(image_path,
                 # 수직 스캔 (위에서 아래로)
                 for y in range(roi_cloud_hsv.shape[0]):
                     # 전환점 왼쪽 (빨간색 영역)
-                    pixel_left = roi_cloud_hsv[y, x_left].reshape(1, 1, 3)  # 수정: 3차원 배열로 변환
+                    pixel_left = roi_cloud_hsv[y, x_left].reshape(1, 1, 3)
                     mask_r1 = cv2.inRange(pixel_left, lower_red1, upper_red1)
                     mask_r2 = cv2.inRange(pixel_left, lower_red2, upper_red2)
-                    if mask_r1[0, 0] > 0 or mask_r2[0, 0] > 0:  # 수정: 인덱싱 변경
+                    if mask_r1[0, 0] > 0 or mask_r2[0, 0] > 0:
                         red_y_coords.append(y)
                     
                     # 전환점 오른쪽 (녹색 영역)
-                    pixel_right = roi_cloud_hsv[y, x_right].reshape(1, 1, 3)  # 수정: 3차원 배열로 변환
+                    pixel_right = roi_cloud_hsv[y, x_right].reshape(1, 1, 3)
                     mask_g = cv2.inRange(pixel_right, lower_green, upper_green)
-                    if mask_g[0, 0] > 0:  # 수정: 인덱싱 변경
+                    if mask_g[0, 0] > 0:
                         green_y_coords.append(y)
                 
                 # 각 색상 영역의 중앙 Y 좌표 계산
@@ -796,11 +795,11 @@ def analyze_chart_signals(image_path,
                     green_center_y = sum(green_y_coords) / len(green_y_coords)
                     
                     # Y 좌표 차이를 가격 차이 퍼센트로 변환
-                    # 화면 높이의 5%는 대략 가격의 0.25% 차이로 가정 (이 값은 조정 필요)
+                    # 화면 높이의 5%는 대략 가격의 0.25% 차이로 가정
                     y_diff_percent = abs(red_center_y - green_center_y) / roi_cloud_hsv.shape[0] * 100
                     cloud_gap_percent = y_diff_percent * 0.05  # 100% 화면 차이 = 약 5% 가격 차이로 추정
                     
-                    # 디버그 시 표시 (선택적)
+                    # 디버그 시 표시
                     if debug:
                         # 왼쪽 빨간색 중앙점 표시
                         cv2.circle(debug_img, 
@@ -830,16 +829,16 @@ def analyze_chart_signals(image_path,
                 # 수직 스캔 (위에서 아래로)
                 for y in range(roi_cloud_hsv.shape[0]):
                     # 전환점 왼쪽 (녹색 영역)
-                    pixel_left = roi_cloud_hsv[y, x_left].reshape(1, 1, 3)  # 수정: 3차원 배열로 변환
+                    pixel_left = roi_cloud_hsv[y, x_left].reshape(1, 1, 3)
                     mask_g = cv2.inRange(pixel_left, lower_green, upper_green)
-                    if mask_g[0, 0] > 0:  # 수정: 인덱싱 변경
+                    if mask_g[0, 0] > 0:
                         green_y_coords.append(y)
                     
                     # 전환점 오른쪽 (빨간색 영역)
-                    pixel_right = roi_cloud_hsv[y, x_right].reshape(1, 1, 3)  # 수정: 3차원 배열로 변환
+                    pixel_right = roi_cloud_hsv[y, x_right].reshape(1, 1, 3)
                     mask_r1 = cv2.inRange(pixel_right, lower_red1, upper_red1)
                     mask_r2 = cv2.inRange(pixel_right, lower_red2, upper_red2)
-                    if mask_r1[0, 0] > 0 or mask_r2[0, 0] > 0:  # 수정: 인덱싱 변경
+                    if mask_r1[0, 0] > 0 or mask_r2[0, 0] > 0:
                         red_y_coords.append(y)
                 
                 # 각 색상 영역의 중앙 Y 좌표 계산
@@ -851,7 +850,7 @@ def analyze_chart_signals(image_path,
                     y_diff_percent = abs(green_center_y - red_center_y) / roi_cloud_hsv.shape[0] * 100
                     cloud_gap_percent = y_diff_percent * 0.05  # 100% 화면 차이 = 약 5% 가격 차이로 추정
                     
-                    # 디버그 시 표시 (선택적)
+                    # 디버그 시 표시
                     if debug:
                         # 왼쪽 녹색 중앙점 표시
                         cv2.circle(debug_img, 
@@ -984,8 +983,7 @@ def analyze_chart_signals(image_path,
                 "flip_x": flip_x_global,
                 "flip_time": time_label,
                 "stop_loss_price": stop_loss_price,
-                "cloud_gap_percent": cloud_gap_percent}  # 구름대 갭 정보 추가 
-
+                "cloud_gap_percent": cloud_gap_percent}  # cloud_gap_percent 추가
 
     ############### UT Bot Alerts Detection ###############
     def detect_utbot():
