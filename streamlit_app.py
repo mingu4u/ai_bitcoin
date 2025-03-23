@@ -10,13 +10,19 @@ def get_connection():
 def load_data():
    try:
        conn = get_connection()
+       # cloud_gap_percent 컬럼이 없을 수 있으므로 명시적으로 열거하지 않음
        query = """SELECT timestamp, trade_type, order_id, decision, percentage, reason, 
                  btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
                  btc_current_price, reflection, tp_order_id, sl_order_id,
                  blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                 utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_percent
+                 utbot_candles_ago, volume_osc_current, stop_loss_price
                  FROM trades"""
        df = pd.read_sql_query(query, conn)
+
+       # 컬럼이 없으면 추가
+       if 'cloud_gap_percent' not in df.columns:
+           df['cloud_gap_percent'] = None
+           
        conn.close()
        return df
    except sqlite3.Error as e:

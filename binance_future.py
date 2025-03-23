@@ -778,16 +778,16 @@ def analyze_chart_signals(image_path,
                 # 수직 스캔 (위에서 아래로)
                 for y in range(roi_cloud_hsv.shape[0]):
                     # 전환점 왼쪽 (빨간색 영역)
-                    pixel_left = roi_cloud_hsv[y, x_left]
-                    mask_r1 = cv2.inRange(np.array([pixel_left]), lower_red1, upper_red1)
-                    mask_r2 = cv2.inRange(np.array([pixel_left]), lower_red2, upper_red2)
-                    if mask_r1[0] > 0 or mask_r2[0] > 0:
+                    pixel_left = roi_cloud_hsv[y, x_left].reshape(1, 1, 3)  # 수정: 3차원 배열로 변환
+                    mask_r1 = cv2.inRange(pixel_left, lower_red1, upper_red1)
+                    mask_r2 = cv2.inRange(pixel_left, lower_red2, upper_red2)
+                    if mask_r1[0, 0] > 0 or mask_r2[0, 0] > 0:  # 수정: 인덱싱 변경
                         red_y_coords.append(y)
                     
                     # 전환점 오른쪽 (녹색 영역)
-                    pixel_right = roi_cloud_hsv[y, x_right]
-                    mask_g = cv2.inRange(np.array([pixel_right]), lower_green, upper_green)
-                    if mask_g[0] > 0:
+                    pixel_right = roi_cloud_hsv[y, x_right].reshape(1, 1, 3)  # 수정: 3차원 배열로 변환
+                    mask_g = cv2.inRange(pixel_right, lower_green, upper_green)
+                    if mask_g[0, 0] > 0:  # 수정: 인덱싱 변경
                         green_y_coords.append(y)
                 
                 # 각 색상 영역의 중앙 Y 좌표 계산
@@ -830,16 +830,16 @@ def analyze_chart_signals(image_path,
                 # 수직 스캔 (위에서 아래로)
                 for y in range(roi_cloud_hsv.shape[0]):
                     # 전환점 왼쪽 (녹색 영역)
-                    pixel_left = roi_cloud_hsv[y, x_left]
-                    mask_g = cv2.inRange(np.array([pixel_left]), lower_green, upper_green)
-                    if mask_g[0] > 0:
+                    pixel_left = roi_cloud_hsv[y, x_left].reshape(1, 1, 3)  # 수정: 3차원 배열로 변환
+                    mask_g = cv2.inRange(pixel_left, lower_green, upper_green)
+                    if mask_g[0, 0] > 0:  # 수정: 인덱싱 변경
                         green_y_coords.append(y)
                     
                     # 전환점 오른쪽 (빨간색 영역)
-                    pixel_right = roi_cloud_hsv[y, x_right]
-                    mask_r1 = cv2.inRange(np.array([pixel_right]), lower_red1, upper_red1)
-                    mask_r2 = cv2.inRange(np.array([pixel_right]), lower_red2, upper_red2)
-                    if mask_r1[0] > 0 or mask_r2[0] > 0:
+                    pixel_right = roi_cloud_hsv[y, x_right].reshape(1, 1, 3)  # 수정: 3차원 배열로 변환
+                    mask_r1 = cv2.inRange(pixel_right, lower_red1, upper_red1)
+                    mask_r2 = cv2.inRange(pixel_right, lower_red2, upper_red2)
+                    if mask_r1[0, 0] > 0 or mask_r2[0, 0] > 0:  # 수정: 인덱싱 변경
                         red_y_coords.append(y)
                 
                 # 각 색상 영역의 중앙 Y 좌표 계산
@@ -984,7 +984,8 @@ def analyze_chart_signals(image_path,
                 "flip_x": flip_x_global,
                 "flip_time": time_label,
                 "stop_loss_price": stop_loss_price,
-                "cloud_gap_percent": cloud_gap_percent}  # 구름대 갭 정보 추가
+                "cloud_gap_percent": cloud_gap_percent}  # 구름대 갭 정보 추가 
+
 
     ############### UT Bot Alerts Detection ###############
     def detect_utbot():
@@ -3535,7 +3536,8 @@ def init_db():
                             utbot_signal TEXT,
                             utbot_candles_ago INTEGER,
                             volume_osc_current REAL,
-                            stop_loss_price REAL)''')
+                            stop_loss_price REAL,
+                            cloud_gap_percent REAL)''')
             else:
                 # 필요한 새 컬럼 추가
                 new_columns = {
@@ -3544,7 +3546,8 @@ def init_db():
                     'utbot_signal': 'TEXT',
                     'utbot_candles_ago': 'INTEGER',
                     'volume_osc_current': 'REAL',
-                    'stop_loss_price': 'REAL'
+                    'stop_loss_price': 'REAL',
+                    'cloud_gap_percent': 'REAL'  # 새 컬럼 추가
                 }
                 
                 # 존재하지 않는 컬럼만 추가
@@ -5984,15 +5987,22 @@ def ai_trading():
             page_load_timeout=40
         )
         
-        if chart_image:
+        if chart_image and signals_analysis:
             logger.info("TradingView screenshot capture and analysis completed")
-            if signals_analysis:
-                logger.info("Chart signals analysis results received:")
-                logger.info(f"  - TimeframeSignals: {signals_analysis.get('TimeframeSignals', {}).get('bullish_count', 0)} bullish, {signals_analysis.get('TimeframeSignals', {}).get('bearish_count', 0)} bearish")
-                logger.info(f"  - IsRangingMarket: {signals_analysis.get('IsRangingMarket', False)}")
+            logger.info(f"  - TimeframeSignals: {signals_analysis.get('TimeframeSignals', {}).get('bullish_count', 0)} bullish, {signals_analysis.get('TimeframeSignals', {}).get('bearish_count', 0)} bearish")
+            logger.info(f"  - IsRangingMarket: {signals_analysis.get('IsRangingMarket', False)}")
+        elif chart_image:
+            logger.info("TradingView screenshot capture completed, but analysis failed")
+            # 분석 실패 시 기본값 설정
+            signals_analysis = {
+                "TimeframeSignals": {"bullish_count": 0, "bearish_count": 0, "ranging_count": 0, "details": []},
+                "IsRangingMarket": False,
+                "BlackFlag": {"flip_detected": "none", "cloud_gap_percent": 0},
+                "UTBot": {"alert_signal": "None"}
+            }
         else:
             logger.error("Screenshot capture failed after maximum retries")
-            
+    
     except Exception as e:
         logger.error(f"Serious error during chart capture process: {e}", exc_info=True)
     finally:
