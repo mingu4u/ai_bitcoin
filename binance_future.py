@@ -1288,34 +1288,40 @@ def analyze_chart_signals(image_path,
                 blackflag_final = {"flip_detected": "long",
                                 "flip_x": result_long["flip_x"],
                                 "flip_time": result_long["flip_time"],
-                                "stop_loss_price": result_long["stop_loss_price"]}
+                                "stop_loss_price": result_long["stop_loss_price"],
+                                "cloud_gap_percent": result_long.get("cloud_gap_percent", 0)}
             else:
                 blackflag_final = {"flip_detected": "short",
                                 "flip_x": result_short["flip_x"],
                                 "flip_time": result_short["flip_time"],
-                                "stop_loss_price": result_short["stop_loss_price"]}
+                                "stop_loss_price": result_short["stop_loss_price"],
+                                "cloud_gap_percent": result_short.get("cloud_gap_percent", 0)}
         elif result_long["flip_x"] is not None:
             blackflag_final = {"flip_detected": "long",
                             "flip_x": result_long["flip_x"],
                             "flip_time": result_long["flip_time"],
-                            "stop_loss_price": result_long["stop_loss_price"]}
+                            "stop_loss_price": result_long["stop_loss_price"],
+                            "cloud_gap_percent": result_long.get("cloud_gap_percent", 0)}
         else:
             blackflag_final = {"flip_detected": "short",
                             "flip_x": result_short["flip_x"],
                             "flip_time": result_short["flip_time"],
-                            "stop_loss_price": result_short["stop_loss_price"]}
+                            "stop_loss_price": result_short["stop_loss_price"],
+                            "cloud_gap_percent": result_short.get("cloud_gap_percent", 0)}
     elif result_long.get("flip_detected"):
         blackflag_final = {"flip_detected": "long",
                         "flip_x": result_long["flip_x"],
                         "flip_time": result_long["flip_time"],
-                        "stop_loss_price": result_long["stop_loss_price"]}
+                        "stop_loss_price": result_long["stop_loss_price"],
+                        "cloud_gap_percent": result_long.get("cloud_gap_percent", 0)}
     elif result_short.get("flip_detected"):
         blackflag_final = {"flip_detected": "short",
                         "flip_x": result_short["flip_x"],
                         "flip_time": result_short["flip_time"],
-                        "stop_loss_price": result_short["stop_loss_price"]}
+                        "stop_loss_price": result_short["stop_loss_price"],
+                        "cloud_gap_percent": result_short.get("cloud_gap_percent", 0)}
     else:
-        blackflag_final = {"flip_detected": "none", "flip_x": None, "flip_time": "", "stop_loss_price": None}
+        blackflag_final = {"flip_detected": "none", "flip_x": None, "flip_time": "", "stop_loss_price": None, "cloud_gap_percent": 0}
 
     # UT Bot 및 Volume Oscillator 검출 함수 호출
     utbot_result = detect_utbot()
@@ -5979,8 +5985,8 @@ def ai_trading():
         # Capture chart with retry logic
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=True, 
-            debug=True,
+            save_image=False, 
+            debug=False,
             max_retries=3,
             page_load_timeout=40
         )
