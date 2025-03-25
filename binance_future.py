@@ -359,8 +359,7 @@ class SignalTracker:
                 "candles_ago": None,
                 "timestamp": None,
                 "stop_loss_price": None,
-                "cloud_gap_percent": 0,  # 기본값 추가
-                "last_saved_cloud_gap": 0  # 마지막 유효 cloud_gap 값 저장
+                "cloud_gap_valid": False  # cloud_gap_percent 대신 cloud_gap_valid 사용
             },
             "UTBot": {
                 "signal": None,
@@ -463,14 +462,17 @@ class SignalTracker:
         # BlackFlag 업데이트 수정
         blackflag = analysis_result.get("BlackFlag", {})
         blackflag_flip = blackflag.get("flip_detected", "none")
-        cloud_gap_percent = blackflag.get("cloud_gap_percent", 0)  # 구름대 갭 정보 추출
+        cloud_gap_valid = blackflag.get("cloud_gap_valid", False)  # cloud_gap_valid 가져오기
         
-        # 로그에 구름대 갭 정보 추가
+        # 로그에 CloudGap 정보 추가
         if blackflag_flip != "none":
-            logger.info(f"BlackFlag {blackflag_flip} 전환 감지 - 구름대 갭: {cloud_gap_percent:.2f}%")
+            logger.info(f"BlackFlag {blackflag_flip} 전환 감지 - CloudGap Valid: {cloud_gap_valid}")
         
         # 기존 BlackFlag 캔들 수 확인
         previous_bf_candles_ago = self.signals["BlackFlag"]["candles_ago"]
+        
+        # 현재 cloud_gap_valid 값 저장 (필요시 유지)
+        current_cloud_gap_valid = self.signals["BlackFlag"].get("cloud_gap_valid", False)
         
         if blackflag_flip == "none":
             # 기존 신호가 있고, 15캔들 이상 40캔들 미만인 경우 기존 신호 유지
@@ -478,26 +480,24 @@ class SignalTracker:
                 previous_bf_candles_ago is not None and 
                 previous_bf_candles_ago >= 15 and 
                 previous_bf_candles_ago < 50):
-                # 기존 신호 및 cloud_gap_percent 유지하고 candles_ago는 정확히 재계산
+                # 기존 신호 및 cloud_gap_valid 유지하고 candles_ago는 정확히 재계산
                 if self.signals["BlackFlag"]["timestamp"]:
                     signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
                     new_bf_candles_ago = self._calculate_candles_ago(signal_time, current_time)
                     self.signals["BlackFlag"]["candles_ago"] = new_bf_candles_ago
-                    # cloud_gap_percent 값 유지
-                    print(f"BlackFlag 신호 유지: {self.signals['BlackFlag']['signal']} (차트 가시권 외, 캔들 수: {new_bf_candles_ago}, 구름대 갭: {self.signals['BlackFlag']['cloud_gap_percent']:.2f}%)")
+                    # cloud_gap_valid 값 유지 (변경 없음)
+                    print(f"BlackFlag 신호 유지: {self.signals['BlackFlag']['signal']} (차트 가시권 외, 캔들 수: {new_bf_candles_ago}, CloudGap Valid: {self.signals['BlackFlag']['cloud_gap_valid']})")
             elif previous_bf_candles_ago is None or previous_bf_candles_ago < 15:
                 # 차트 가시권 내(15캔들 미만)에서 신호가 사라진 경우 또는 신호가 없었던 경우
-                # cloud_gap_percent 값은 마지막 유효 값 유지
-                last_cloud_gap = self.signals["BlackFlag"].get("cloud_gap_percent", 0)
+                # cloud_gap_valid 값 유지
                 self.signals["BlackFlag"] = {
                     "signal": None,
                     "candles_ago": None,
                     "timestamp": None,
                     "stop_loss_price": None,
-                    "cloud_gap_percent": last_cloud_gap,  # 마지막 값 유지
-                    "last_saved_cloud_gap": last_cloud_gap  # 마지막 값 저장
+                    "cloud_gap_valid": current_cloud_gap_valid  # 기존 값 유지
                 }
-                print(f"BlackFlag 신호 업데이트: None (차트에서 신호 사라짐), 구름대 갭 유지: {last_cloud_gap:.2f}%")
+                print(f"BlackFlag 신호 업데이트: None (차트에서 신호 사라짐), CloudGap Valid 유지: {current_cloud_gap_valid}")
         elif blackflag.get("flip_time"):  # 유효한 신호가 있는 경우만 시간 처리
             try:
                 # flip_time이 HH:MM 형식이라고 가정
@@ -516,23 +516,15 @@ class SignalTracker:
                     # BlackFlag 신호 방향 매핑
                     signal_direction = "Buy" if blackflag_flip == "long" else "Sell"
                     
-                    # 새로운 BlackFlag 신호를 감지한 경우, 새 cloud_gap_percent 설정
-                    # 하지만 cloud_gap_percent가 0이라면 마지막 유효 값 유지
-                    if cloud_gap_percent <= 0:
-                        cloud_gap_percent = self.signals["BlackFlag"].get("last_saved_cloud_gap", 0)
-                    else:
-                        # 새 유효 값을 last_saved_cloud_gap에도 저장
-                        self.signals["BlackFlag"]["last_saved_cloud_gap"] = cloud_gap_percent
-                    
+                    # 새로운 플립 감지 시 cloud_gap_valid 값 설정 (새로운 값 사용)
                     self.signals["BlackFlag"] = {
                         "signal": signal_direction,
                         "candles_ago": self._calculate_candles_ago(signal_time, current_time),
                         "timestamp": signal_time.isoformat(),
                         "stop_loss_price": blackflag.get("stop_loss_price"),
-                        "cloud_gap_percent": cloud_gap_percent,  # 새 값 또는 마지막 유효 값
-                        "last_saved_cloud_gap": cloud_gap_percent  # 마지막 유효 값 업데이트
+                        "cloud_gap_valid": cloud_gap_valid  # 새 플립에서 감지된 값 사용
                     }
-                    print(f"BlackFlag 신호 업데이트: {signal_direction}, {signal_time_str}, SL: {blackflag.get('stop_loss_price')}, 구름대 갭: {cloud_gap_percent:.2f}%")
+                    print(f"BlackFlag 신호 업데이트: {signal_direction}, {signal_time_str}, SL: {blackflag.get('stop_loss_price')}, CloudGap Valid: {cloud_gap_valid}")
             except Exception as e:
                 print(f"BlackFlag 시간 파싱 오류: {e}, 원본 시간: {blackflag.get('flip_time')}")
                 
@@ -553,7 +545,7 @@ class SignalTracker:
         self.update_candles_ago(current_time)
         
         # 캐시 저장
-        self.save_cache() 
+        self.save_cache()
     
     def update_candles_ago(self, current_time=None):
         """현재 시간 기준으로 신호 발생 후 경과한 캔들 수 업데이트"""
@@ -565,18 +557,18 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
             self.signals["BlackFlag"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 50캔들 이상 지난 신호는 None 처리하되, cloud_gap_percent는 유지
+            # 50캔들 이상 지난 신호는 None 처리하되, cloud_gap_valid는 유지
             if self.signals["BlackFlag"]["candles_ago"] > 50:
-                # 마지막 유효 cloud_gap_percent 값 보존
-                last_gap = self.signals["BlackFlag"].get("cloud_gap_percent", 0)
+                # cloud_gap_valid 값 임시 저장
+                current_cloud_gap_valid = self.signals["BlackFlag"].get("cloud_gap_valid", False)
                 
+                # 다른 필드는 초기화하고 cloud_gap_valid는 유지
                 self.signals["BlackFlag"] = {
                     "signal": None,
                     "candles_ago": None,
                     "timestamp": None,
                     "stop_loss_price": None,
-                    "cloud_gap_percent": last_gap,  # 마지막 유효 값 유지
-                    "last_saved_cloud_gap": last_gap  # 마지막 유효 값 저장
+                    "cloud_gap_valid": current_cloud_gap_valid  # 값 유지
                 }
                 
         # UTBot 캔들 수 업데이트
@@ -591,7 +583,7 @@ class SignalTracker:
                     "candles_ago": None,
                     "timestamp": None
                 }
-    
+        
     def _calculate_candles_ago(self, signal_time, current_time):
         """
         신호 발생 시간과 현재 시간 사이의 캔들 수 계산 (5분 캔들 기준)
@@ -662,6 +654,7 @@ def analyze_chart_signals(image_path,
 
       1) BlackFlag FTS 신호 – Flip 신호, flip time, stop_loss_price를
          long, short 두 방향 모두 검출한 후, 프레임에서 오른쪽(큰 flip_x) 신호만 결과로 출력.
+         CloudGap 유효성을 노란색(롱)/파란색(숏) 사각형 검출로 판단.
       2) UT Bot Alerts 신호 – Buy(하늘색) 또는 Sell(주황색) 박스 중 오른쪽(최신) 박스를 선택하고,
          그 박스 중심 아래 x축 영역 OCR로 신호 시간(alert_time)을 판독.
       3) Volume Oscillator 값 – volume_roi 영역 내 파란색 박스를 찾아 그 내부 숫자(예:-11.51%)를 OCR해
@@ -700,7 +693,14 @@ def analyze_chart_signals(image_path,
 
     ############### BlackFlag FTS Detection ###############
     # run_blackflag_detection()는 주어진 방향("long" 또는 "short")에 대해 검출 결과를 반환함.
+    # 먼저 run_blackflag_detection 함수를 수정합니다. 
+    # cloud_gap_percent 계산 부분을 제거하고 색상 기반의 CloudGap 검출 로직 추가
+
     def run_blackflag_detection(direction):
+        """
+        주어진 방향("long" 또는 "short")에 대해 BlackFlag FTS 검출 결과를 반환함.
+        새로운 CloudGap 검출 로직: 노란색 사각형(롱)/파란색 사각형(숏) 검출
+        """
         # OCR 계산용 복사본(원본 이미지 손상을 피하기 위해)
         img_bf = img.copy()
         cx1, cy1, cx2, cy2 = to_px(blackflag_cloud_roi)
@@ -783,12 +783,8 @@ def analyze_chart_signals(image_path,
             else:
                 i_idx += 1
 
-        # 전역 변수로 마지막 유효한 stop loss 값을 저장
-        global last_valid_stoploss_long, last_valid_stoploss_short
-
-
         if flip_x_local is None:
-            return {"flip_detected": False, "flip_x": None, "flip_time": "", "stop_loss_price": None, "cloud_gap_percent": 0}
+            return {"flip_detected": False, "flip_x": None, "flip_time": "", "stop_loss_price": None, "cloud_gap_valid": False}
 
         # Step D: flip_x_global 및 flip time OCR
         flip_x_global = cx1 + flip_x_local
@@ -832,7 +828,6 @@ def analyze_chart_signals(image_path,
                 candidate_points = candidate_points.reshape(-1,2)
                 candidate_center_y = int(np.mean(candidate_points[:,1]))
                 
-        # 변수 초기화 위치 수정 - 더 일찍 변수들을 정의하여 오류 방지
         s_x1 = int(w * 0.92)
         s_x2 = int(w * 0.97)
         new_s_y1 = cy1  # 기본값으로 cy1 사용
@@ -849,8 +844,8 @@ def analyze_chart_signals(image_path,
         else:
             s_y1 = int(h * 0.05)
             s_y2 = int(h * 0.68)
-            new_s_y1 = s_y1  # 명시적으로 new_s_y1 설정
-            new_s_y2 = s_y2  # 명시적으로 new_s_y2 설정
+            new_s_y1 = s_y1
+            new_s_y2 = s_y2
             roi_stoploss = img_bf[new_s_y1:new_s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, new_s_y1), (s_x2, new_s_y2), (255,0,255), 2)
             
@@ -893,53 +888,111 @@ def analyze_chart_signals(image_path,
                     stop_loss_price = float(matches[0])
                 except:
                     stop_loss_price = None
-     
-     
 
-        # 구름대 경계 간 가격 차이 계산 - 새로 추가된 코드
-        cloud_gap_percent = 0
-               
-        # 현재 방향에 따라 이전 stop loss 값과 비교
-        if direction == "long":  # 빨간색->녹색 전환
-            # 이전에 저장된 유효한 short stop loss 값이 있는지 확인
-            if hasattr(run_blackflag_detection, 'last_valid_stoploss_short') and run_blackflag_detection.last_valid_stoploss_short:
-                # 이전 short stop loss와 현재 long stop loss의 가격 차이 계산
-                if stop_loss_price:  # 현재 stop loss 값이 유효하면
-                    price_diff = abs(run_blackflag_detection.last_valid_stoploss_short - stop_loss_price)
-                    # 현재 가격 기준으로 백분율 계산 (현재 가격은 entry_price로 추정)
-                    estimated_entry_price = (stop_loss_price + run_blackflag_detection.last_valid_stoploss_short) / 2  # 대략적인 추정
-                    cloud_gap_percent = (price_diff / estimated_entry_price) * 100
-                    
-            # 현재 long stop loss 값 저장
-            if stop_loss_price:
-                run_blackflag_detection.last_valid_stoploss_long = stop_loss_price
-                
-        else:  # direction == "short" (녹색->빨간색 전환)
-            # 이전에 저장된 유효한 long stop loss 값이 있는지 확인
-            if hasattr(run_blackflag_detection, 'last_valid_stoploss_long') and run_blackflag_detection.last_valid_stoploss_long:
-                # 이전 long stop loss와 현재 short stop loss의 가격 차이 계산
-                if stop_loss_price:  # 현재 stop loss 값이 유효하면
-                    price_diff = abs(run_blackflag_detection.last_valid_stoploss_long - stop_loss_price)
-                    # 현재 가격 기준으로 백분율 계산
-                    estimated_entry_price = (stop_loss_price + run_blackflag_detection.last_valid_stoploss_long) / 2  # 대략적인 추정
-                    cloud_gap_percent = (price_diff / estimated_entry_price) * 100
-                    
-            # 현재 short stop loss 값 저장
-            if stop_loss_price:
-                run_blackflag_detection.last_valid_stoploss_short = stop_loss_price
-                
-        # 디버그 시 갭 정보 표시
-        if debug and cloud_gap_percent > 0:
-            cv2.putText(debug_img,
-                    f"Gap: {cloud_gap_percent:.2f}%",
-                    (cx1 + flip_x_local, cy1 - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        # 새로운 기능: CloudGap 유효성 검출 - 색상 기반 (노란색/파란색 사각형)
+        cloud_gap_valid = False
         
-        return {"flip_detected": True,
-                "flip_x": flip_x_global,
-                "flip_time": time_label,
-                "stop_loss_price": stop_loss_price,
-                "cloud_gap_percent": cloud_gap_percent}  # cloud_gap_percent 추가
+        # CloudGap ROI 설정 - flip_x_global 근처에서 검색
+        # Y 좌표 범위는 상대적인 높이의 0.1~0.65 (조정 가능)
+        cloudgap_y_range = (0.1, 0.65)  # 정규화된 Y 좌표 범위
+        gap_y1 = int(h * cloudgap_y_range[0])
+        gap_y2 = int(h * cloudgap_y_range[1])
+        cloudgap_x_diff = 0.07
+        gap_x1 = max(0, flip_x_global - int(cloudgap_x_diff*w))  # flip_x 위치 근처 ±100 픽셀
+        gap_x2 = min(w, flip_x_global + int(cloudgap_x_diff*w))
+        
+        roi_cloudgap = img_bf[gap_y1:gap_y2, gap_x1:gap_x2]
+        roi_cloudgap_hsv = cv2.cvtColor(roi_cloudgap, cv2.COLOR_BGR2HSV)
+        
+        # 디버그용 CloudGap ROI 표시
+        if debug:
+            cv2.rectangle(debug_img, (gap_x1, gap_y1), (gap_x2, gap_y2), (255, 0, 0), 2)
+        
+        # 방향에 따라 다른 색상 검출
+        if direction == "long":
+            # 롱 CloudGap: 노란색 사각형 검출
+            # 노란색 HSV 범위
+            lower_yellow = np.array([20, 100, 100])
+            upper_yellow = np.array([30, 255, 255])
+            
+            # 노란색 마스크 생성
+            mask_yellow = cv2.inRange(roi_cloudgap_hsv, lower_yellow, upper_yellow)
+            
+            # 노이즈 제거
+            mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_OPEN, kernel)
+            mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_CLOSE, kernel)
+            
+            # 윤곽선 찾기
+            contours_yellow, _ = cv2.findContours(mask_yellow, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # 유효한 사각형 찾기 (면적 기준)
+            valid_yellow_rects = []
+            for cnt in contours_yellow:
+                area = cv2.contourArea(cnt)
+                if area > 100:  # 최소 면적 기준
+                    x, y, w, h = cv2.boundingRect(cnt)
+                    aspect_ratio = float(w) / h
+                    if 0.5 < aspect_ratio < 2.0:  # 사각형 비율 기준
+                        valid_yellow_rects.append((x, y, w, h))
+                        if debug:
+                            # 디버그 이미지에 사각형 표시 (절대 좌표로 변환)
+                            abs_x, abs_y = x + gap_x1, y + gap_y1
+                            cv2.rectangle(debug_img, (abs_x, abs_y), (abs_x + w, abs_y + h), (0, 255, 255), 2)
+                            cv2.putText(debug_img, "CloudGap-Long", (abs_x, abs_y - 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+            
+            # 유효한 노란색 사각형이 하나 이상 있으면 CloudGap Valid
+            cloud_gap_valid = len(valid_yellow_rects) > 0
+            
+        else:  # direction == "short"
+            # 숏 CloudGap: 파란색 사각형 검출
+            # 파란색 HSV 범위
+            lower_blue = np.array([100, 100, 100])
+            upper_blue = np.array([130, 255, 255])
+            
+            # 파란색 마스크 생성
+            mask_blue = cv2.inRange(roi_cloudgap_hsv, lower_blue, upper_blue)
+            
+            # 노이즈 제거
+            mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_OPEN, kernel)
+            mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_CLOSE, kernel)
+            
+            # 윤곽선 찾기
+            contours_blue, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # 유효한 사각형 찾기 (면적 기준)
+            valid_blue_rects = []
+            for cnt in contours_blue:
+                area = cv2.contourArea(cnt)
+                if area > 100:  # 최소 면적 기준
+                    x, y, w, h = cv2.boundingRect(cnt)
+                    aspect_ratio = float(w) / h
+                    if 0.5 < aspect_ratio < 2.0:  # 사각형 비율 기준
+                        valid_blue_rects.append((x, y, w, h))
+                        if debug:
+                            # 디버그 이미지에 사각형 표시 (절대 좌표로 변환)
+                            abs_x, abs_y = x + gap_x1, y + gap_y1
+                            cv2.rectangle(debug_img, (abs_x, abs_y), (abs_x + w, abs_y + h), (255, 0, 0), 2)
+                            cv2.putText(debug_img, "CloudGap-Short", (abs_x, abs_y - 5),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+            
+            # 유효한 파란색 사각형이 하나 이상 있으면 CloudGap Valid
+            cloud_gap_valid = len(valid_blue_rects) > 0
+        
+        # CloudGap 검출 결과 로깅
+        if cloud_gap_valid:
+            logger.info(f"BlackFlag {direction} CloudGap 검출 - 유효")
+        else:
+            logger.info(f"BlackFlag {direction} CloudGap 검출 실패 - 무효")
+        
+        return {
+            "flip_detected": True,
+            "flip_x": flip_x_global,
+            "flip_time": time_label,
+            "stop_loss_price": stop_loss_price,
+            "cloud_gap_valid": cloud_gap_valid  # cloud_gap_percent 대신 cloud_gap_valid 반환
+        }
+
 
     ############### UT Bot Alerts Detection ###############
     def detect_utbot():
@@ -1245,39 +1298,39 @@ def analyze_chart_signals(image_path,
                                 "flip_x": result_long["flip_x"],
                                 "flip_time": result_long["flip_time"],
                                 "stop_loss_price": result_long["stop_loss_price"],
-                                "cloud_gap_percent": result_long.get("cloud_gap_percent", 0)}
+                                "cloud_gap_valid": result_long.get("cloud_gap_valid", False)}  # cloud_gap_percent 대신 cloud_gap_valid
             else:
                 blackflag_final = {"flip_detected": "short",
                                 "flip_x": result_short["flip_x"],
                                 "flip_time": result_short["flip_time"],
                                 "stop_loss_price": result_short["stop_loss_price"],
-                                "cloud_gap_percent": result_short.get("cloud_gap_percent", 0)}
+                                "cloud_gap_valid": result_short.get("cloud_gap_valid", False)}  # cloud_gap_percent 대신 cloud_gap_valid
         elif result_long["flip_x"] is not None:
             blackflag_final = {"flip_detected": "long",
                             "flip_x": result_long["flip_x"],
                             "flip_time": result_long["flip_time"],
                             "stop_loss_price": result_long["stop_loss_price"],
-                            "cloud_gap_percent": result_long.get("cloud_gap_percent", 0)}
+                            "cloud_gap_valid": result_long.get("cloud_gap_valid", False)}  # cloud_gap_percent 대신 cloud_gap_valid
         else:
             blackflag_final = {"flip_detected": "short",
                             "flip_x": result_short["flip_x"],
                             "flip_time": result_short["flip_time"],
                             "stop_loss_price": result_short["stop_loss_price"],
-                            "cloud_gap_percent": result_short.get("cloud_gap_percent", 0)}
+                            "cloud_gap_valid": result_short.get("cloud_gap_valid", False)}  # cloud_gap_percent 대신 cloud_gap_valid
     elif result_long.get("flip_detected"):
         blackflag_final = {"flip_detected": "long",
                         "flip_x": result_long["flip_x"],
                         "flip_time": result_long["flip_time"],
                         "stop_loss_price": result_long["stop_loss_price"],
-                        "cloud_gap_percent": result_long.get("cloud_gap_percent", 0)}
+                        "cloud_gap_valid": result_long.get("cloud_gap_valid", False)}  # cloud_gap_percent 대신 cloud_gap_valid
     elif result_short.get("flip_detected"):
         blackflag_final = {"flip_detected": "short",
                         "flip_x": result_short["flip_x"],
                         "flip_time": result_short["flip_time"],
                         "stop_loss_price": result_short["stop_loss_price"],
-                        "cloud_gap_percent": result_short.get("cloud_gap_percent", 0)}
+                        "cloud_gap_valid": result_short.get("cloud_gap_valid", False)}  # cloud_gap_percent 대신 cloud_gap_valid
     else:
-        blackflag_final = {"flip_detected": "none", "flip_x": None, "flip_time": "", "stop_loss_price": None, "cloud_gap_percent": 0}
+        blackflag_final = {"flip_detected": "none", "flip_x": None, "flip_time": "", "stop_loss_price": None, "cloud_gap_valid": False}  # cloud_gap_percent 대신 cloud_gap_valid
 
     # UT Bot 및 Volume Oscillator 검출 함수 호출
     utbot_result = detect_utbot()
@@ -3121,6 +3174,7 @@ def signal_handler(signum, frame):
     sys.exit(0)
 
 # SQLite 데이터베이스 초기화 함수 - 거래 내역을 저장할 테이블을 생성
+# init_db 함수 수정: cloud_gap_valid 컬럼 추가
 def init_db():
     """데이터베이스 초기화 및 필요한 테이블 생성"""
     try:
@@ -3155,7 +3209,7 @@ def init_db():
                             utbot_candles_ago INTEGER,
                             volume_osc_current REAL,
                             stop_loss_price REAL,
-                            cloud_gap_percent REAL)''')
+                            cloud_gap_valid BOOLEAN)''')  # cloud_gap_percent 대신 cloud_gap_valid 사용
             else:
                 # 필요한 새 컬럼 추가
                 new_columns = {
@@ -3165,7 +3219,7 @@ def init_db():
                     'utbot_candles_ago': 'INTEGER',
                     'volume_osc_current': 'REAL',
                     'stop_loss_price': 'REAL',
-                    'cloud_gap_percent': 'REAL'  # 새 컬럼 추가
+                    'cloud_gap_valid': 'BOOLEAN'  # cloud_gap_percent 대신 cloud_gap_valid 추가
                 }
                 
                 # 존재하지 않는 컬럼만 추가
@@ -3173,6 +3227,17 @@ def init_db():
                     if col_name not in columns:
                         c.execute(f"ALTER TABLE trades ADD COLUMN {col_name} {col_type}")
                         print(f"Added new column: {col_name}")
+                        
+                # cloud_gap_percent 컬럼이 존재하면 cloud_gap_valid로 대체
+                if 'cloud_gap_percent' in columns and 'cloud_gap_valid' not in columns:
+                    try:
+                        # 기존 cloud_gap_percent 값을 기반으로 cloud_gap_valid 컬럼 추가
+                        c.execute("ALTER TABLE trades ADD COLUMN cloud_gap_valid BOOLEAN")
+                        # cloud_gap_percent가 0.65 이상인 경우 cloud_gap_valid = 1 (True)로 설정
+                        c.execute("UPDATE trades SET cloud_gap_valid = CASE WHEN cloud_gap_percent >= 0.65 THEN 1 ELSE 0 END")
+                        print("Converted cloud_gap_percent to cloud_gap_valid")
+                    except Exception as e:
+                        print(f"Error converting cloud_gap_percent column: {e}")
             
             conn.commit()
             return True
@@ -3180,7 +3245,7 @@ def init_db():
         logger.error(f"데이터베이스 초기화 오류: {e}")
         return False
 
-# 거래 기록 함수 수정 - 신호 데이터 포함
+# 거래 기록 함수 수정 - cloud_gap_valid 포함
 def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, 
               usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, 
               reflection='', tp_order_id=None, sl_order_id=None, signals_data=None):
@@ -3203,7 +3268,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
             utbot_candles_ago = None
             volume_osc_current = None
             stop_loss_price = None
-            cloud_gap_percent = None  # 구름대 갭 추가
+            cloud_gap_valid = False  # cloud_gap_percent 대신 cloud_gap_valid 추가
             
             if signals_data:
                 blackflag_signal = signals_data.get("BlackFlag_Signal")
@@ -3212,30 +3277,37 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
                 utbot_candles_ago = signals_data.get("UTBot_CandlesAgo")
                 volume_osc_current = signals_data.get("VolumeOsc_Current")
                 stop_loss_price = signals_data.get("StopLoss_Price")
-                cloud_gap_percent = signals_data.get("BlackFlag", {}).get("cloud_gap_percent", 0)  # 구름대 갭 추가
+                
+                # BlackFlag 데이터에서 cloud_gap_valid 추출
+                if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
+                    cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
             
-            # DB 테이블에 cloud_gap_percent 컬럼 추가
+            # 테이블에 cloud_gap_valid 컬럼이 있는지 확인
             try:
-                c.execute("ALTER TABLE trades ADD COLUMN cloud_gap_percent REAL")
+                c.execute("PRAGMA table_info(trades)")
+                columns = [column[1] for column in c.fetchall()]
+                
+                if "cloud_gap_valid" not in columns:
+                    c.execute("ALTER TABLE trades ADD COLUMN cloud_gap_valid BOOLEAN")
             except:
                 pass  # 이미 컬럼이 존재하는 경우 오류 무시
             
+            # SQL 문에 cloud_gap_valid 추가
             c.execute("""INSERT INTO trades 
                         (timestamp, trade_type, order_id, decision, percentage, reason, 
                         btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
                         btc_current_price, reflection, tp_order_id, sl_order_id,
                         blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                        utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_percent) 
+                        utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid) 
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (timestamp, trade_type, order_id, decision, percentage, reason, 
                     btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
                     btc_current_price, reflection, tp_order_id, sl_order_id,
                     blackflag_signal, blackflag_candles_ago, utbot_signal,
-                    utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_percent))
+                    utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid))
             return True
     except Exception as e:
         logger.error(f"거래 기록 오류: {e}")
-        return False
     
 
 def get_recent_trades(conn, num_trades=20):
@@ -5599,8 +5671,8 @@ def ai_trading():
         # Capture chart with retry logic
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=False, 
-            debug=False,
+            save_image=True, 
+            debug=True,
             max_retries=3,
             page_load_timeout=40
         )
@@ -5845,28 +5917,28 @@ def ai_trading():
             # 타임프레임 신호 테이블 결과 확인
             timeframe_signals = signals_analysis.get("TimeframeSignals", {})
         
-        # 구름대 경계 갭 임계값 설정 (백분율)
-        CLOUD_GAP_THRESHOLD = 0.65
-        
         # 롱 포지션 진입 조건 검증
         if decision == "buy" and current_position_side is None:
             # 신호 유효성 확인 (캔들 수 40으로 확장)
             blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
             utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
             
-            # 추가: BlackFlag FTS 구름대 경계 갭 검증
-            cloud_gap_percent = 0
+            # 새로운 CloudGap Valid 확인 방식
+            cloud_gap_valid = False
             if signals_analysis and "BlackFlag" in signals_analysis:
                 bf_data = signals_analysis["BlackFlag"]
-                if bf_data["flip_detected"] == "long":  # 빨간색->녹색 전환
-                    cloud_gap_percent = bf_data.get("cloud_gap_percent", 0)
-                    
-            # 구름대 갭 유효성 확인 - 0.65% 이상인 경우만 유효
-            cloud_gap_valid = cloud_gap_percent >= CLOUD_GAP_THRESHOLD
+                if bf_data["flip_detected"] == "long":
+                    cloud_gap_valid = bf_data.get("cloud_gap_valid", False)
             
-            # 구름대 갭이 임계값보다 작은 경우 로그 출력
+            # 직접적인 신호 데이터를 통한 보조 검증
+            if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
+                direct_cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
+                # 두 소스 중 하나라도 True면 유효 (OR 조건)
+                cloud_gap_valid = cloud_gap_valid or direct_cloud_gap_valid
+            
+            # CloudGap 상태 로깅
             if blackflag_valid and not cloud_gap_valid:
-                logger.warning(f"BlackFlag Buy 신호 발생했으나 구름대 갭이 작음: {cloud_gap_percent:.2f}% < {CLOUD_GAP_THRESHOLD}%")
+                logger.warning("BlackFlag Buy 신호 발생했으나 CloudGap이 유효하지 않음")
             
             # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
             price_change_pct = 0
@@ -5943,13 +6015,13 @@ def ai_trading():
             # 추가 로깅 - cloud_gap_valid 추가
             logger.info(f"롱 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, " +
                         f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
-                        f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}, CloudGap={cloud_gap_percent:.2f}%")
+                        f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}")
             
-            # 모든 기본 조건이 충족되는지 확인 (구름대 갭 검증 추가)
+            # 모든 기본 조건이 충족되는지 확인 (cloud_gap_valid 검증)
             base_conditions_met = (blackflag_valid and utbot_valid and 
                                 volume_valid and trend_valid and 
                                 price_valid and ranging_valid and 
-                                timeframe_valid and cloud_gap_valid)  # cloud_gap_valid 추가
+                                timeframe_valid and cloud_gap_valid)
             
             # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
             if base_conditions_met and correction_likely:
@@ -5964,19 +6036,22 @@ def ai_trading():
             blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
             utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
             
-            # 추가: BlackFlag FTS 구름대 경계 갭 검증
-            cloud_gap_percent = 0
+            # 새로운 CloudGap Valid 확인 방식
+            cloud_gap_valid = False
             if signals_analysis and "BlackFlag" in signals_analysis:
                 bf_data = signals_analysis["BlackFlag"]
-                if bf_data["flip_detected"] == "short":  # 녹색->빨간색 전환
-                    cloud_gap_percent = bf_data.get("cloud_gap_percent", 0)
-                    
-            # 구름대 갭 유효성 확인 - 0.65% 이상인 경우만 유효
-            cloud_gap_valid = cloud_gap_percent >= CLOUD_GAP_THRESHOLD
+                if bf_data["flip_detected"] == "short":
+                    cloud_gap_valid = bf_data.get("cloud_gap_valid", False)
             
-            # 구름대 갭이 임계값보다 작은 경우 로그 출력
+            # 직접적인 신호 데이터를 통한 보조 검증
+            if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
+                direct_cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
+                # 두 소스 중 하나라도 True면 유효 (OR 조건)
+                cloud_gap_valid = cloud_gap_valid or direct_cloud_gap_valid
+            
+            # CloudGap 상태 로깅
             if blackflag_valid and not cloud_gap_valid:
-                logger.warning(f"BlackFlag Sell 신호 발생했으나 구름대 갭이 작음: {cloud_gap_percent:.2f}% < {CLOUD_GAP_THRESHOLD}%")
+                logger.warning("BlackFlag Sell 신호 발생했으나 CloudGap이 유효하지 않음")
             
             # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
             price_change_pct = 0
@@ -6053,13 +6128,13 @@ def ai_trading():
             # 추가 로깅 - cloud_gap_valid 추가
             logger.info(f"숏 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, " +
                         f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
-                        f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}, CloudGap={cloud_gap_percent:.2f}%")
+                        f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}")
             
-            # 모든 기본 조건이 충족되는지 확인 (구름대 갭 검증 추가)
+            # 모든 기본 조건이 충족되는지 확인 (cloud_gap_valid 검증)
             base_conditions_met = (blackflag_valid and utbot_valid and 
                                 volume_valid and trend_valid and 
                                 price_valid and ranging_valid and 
-                                timeframe_valid and cloud_gap_valid)  # cloud_gap_valid 추가
+                                timeframe_valid and cloud_gap_valid)
             
             # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
             if base_conditions_met and correction_likely:
@@ -6073,7 +6148,7 @@ def ai_trading():
             return True
         
         # 다른 모든 경우 (e.g., "hold")
-        return True 
+        return True
 
     def verify_exit_conditions(exit_assessment, decision, position_side):
         """

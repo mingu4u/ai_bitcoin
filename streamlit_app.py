@@ -14,8 +14,8 @@ def load_data():
                  btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
                  btc_current_price, reflection, tp_order_id, sl_order_id,
                  blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                 utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_percent
-                 FROM trades"""  # cloud_gap_percent 추가
+                 utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid
+                 FROM trades"""  # cloud_gap_valid 추가
        df = pd.read_sql_query(query, conn)
        conn.close()
        return df
@@ -113,8 +113,8 @@ def main():
                    if 'blackflag_candles_ago' in latest_trade and pd.notna(latest_trade['blackflag_candles_ago']):
                        st.write(f"Candles Ago: {latest_trade['blackflag_candles_ago']}")
                    # Cloud Gap Percent 추가
-                   if 'cloud_gap_percent' in latest_trade and pd.notna(latest_trade['cloud_gap_percent']):
-                       st.write(f"Cloud Gap: {latest_trade['cloud_gap_percent']:.2f}%")
+                   if 'cloud_gap_valid' in latest_trade and pd.notna(latest_trade['cloud_gap_valid']):
+                       st.write(f"Cloud Gap: {latest_trade['cloud_gap_valid']:.2f}%")
                else:
                    st.write("No BlackFlag signal data available")
                
@@ -158,11 +158,11 @@ def main():
        start_idx = (page_number - 1) * page_size
        end_idx = min(start_idx + page_size, len(filtered_df))
        
-       # 표시할 컬럼 선택 - cloud_gap_percent 추가
+       # 표시할 컬럼 선택 - cloud_gap_valid 추가
        display_columns = ['timestamp', 'trade_type', 'decision', 'percentage', 'reason', 
                          'btc_balance', 'usdt_balance', 'total_assets', 'btc_current_price',
                          'blackflag_signal', 'blackflag_candles_ago', 'utbot_signal', 
-                         'utbot_candles_ago', 'volume_osc_current', 'stop_loss_price', 'cloud_gap_percent']
+                         'utbot_candles_ago', 'volume_osc_current', 'stop_loss_price', 'cloud_gap_valid']
        
        # 컬럼 폭 조정을 위해 display_df 생성
        display_df = filtered_df.iloc[start_idx:end_idx][display_columns].copy()
@@ -175,7 +175,7 @@ def main():
            'utbot_candles_ago': 'UTBot_Age',
            'volume_osc_current': 'Vol_Osc',
            'stop_loss_price': 'SL_Price',
-           'cloud_gap_percent': 'Cloud_Gap(%)'  # 컬럼명 변경
+           'cloud_gap_valid': 'Cloud_Gap'  # 컬럼명 변경
        })
        
        # 스크롤 가능한 테이블로 표시
