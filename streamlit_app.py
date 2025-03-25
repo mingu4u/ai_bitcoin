@@ -112,9 +112,9 @@ def main():
                    st.write(f"Signal: {latest_trade['blackflag_signal']}")
                    if 'blackflag_candles_ago' in latest_trade and pd.notna(latest_trade['blackflag_candles_ago']):
                        st.write(f"Candles Ago: {latest_trade['blackflag_candles_ago']}")
-                   # Cloud Gap Percent 추가
+                   # Cloud Gap Valid 추가
                    if 'cloud_gap_valid' in latest_trade and pd.notna(latest_trade['cloud_gap_valid']):
-                       st.write(f"Cloud Gap: {latest_trade['cloud_gap_valid']:.2f}%")
+                       st.write(f"Cloud Gap: {latest_trade['cloud_gap_valid']}")
                else:
                    st.write("No BlackFlag signal data available")
                
