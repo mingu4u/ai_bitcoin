@@ -642,7 +642,7 @@ def analyze_chart_signals(image_path,
                          # Timeframe Signal Table parameters (normalized ROI)
                          timeframe_table_roi=(0.882, 0.097, 0.925, 0.297),
                          # Ranging Box Detection parameters (normalized coordinates)
-                         ranging_detection_x_center=0.725,
+                         ranging_detection_x_center=0.715,
                          ranging_box_scan_height=(0.1, 0.6),
                          ranging_box_color_lower=np.array([125, 0, 125]),
                          ranging_box_color_upper=np.array([155, 50, 155]),
@@ -5671,8 +5671,8 @@ def ai_trading():
         # Capture chart with retry logic
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=True, 
-            debug=True,
+            save_image=False, 
+            debug=False,
             max_retries=3,
             page_load_timeout=40
         )
