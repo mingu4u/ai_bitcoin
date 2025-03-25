@@ -358,7 +358,9 @@ class SignalTracker:
                 "signal": None,
                 "candles_ago": None,
                 "timestamp": None,
-                "stop_loss_price": None
+                "stop_loss_price": None,
+                "cloud_gap_percent": 0,  # 기본값 추가
+                "last_saved_cloud_gap": 0  # 마지막 유효 cloud_gap 값 저장
             },
             "UTBot": {
                 "signal": None,
@@ -458,7 +460,7 @@ class SignalTracker:
             except Exception as e:
                 print(f"UTBot 시간 파싱 오류: {e}, 원본 시간: {utbot.get('alert_time')}")
         
-        # BlackFlag 업데이트도 동일한 방식으로 수정
+        # BlackFlag 업데이트 수정
         blackflag = analysis_result.get("BlackFlag", {})
         blackflag_flip = blackflag.get("flip_detected", "none")
         cloud_gap_percent = blackflag.get("cloud_gap_percent", 0)  # 구름대 갭 정보 추출
@@ -476,22 +478,26 @@ class SignalTracker:
                 previous_bf_candles_ago is not None and 
                 previous_bf_candles_ago >= 15 and 
                 previous_bf_candles_ago < 50):
-                # 기존 신호 유지하고 candles_ago는 정확히 재계산
+                # 기존 신호 및 cloud_gap_percent 유지하고 candles_ago는 정확히 재계산
                 if self.signals["BlackFlag"]["timestamp"]:
                     signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
                     new_bf_candles_ago = self._calculate_candles_ago(signal_time, current_time)
                     self.signals["BlackFlag"]["candles_ago"] = new_bf_candles_ago
-                    print(f"BlackFlag 신호 유지: {self.signals['BlackFlag']['signal']} (차트 가시권 외, 캔들 수: {new_bf_candles_ago})")
+                    # cloud_gap_percent 값 유지
+                    print(f"BlackFlag 신호 유지: {self.signals['BlackFlag']['signal']} (차트 가시권 외, 캔들 수: {new_bf_candles_ago}, 구름대 갭: {self.signals['BlackFlag']['cloud_gap_percent']:.2f}%)")
             elif previous_bf_candles_ago is None or previous_bf_candles_ago < 15:
                 # 차트 가시권 내(15캔들 미만)에서 신호가 사라진 경우 또는 신호가 없었던 경우
+                # cloud_gap_percent 값은 마지막 유효 값 유지
+                last_cloud_gap = self.signals["BlackFlag"].get("cloud_gap_percent", 0)
                 self.signals["BlackFlag"] = {
                     "signal": None,
                     "candles_ago": None,
                     "timestamp": None,
                     "stop_loss_price": None,
-                    "cloud_gap_percent": 0  # 구름대 갭 정보 초기화
+                    "cloud_gap_percent": last_cloud_gap,  # 마지막 값 유지
+                    "last_saved_cloud_gap": last_cloud_gap  # 마지막 값 저장
                 }
-                print(f"BlackFlag 신호 업데이트: None (차트에서 신호 사라짐)")
+                print(f"BlackFlag 신호 업데이트: None (차트에서 신호 사라짐), 구름대 갭 유지: {last_cloud_gap:.2f}%")
         elif blackflag.get("flip_time"):  # 유효한 신호가 있는 경우만 시간 처리
             try:
                 # flip_time이 HH:MM 형식이라고 가정
@@ -510,17 +516,26 @@ class SignalTracker:
                     # BlackFlag 신호 방향 매핑
                     signal_direction = "Buy" if blackflag_flip == "long" else "Sell"
                     
+                    # 새로운 BlackFlag 신호를 감지한 경우, 새 cloud_gap_percent 설정
+                    # 하지만 cloud_gap_percent가 0이라면 마지막 유효 값 유지
+                    if cloud_gap_percent <= 0:
+                        cloud_gap_percent = self.signals["BlackFlag"].get("last_saved_cloud_gap", 0)
+                    else:
+                        # 새 유효 값을 last_saved_cloud_gap에도 저장
+                        self.signals["BlackFlag"]["last_saved_cloud_gap"] = cloud_gap_percent
+                    
                     self.signals["BlackFlag"] = {
                         "signal": signal_direction,
                         "candles_ago": self._calculate_candles_ago(signal_time, current_time),
                         "timestamp": signal_time.isoformat(),
                         "stop_loss_price": blackflag.get("stop_loss_price"),
-                        "cloud_gap_percent": cloud_gap_percent  # 구름대 갭 정보 추가
+                        "cloud_gap_percent": cloud_gap_percent,  # 새 값 또는 마지막 유효 값
+                        "last_saved_cloud_gap": cloud_gap_percent  # 마지막 유효 값 업데이트
                     }
                     print(f"BlackFlag 신호 업데이트: {signal_direction}, {signal_time_str}, SL: {blackflag.get('stop_loss_price')}, 구름대 갭: {cloud_gap_percent:.2f}%")
             except Exception as e:
                 print(f"BlackFlag 시간 파싱 오류: {e}, 원본 시간: {blackflag.get('flip_time')}")
-        
+                
         # Volume Oscillator 업데이트 (기존 로직과 동일)
         vol_osc_value = analysis_result.get("VolumeOsc")
         if vol_osc_value is not None:
@@ -550,15 +565,20 @@ class SignalTracker:
             signal_time = datetime.fromisoformat(self.signals["BlackFlag"]["timestamp"])
             self.signals["BlackFlag"]["candles_ago"] = self._calculate_candles_ago(signal_time, current_time)
             
-            # 40캔들 이상 지난 신호는 None 처리
+            # 50캔들 이상 지난 신호는 None 처리하되, cloud_gap_percent는 유지
             if self.signals["BlackFlag"]["candles_ago"] > 50:
+                # 마지막 유효 cloud_gap_percent 값 보존
+                last_gap = self.signals["BlackFlag"].get("cloud_gap_percent", 0)
+                
                 self.signals["BlackFlag"] = {
                     "signal": None,
                     "candles_ago": None,
                     "timestamp": None,
-                    "stop_loss_price": None
+                    "stop_loss_price": None,
+                    "cloud_gap_percent": last_gap,  # 마지막 유효 값 유지
+                    "last_saved_cloud_gap": last_gap  # 마지막 유효 값 저장
                 }
-        
+                
         # UTBot 캔들 수 업데이트
         if self.signals["UTBot"]["timestamp"]:
             signal_time = datetime.fromisoformat(self.signals["UTBot"]["timestamp"])
@@ -603,7 +623,8 @@ class SignalTracker:
                 "signal": self.signals["BlackFlag"]["signal"],
                 "candles_ago": self.signals["BlackFlag"]["candles_ago"],
                 "stop_loss_price": self.signals["BlackFlag"]["stop_loss_price"],
-                "cloud_gap_percent": self.signals["BlackFlag"].get("cloud_gap_percent", 0)  # 구름대 갭 추가
+                "cloud_gap_percent": self.signals["BlackFlag"].get("cloud_gap_percent", 
+                                      self.signals["BlackFlag"].get("last_saved_cloud_gap", 0))  # 유효 값이 없으면 마지막 저장 값 사용
             },
             "UTBot": {
                 "signal": self.signals["UTBot"]["signal"],
@@ -613,7 +634,7 @@ class SignalTracker:
                 "values": self.signals["VolumeOsc"]["values"],
                 "current": self.signals["VolumeOsc"]["values"][-1]
             }
-        }   
+        }
 
 def analyze_chart_signals(image_path,
                          # BlackFlag FTS parameters (normalized coordinates)
@@ -762,115 +783,9 @@ def analyze_chart_signals(image_path,
             else:
                 i_idx += 1
 
-        # 구름대 경계 간 가격 차이 계산 - 새로 추가된 코드
-        cloud_gap_percent = 0
-        if flip_x_local is not None:
-            # 전환점 주변 분석
-            x_left = max(0, flip_x_local - 10)  # 전환점 왼쪽
-            x_right = min(roi_cloud_hsv.shape[1] - 1, flip_x_local + 10)  # 전환점 오른쪽
-            
-            if direction == "long":  # 빨간색->녹색 전환
-                # 전환점 왼쪽(빨간색)과 오른쪽(녹색)의 중앙 Y 좌표 찾기
-                red_y_coords = []
-                green_y_coords = []
-                
-                # 수직 스캔 (위에서 아래로)
-                for y in range(roi_cloud_hsv.shape[0]):
-                    # 전환점 왼쪽 (빨간색 영역)
-                    pixel_left = roi_cloud_hsv[y, x_left].reshape(1, 1, 3)
-                    mask_r1 = cv2.inRange(pixel_left, lower_red1, upper_red1)
-                    mask_r2 = cv2.inRange(pixel_left, lower_red2, upper_red2)
-                    if mask_r1[0, 0] > 0 or mask_r2[0, 0] > 0:
-                        red_y_coords.append(y)
-                    
-                    # 전환점 오른쪽 (녹색 영역)
-                    pixel_right = roi_cloud_hsv[y, x_right].reshape(1, 1, 3)
-                    mask_g = cv2.inRange(pixel_right, lower_green, upper_green)
-                    if mask_g[0, 0] > 0:
-                        green_y_coords.append(y)
-                
-                # 각 색상 영역의 중앙 Y 좌표 계산
-                if red_y_coords and green_y_coords:
-                    red_center_y = sum(red_y_coords) / len(red_y_coords)
-                    green_center_y = sum(green_y_coords) / len(green_y_coords)
-                    
-                    # Y 좌표 차이를 가격 차이 퍼센트로 변환
-                    # 화면 높이의 5%는 대략 가격의 0.25% 차이로 가정
-                    y_diff_percent = abs(red_center_y - green_center_y) / roi_cloud_hsv.shape[0] * 100
-                    cloud_gap_percent = y_diff_percent * 0.05  # 100% 화면 차이 = 약 5% 가격 차이로 추정
-                    
-                    # 디버그 시 표시
-                    if debug:
-                        # 왼쪽 빨간색 중앙점 표시
-                        cv2.circle(debug_img, 
-                                (cx1 + x_left, cy1 + int(red_center_y)), 
-                                5, (0, 0, 255), -1)
-                        # 오른쪽 녹색 중앙점 표시
-                        cv2.circle(debug_img, 
-                                (cx1 + x_right, cy1 + int(green_center_y)), 
-                                5, (0, 255, 0), -1)
-                        # 선으로 연결
-                        cv2.line(debug_img,
-                                (cx1 + x_left, cy1 + int(red_center_y)),
-                                (cx1 + x_right, cy1 + int(green_center_y)),
-                                (255, 255, 0), 2)
-                        
-                        # 텍스트로 갭 크기 표시
-                        cv2.putText(debug_img,
-                                f"Gap: {cloud_gap_percent:.2f}%",
-                                (cx1 + flip_x_local, cy1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-                    
-            else:  # direction == "short" (녹색->빨간색 전환)
-                # 전환점 왼쪽(녹색)과 오른쪽(빨간색)의 중앙 Y 좌표 찾기
-                green_y_coords = []
-                red_y_coords = []
-                
-                # 수직 스캔 (위에서 아래로)
-                for y in range(roi_cloud_hsv.shape[0]):
-                    # 전환점 왼쪽 (녹색 영역)
-                    pixel_left = roi_cloud_hsv[y, x_left].reshape(1, 1, 3)
-                    mask_g = cv2.inRange(pixel_left, lower_green, upper_green)
-                    if mask_g[0, 0] > 0:
-                        green_y_coords.append(y)
-                    
-                    # 전환점 오른쪽 (빨간색 영역)
-                    pixel_right = roi_cloud_hsv[y, x_right].reshape(1, 1, 3)
-                    mask_r1 = cv2.inRange(pixel_right, lower_red1, upper_red1)
-                    mask_r2 = cv2.inRange(pixel_right, lower_red2, upper_red2)
-                    if mask_r1[0, 0] > 0 or mask_r2[0, 0] > 0:
-                        red_y_coords.append(y)
-                
-                # 각 색상 영역의 중앙 Y 좌표 계산
-                if green_y_coords and red_y_coords:
-                    green_center_y = sum(green_y_coords) / len(green_y_coords)
-                    red_center_y = sum(red_y_coords) / len(red_y_coords)
-                    
-                    # Y 좌표 차이를 가격 차이 퍼센트로 변환
-                    y_diff_percent = abs(green_center_y - red_center_y) / roi_cloud_hsv.shape[0] * 100
-                    cloud_gap_percent = y_diff_percent * 0.05  # 100% 화면 차이 = 약 5% 가격 차이로 추정
-                    
-                    # 디버그 시 표시
-                    if debug:
-                        # 왼쪽 녹색 중앙점 표시
-                        cv2.circle(debug_img, 
-                                (cx1 + x_left, cy1 + int(green_center_y)), 
-                                5, (0, 255, 0), -1)
-                        # 오른쪽 빨간색 중앙점 표시
-                        cv2.circle(debug_img, 
-                                (cx1 + x_right, cy1 + int(red_center_y)), 
-                                5, (0, 0, 255), -1)
-                        # 선으로 연결
-                        cv2.line(debug_img,
-                                (cx1 + x_left, cy1 + int(green_center_y)),
-                                (cx1 + x_right, cy1 + int(red_center_y)),
-                                (255, 255, 0), 2)
-                        
-                        # 텍스트로 갭 크기 표시
-                        cv2.putText(debug_img,
-                                f"Gap: {cloud_gap_percent:.2f}%",
-                                (cx1 + flip_x_local, cy1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        # 전역 변수로 마지막 유효한 stop loss 값을 저장
+        global last_valid_stoploss_long, last_valid_stoploss_short
+
 
         if flip_x_local is None:
             return {"flip_detected": False, "flip_x": None, "flip_time": "", "stop_loss_price": None, "cloud_gap_percent": 0}
@@ -978,7 +893,48 @@ def analyze_chart_signals(image_path,
                     stop_loss_price = float(matches[0])
                 except:
                     stop_loss_price = None
+     
+     
+
+        # 구름대 경계 간 가격 차이 계산 - 새로 추가된 코드
+        cloud_gap_percent = 0
+               
+        # 현재 방향에 따라 이전 stop loss 값과 비교
+        if direction == "long":  # 빨간색->녹색 전환
+            # 이전에 저장된 유효한 short stop loss 값이 있는지 확인
+            if hasattr(run_blackflag_detection, 'last_valid_stoploss_short') and run_blackflag_detection.last_valid_stoploss_short:
+                # 이전 short stop loss와 현재 long stop loss의 가격 차이 계산
+                if stop_loss_price:  # 현재 stop loss 값이 유효하면
+                    price_diff = abs(run_blackflag_detection.last_valid_stoploss_short - stop_loss_price)
+                    # 현재 가격 기준으로 백분율 계산 (현재 가격은 entry_price로 추정)
+                    estimated_entry_price = (stop_loss_price + run_blackflag_detection.last_valid_stoploss_short) / 2  # 대략적인 추정
+                    cloud_gap_percent = (price_diff / estimated_entry_price) * 100
                     
+            # 현재 long stop loss 값 저장
+            if stop_loss_price:
+                run_blackflag_detection.last_valid_stoploss_long = stop_loss_price
+                
+        else:  # direction == "short" (녹색->빨간색 전환)
+            # 이전에 저장된 유효한 long stop loss 값이 있는지 확인
+            if hasattr(run_blackflag_detection, 'last_valid_stoploss_long') and run_blackflag_detection.last_valid_stoploss_long:
+                # 이전 long stop loss와 현재 short stop loss의 가격 차이 계산
+                if stop_loss_price:  # 현재 stop loss 값이 유효하면
+                    price_diff = abs(run_blackflag_detection.last_valid_stoploss_long - stop_loss_price)
+                    # 현재 가격 기준으로 백분율 계산
+                    estimated_entry_price = (stop_loss_price + run_blackflag_detection.last_valid_stoploss_long) / 2  # 대략적인 추정
+                    cloud_gap_percent = (price_diff / estimated_entry_price) * 100
+                    
+            # 현재 short stop loss 값 저장
+            if stop_loss_price:
+                run_blackflag_detection.last_valid_stoploss_short = stop_loss_price
+                
+        # 디버그 시 갭 정보 표시
+        if debug and cloud_gap_percent > 0:
+            cv2.putText(debug_img,
+                    f"Gap: {cloud_gap_percent:.2f}%",
+                    (cx1 + flip_x_local, cy1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        
         return {"flip_detected": True,
                 "flip_x": flip_x_global,
                 "flip_time": time_label,
