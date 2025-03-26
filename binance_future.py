@@ -3249,7 +3249,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
               usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, 
               reflection='', tp_order_id=None, sl_order_id=None, signals_data=None):
     try:
-        with conn:
+        with conn:  # context manager 사용하여 자동 커밋/롤백
             c = conn.cursor()
             timestamp = datetime.now().isoformat()
             
@@ -3263,6 +3263,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
             cloud_gap_valid = False  # 기본값
             
             if signals_data:
+                # 기존 데이터 추출
                 blackflag_signal = signals_data.get("BlackFlag_Signal")
                 blackflag_candles_ago = signals_data.get("BlackFlag_CandlesAgo")
                 utbot_signal = signals_data.get("UTBot_Signal")
@@ -3270,36 +3271,26 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
                 volume_osc_current = signals_data.get("VolumeOsc_Current")
                 stop_loss_price = signals_data.get("StopLoss_Price")
                 
-                # BlackFlag 데이터에서 cloud_gap_valid 추출
-                if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
-                    cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
-                else:
-                    # 디버깅용 로그 추가
-                    print(f"Cloud Gap Valid 값을 찾을 수 없음. signals_data 구조: {signals_data}")
-
-            # 테이블에 cloud_gap_valid 컬럼이 있는지 확인
-            try:
-                c.execute("PRAGMA table_info(trades)")
-                columns = [column[1] for column in c.fetchall()]
+                # cloud_gap_valid 직접 signals_data에서 추출 시도
+                cloud_gap_valid = signals_data.get("cloud_gap_valid", False)
                 
-                if "cloud_gap_valid" not in columns:
-                    c.execute("ALTER TABLE trades ADD COLUMN cloud_gap_valid BOOLEAN")
-            except:
-                pass  # 이미 컬럼이 존재하는 경우 오류 무시
+                # 디버깅용 로그
+                print(f"signals_data 입력값: {signals_data}")
+                print(f"signals_data에서 추출한 cloud_gap_valid: {cloud_gap_valid}")
             
-            # SQL 문에 cloud_gap_valid 추가
+            # SQL 문에 cloud_gap_valid 추가 - 1 또는 0으로 명시적 변환
             c.execute("""INSERT INTO trades 
-                       (timestamp, trade_type, order_id, decision, percentage, reason, 
-                       btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                       btc_current_price, reflection, tp_order_id, sl_order_id,
-                       blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                       utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid) 
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                   (timestamp, trade_type, order_id, decision, percentage, reason, 
-                   btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                   btc_current_price, reflection, tp_order_id, sl_order_id,
-                   blackflag_signal, blackflag_candles_ago, utbot_signal,
-                   utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid))
+                        (timestamp, trade_type, order_id, decision, percentage, reason, 
+                        btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                        btc_current_price, reflection, tp_order_id, sl_order_id,
+                        blackflag_signal, blackflag_candles_ago, utbot_signal, 
+                        utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (timestamp, trade_type, order_id, decision, percentage, reason, 
+                    btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                    btc_current_price, reflection, tp_order_id, sl_order_id,
+                    blackflag_signal, blackflag_candles_ago, utbot_signal,
+                    utbot_candles_ago, volume_osc_current, stop_loss_price, 1 if cloud_gap_valid else 0))
             return True
     except Exception as e:
         logger.error(f"거래 기록 오류: {e}")
@@ -6636,9 +6627,15 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                 tp_order_id = order_info['tp']['id'] if order_info.get('tp') else None
                 sl_order_id = order_info['sl']['id'] if order_info.get('sl') else None
                 
+                # signals_data에 cloud_gap_valid 값 추가
+                if chart_processor and hasattr(chart_processor, 'signal_tracker'):
+                    cloud_gap_valid = chart_processor.signal_tracker.signals["BlackFlag"].get("cloud_gap_valid", False)
+                    signals_data["cloud_gap_valid"] = cloud_gap_valid
+                    logger.info(f"Added cloud_gap_valid={cloud_gap_valid} to signals_data")
+                
                 log_trade(conn, 'AI', order_id, result.decision, result.percentage, result.reason, 
-                used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
-                reflection, tp_order_id, sl_order_id, signals_data)
+                        used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
+                        reflection, tp_order_id, sl_order_id, signals_data)
                 
                 # Set up trailing stop loss monitoring if available
                 if 'monitor_sl' in order_info:
@@ -6773,6 +6770,12 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                             logger.info(f"Created trailing SL monitoring job: {job_id} for {current_position_side} position")
             else:
                 # If no trade was executed (hold or failed)
+                # signals_data에 cloud_gap_valid 값 추가
+                if chart_processor and hasattr(chart_processor, 'signal_tracker'):
+                    cloud_gap_valid = chart_processor.signal_tracker.signals["BlackFlag"].get("cloud_gap_valid", False)
+                    signals_data["cloud_gap_valid"] = cloud_gap_valid
+                    logger.info(f"Added cloud_gap_valid={cloud_gap_valid} to signals_data (hold)")
+                
                 log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
                         used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
                         reflection, None, None, signals_data)
