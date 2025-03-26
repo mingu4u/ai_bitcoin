@@ -696,7 +696,7 @@ def analyze_chart_signals(image_path,
     # 먼저 run_blackflag_detection 함수를 수정합니다. 
     # cloud_gap_percent 계산 부분을 제거하고 색상 기반의 CloudGap 검출 로직 추가
 
-    def run_blackflag_detection(direction):
+    def run_blackflag_detection(direction, h, w):
         """
         주어진 방향("long" 또는 "short")에 대해 BlackFlag FTS 검출 결과를 반환함.
         새로운 CloudGap 검출 로직: 노란색 사각형(롱)/파란색 사각형(숏) 검출
@@ -981,9 +981,9 @@ def analyze_chart_signals(image_path,
         
         # CloudGap 검출 결과 로깅
         if cloud_gap_valid:
-            logger.info(f"BlackFlag {direction} CloudGap 검출 - 유효")
+            print(f"BlackFlag {direction} CloudGap 검출 - 유효")
         else:
-            logger.info(f"BlackFlag {direction} CloudGap 검출 실패 - 무효")
+            print(f"BlackFlag {direction} CloudGap 검출 실패 - 무효")
         
         return {
             "flip_detected": True,
@@ -1287,8 +1287,8 @@ def analyze_chart_signals(image_path,
     ############ End Ranging Market Detection ############
 
     # 각 지표 검출 함수 호출
-    result_long = run_blackflag_detection("long")
-    result_short = run_blackflag_detection("short")
+    result_long = run_blackflag_detection("long", h, w)
+    result_short = run_blackflag_detection("short", h, w)
     
     # 통합된 BlackFlag 결과: 두 방향 모두 검출된 경우 오른쪽(최대 flip_x) 신호만 선택
     if result_long.get("flip_detected") and result_short.get("flip_detected"):
@@ -5671,8 +5671,8 @@ def ai_trading():
         # Capture chart with retry logic
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=False, 
-            debug=False,
+            save_image=True, 
+            debug=True,
             max_retries=3,
             page_load_timeout=40
         )
