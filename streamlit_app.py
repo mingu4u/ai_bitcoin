@@ -15,9 +15,14 @@ def load_data():
                  btc_current_price, reflection, tp_order_id, sl_order_id,
                  blackflag_signal, blackflag_candles_ago, utbot_signal, 
                  utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid
-                 FROM trades"""  # cloud_gap_valid 추가
+                 FROM trades"""
        df = pd.read_sql_query(query, conn)
        conn.close()
+       
+       # 불리언 컬럼 변환 - SQLite에서는 0/1로 저장되므로 명시적 변환 필요
+       if 'cloud_gap_valid' in df.columns:
+           df['cloud_gap_valid'] = df['cloud_gap_valid'].astype(bool)
+       
        return df
    except sqlite3.Error as e:
        st.error(f"Database error: {e}")

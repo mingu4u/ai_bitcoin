@@ -1417,7 +1417,9 @@ class ChartSignalProcessor:
             "UTBot_CandlesAgo": signal_data["UTBot"]["candles_ago"],
             "VolumeOsc_Current": signal_data["VolumeOsc"]["current"],
             "VolumeOsc_History": signal_data["VolumeOsc"]["values"],
-            "StopLoss_Price": signal_data["BlackFlag"]["stop_loss_price"]
+            "StopLoss_Price": signal_data["BlackFlag"]["stop_loss_price"],
+            # cloud_gap_valid 추가
+            "cloud_gap_valid": signal_data["BlackFlag"].get("cloud_gap_valid", False)
         }
         
         return formatted_data
@@ -3248,6 +3250,13 @@ def init_db():
 def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, 
               usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, 
               reflection='', tp_order_id=None, sl_order_id=None, signals_data=None):
+    """
+    거래 기록을 DB에 저장하는 함수
+    
+    Args:
+        ... (기존 매개변수) ...
+        signals_data (dict, optional): 트레이딩 신호 데이터. 기본값은 None.
+    """
     try:
         with conn:  # context manager 사용하여 자동 커밋/롤백
             c = conn.cursor()
@@ -3263,7 +3272,6 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
             cloud_gap_valid = False  # 기본값
             
             if signals_data:
-                # 기존 데이터 추출
                 blackflag_signal = signals_data.get("BlackFlag_Signal")
                 blackflag_candles_ago = signals_data.get("BlackFlag_CandlesAgo")
                 utbot_signal = signals_data.get("UTBot_Signal")
@@ -3271,12 +3279,11 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
                 volume_osc_current = signals_data.get("VolumeOsc_Current")
                 stop_loss_price = signals_data.get("StopLoss_Price")
                 
-                # cloud_gap_valid 직접 signals_data에서 추출 시도
+                # cloud_gap_valid 값을 직접 추출
                 cloud_gap_valid = signals_data.get("cloud_gap_valid", False)
                 
-                # 디버깅용 로그
-                print(f"signals_data 입력값: {signals_data}")
-                print(f"signals_data에서 추출한 cloud_gap_valid: {cloud_gap_valid}")
+                # 디버깅 로그 (필요시)
+                logger.debug(f"cloud_gap_valid 값: {cloud_gap_valid}")
             
             # SQL 문에 cloud_gap_valid 추가 - 1 또는 0으로 명시적 변환
             c.execute("""INSERT INTO trades 
@@ -3294,8 +3301,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
             return True
     except Exception as e:
         logger.error(f"거래 기록 오류: {e}")
-    
-
+        return False
 def get_recent_trades(conn, num_trades=20):
     """
     최근 n개의 거래 내역을 시간 역순으로 가져오는 함수
