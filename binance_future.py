@@ -615,8 +615,7 @@ class SignalTracker:
                 "signal": self.signals["BlackFlag"]["signal"],
                 "candles_ago": self.signals["BlackFlag"]["candles_ago"],
                 "stop_loss_price": self.signals["BlackFlag"]["stop_loss_price"],
-                "cloud_gap_percent": self.signals["BlackFlag"].get("cloud_gap_percent", 
-                                      self.signals["BlackFlag"].get("last_saved_cloud_gap", 0))  # 유효 값이 없으면 마지막 저장 값 사용
+                "cloud_gap_valid": self.signals["BlackFlag"].get("cloud_gap_valid", False)  # cloud_gap_valid 추가
             },
             "UTBot": {
                 "signal": self.signals["UTBot"]["signal"],
@@ -3249,15 +3248,8 @@ def init_db():
 def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_balance, 
               usdt_balance, total_assets, btc_avg_buy_price, btc_current_price, 
               reflection='', tp_order_id=None, sl_order_id=None, signals_data=None):
-    """
-    거래 기록을 DB에 저장하는 함수
-    
-    Args:
-        ... (기존 매개변수) ...
-        signals_data (dict, optional): 트레이딩 신호 데이터. 기본값은 None.
-    """
     try:
-        with conn:  # context manager 사용하여 자동 커밋/롤백
+        with conn:
             c = conn.cursor()
             timestamp = datetime.now().isoformat()
             
@@ -3268,7 +3260,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
             utbot_candles_ago = None
             volume_osc_current = None
             stop_loss_price = None
-            cloud_gap_valid = False  # cloud_gap_percent 대신 cloud_gap_valid 추가
+            cloud_gap_valid = False  # 기본값
             
             if signals_data:
                 blackflag_signal = signals_data.get("BlackFlag_Signal")
@@ -3281,7 +3273,10 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
                 # BlackFlag 데이터에서 cloud_gap_valid 추출
                 if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
                     cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
-            
+                else:
+                    # 디버깅용 로그 추가
+                    print(f"Cloud Gap Valid 값을 찾을 수 없음. signals_data 구조: {signals_data}")
+
             # 테이블에 cloud_gap_valid 컬럼이 있는지 확인
             try:
                 c.execute("PRAGMA table_info(trades)")
@@ -3294,17 +3289,17 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
             
             # SQL 문에 cloud_gap_valid 추가
             c.execute("""INSERT INTO trades 
-                        (timestamp, trade_type, order_id, decision, percentage, reason, 
-                        btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                        btc_current_price, reflection, tp_order_id, sl_order_id,
-                        blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                        utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (timestamp, trade_type, order_id, decision, percentage, reason, 
-                    btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                    btc_current_price, reflection, tp_order_id, sl_order_id,
-                    blackflag_signal, blackflag_candles_ago, utbot_signal,
-                    utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid))
+                       (timestamp, trade_type, order_id, decision, percentage, reason, 
+                       btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                       btc_current_price, reflection, tp_order_id, sl_order_id,
+                       blackflag_signal, blackflag_candles_ago, utbot_signal, 
+                       utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid) 
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (timestamp, trade_type, order_id, decision, percentage, reason, 
+                   btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                   btc_current_price, reflection, tp_order_id, sl_order_id,
+                   blackflag_signal, blackflag_candles_ago, utbot_signal,
+                   utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid))
             return True
     except Exception as e:
         logger.error(f"거래 기록 오류: {e}")
