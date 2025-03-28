@@ -6410,10 +6410,10 @@ These values already incorporate the following refined criteria:
    - **Weak Signal:** 40% of calculated size. *(Adjusted from 30% for improved exposure on less sure signals.)*
 
 ## 8. Risk/Reward (PL Ratio) Guidelines (Bitcoin-Specific):
-- **Strong Signal & Low Volatility:** Use a PL ratio of **1.7**
-- **Strong Signal & High Volatility:** Use a PL ratio of **1.3** (to secure quick profits at lower target prices)
-- **Medium Signal:** Use a PL ratio of **1.5**
-- **Weak Signal:** Use a PL ratio of **1.4**
+- **Strong Signal & Low Volatility:** Use a PL ratio of **3**
+- **Strong Signal & High Volatility:** Use a PL ratio of **1.5** (to secure quick profits at lower target prices)
+- **Medium Signal:** Use a PL ratio of **2.5**
+- **Weak Signal:** Use a PL ratio of **2**
 
 ## 9. Additional Guidelines:
 - Always consider Bitcoin's rapid volatility alongside its long-term upward trend. This means while the market may be prone to swift moves, the overall bias can be bullish. Trade conservatively to preserve capital and adjust positions accordingly.
@@ -6428,7 +6428,7 @@ Output a JSON object:
   "decision": "buy" or "sell" or "hold",
   "percentage": integer (0-100),
   "stop_loss_price": float,
-  "pl_ratio": float (1.3-2.0),
+  "pl_ratio": float (1.5-3.0),
   "reason": "Concise rationale referencing signals & data"
 }}
 ```
