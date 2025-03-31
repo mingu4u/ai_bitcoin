@@ -5949,10 +5949,8 @@ def ai_trading():
                 price_change_pct = (entry_price - signal_price) / signal_price * 100
             
             # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
-            strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("long_trend_strong", False)
-            volume_valid = signals_data.get("VolumeOsc_Current", -999) > 0 or (
-                strong_signals and signals_data.get("VolumeOsc_Current", -999) > -15
-            )
+            # strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("long_trend_strong", False)
+            volume_valid = signals_data.get("VolumeOsc_Current", -999) > -15
             
             trend_valid = trend_strength_result.get("long_trend_strong", False)
             
@@ -6062,10 +6060,9 @@ def ai_trading():
                 price_change_pct = (signal_price - entry_price) / signal_price * 100
             
             # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
-            strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("short_trend_strong", False)
-            volume_valid = signals_data.get("VolumeOsc_Current", -999) > 0 or (
-                strong_signals and signals_data.get("VolumeOsc_Current", -999) > -15
-            )
+            # strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("short_trend_strong", False)
+            volume_valid = signals_data.get("VolumeOsc_Current", -999) > -15
+            
             
             trend_valid = trend_strength_result.get("short_trend_strong", False)
             
