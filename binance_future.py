@@ -5645,302 +5645,9 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
     return result
 
 
-def rule_based_trading_decision(signals_data, trend_strength_result, current_position_side,
-                              df_5min, entry_price, signals_analysis=None, unrealized_pnl=None,
-                              exit_assessment=None, total_usdt=0):
-    """
-    AI 대신 규칙 기반으로 트레이딩 결정을 생성하는 함수
-    
-    Args:
-        signals_data: 트레이딩 신호 데이터
-        trend_strength_result: 트렌드 강도 분석 결과
-        current_position_side: 현재 포지션 방향 ('long', 'short', None)
-        df_5min: 5분봉 데이터프레임
-        entry_price: 현재 가격
-        signals_analysis: analyze_chart_signals 함수의 반환 결과
-        unrealized_pnl: 미실현 손익 비율(%)
-        exit_assessment: assess_exit_signals 함수의 반환 결과
-        total_usdt: 총 USDT 자산
-        
-    Returns:
-        dict: AI 응답 형식과 동일한 결정 객체
-    """
-    # 기본 결정값 초기화
-    decision = "hold"
-    percentage = 0
-    reason = "Default hold - insufficient signals"
-    stop_loss_price = int(entry_price * 0.95)  # 기본값으로 현재가의 95%
-    pl_ratio = 2.0  # 기본 PL 비율
-    
-    # 1. 현재 포지션이 있고, 출구 신호가 있는 경우 먼저 처리
-    if current_position_side and exit_assessment and exit_assessment.get("should_exit", False):
-        if current_position_side == "long":
-            decision = "sell"
-            percentage = 100  # 전량 청산
-            reason = f"Long position exit - {', '.join(exit_assessment.get('exit_signals', ['Exit signals detected']))}"
-            pl_ratio = 2.0
-            return {
-                "decision": decision,
-                "percentage": percentage,
-                "reason": reason,
-                "stop_loss_price": int(stop_loss_price),
-                "pl_ratio": pl_ratio
-            }
-        elif current_position_side == "short":
-            decision = "buy"
-            percentage = 100  # 전량 청산
-            reason = f"Short position exit - {', '.join(exit_assessment.get('exit_signals', ['Exit signals detected']))}"
-            pl_ratio = 2.0
-            return {
-                "decision": decision,
-                "percentage": percentage,
-                "reason": reason,
-                "stop_loss_price": int(stop_loss_price),
-                "pl_ratio": pl_ratio
-            }
-    
-    # 2. 새로 추가: signals_analysis가 None이 아닌 경우 횡보장 감지 및 타임프레임 신호 테이블 검사
-    is_ranging_market = False
-    timeframe_signals = None
-    if signals_analysis is not None:
-        # 횡보장 감지 결과 확인
-        is_ranging_market = signals_analysis.get("IsRangingMarket", False)
-        
-        # 타임프레임 신호 테이블 결과 확인
-        timeframe_signals = signals_analysis.get("TimeframeSignals", {})
-    
-    # 3. 롱 진입 조건 검증
-    if current_position_side is None:  # 포지션이 없을 때만 진입 검토
-        # 롱 포지션 진입 조건 검증
-        blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
-        utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
-        
-        # CloudGap 확인
-        cloud_gap_valid = False
-        if signals_analysis and "BlackFlag" in signals_analysis:
-            bf_data = signals_analysis["BlackFlag"]
-            if bf_data["flip_detected"] == "long":
-                cloud_gap_valid = bf_data.get("cloud_gap_valid", False)
-        
-        # 직접적인 신호 데이터를 통한 보조 검증
-        if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
-            direct_cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
-            # 두 소스 중 하나라도 True면 유효 (OR 조건)
-            cloud_gap_valid = cloud_gap_valid or direct_cloud_gap_valid
-        
-        # 가격 변화 확인
-        price_change_pct = 0
-        signal_price = None
-        
-        # 첫 번째 신호 찾기
-        first_signal_candles_ago = min(
-            signals_data.get("BlackFlag_CandlesAgo", 999) if signals_data.get("BlackFlag_Signal") == "Buy" else 999,
-            signals_data.get("UTBot_CandlesAgo", 999) if signals_data.get("UTBot_Signal") == "Buy" else 999
-        )
-        
-        # 유효한 첫 신호가 있으면 가격 변화 계산
-        if first_signal_candles_ago < 999 and first_signal_candles_ago < len(df_5min):
-            idx = -1 - first_signal_candles_ago  # 신호가 발생한 캔들의 인덱스
-            signal_price = df_5min['close'].iloc[idx]
-            price_change_pct = (entry_price - signal_price) / signal_price * 100
-        
-        # Volume Oscillator 조건
-        volume_valid = signals_data.get("VolumeOsc_Current", -999) > -15
-        
-        # 트렌드 강도
-        trend_valid = trend_strength_result.get("long_trend_strong", False)
-        
-        # 가격 변화 조건
-        price_valid = price_change_pct < 2.0
-        
-        # 단기 조정 신호 확인
-        correction_signals = []
-        correction_likely = False
-        
-        if "short_term_correction" in trend_strength_result:
-            correction_signals = trend_strength_result["short_term_correction"].get("long_entry_correction_signals", [])
-            correction_likely = trend_strength_result["short_term_correction"].get("long_correction_likely", False)
-        
-        # 횡보장 감지 결과 검증
-        ranging_valid = not is_ranging_market
-        
-        # 타임프레임 신호 테이블 검증
-        timeframe_valid = True
-        
-        if timeframe_signals:
-            bullish_count = timeframe_signals.get("bullish_count", 0)
-            details = timeframe_signals.get("details", [])
-            
-            # 1. 상승 신호가 3개 이상인지 확인
-            timeframe_count_valid = bullish_count >= 3
-            
-            # 2. 5분봉 신호가 "Bullish"인지 확인
-            five_min_valid = False
-            for tf_signal in details:
-                if tf_signal.get("timeframe") == "5" and tf_signal.get("signal") == "Bullish":
-                    five_min_valid = True
-                    break
-            
-            # 두 조건 모두 만족해야 함
-            timeframe_valid = timeframe_count_valid and five_min_valid
-        
-        # 롱 진입 조건 검증 결과 로깅
-        long_entry_reason = f"롱 진입 조건: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, " + \
-                           f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " + \
-                           f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}"
-        
-        # 모든 기본 조건이 충족되는지 확인
-        long_base_conditions_met = (blackflag_valid and utbot_valid and 
-                            volume_valid and 
-                            price_valid and ranging_valid and 
-                            timeframe_valid and cloud_gap_valid)
-        
-        # 단기 조정 신호가 있으면 진입 보류
-        if long_base_conditions_met and not correction_likely:
-            decision = "buy"
-            # 신호 강도에 따른 포지션 크기 결정
-            if trend_valid:
-                percentage = 100  # Strong Signal
-                pl_ratio = 2.5    # Strong Signal PL ratio
-            else:
-                percentage = 40   # Weak Signal
-                pl_ratio = 2.0    # Weak Signal PL ratio
-            
-            reason = long_entry_reason
-            # BlackFlag의 스탑로스 가격 사용
-            stop_loss_price = signals_data.get("StopLoss_Price", entry_price * 0.95)
-        
-        # 4. 숏 진입 조건 검증
-        blackflag_valid_short = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
-        utbot_valid_short = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
-        
-        # CloudGap 확인 (숏)
-        cloud_gap_valid_short = False
-        if signals_analysis and "BlackFlag" in signals_analysis:
-            bf_data = signals_analysis["BlackFlag"]
-            if bf_data["flip_detected"] == "short":
-                cloud_gap_valid_short = bf_data.get("cloud_gap_valid", False)
-        
-        # 직접적인 신호 데이터를 통한 보조 검증 (숏)
-        if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
-            direct_cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
-            # 두 소스 중 하나라도 True면 유효 (OR 조건)
-            cloud_gap_valid_short = cloud_gap_valid_short or direct_cloud_gap_valid
-        
-        # 가격 변화 확인 (숏)
-        price_change_pct_short = 0
-        
-        # 첫 번째 신호 찾기 (숏)
-        first_signal_candles_ago_short = min(
-            signals_data.get("BlackFlag_CandlesAgo", 999) if signals_data.get("BlackFlag_Signal") == "Sell" else 999,
-            signals_data.get("UTBot_CandlesAgo", 999) if signals_data.get("UTBot_Signal") == "Sell" else 999
-        )
-        
-        # 유효한 첫 신호가 있으면 가격 변화 계산 (숏)
-        if first_signal_candles_ago_short < 999 and first_signal_candles_ago_short < len(df_5min):
-            idx = -1 - first_signal_candles_ago_short  # 신호가 발생한 캔들의 인덱스
-            signal_price = df_5min['close'].iloc[idx]
-            price_change_pct_short = (signal_price - entry_price) / signal_price * 100
-        
-        # Volume Oscillator 조건 (숏)
-        volume_valid_short = signals_data.get("VolumeOsc_Current", -999) > -15
-        
-        # 트렌드 강도 (숏)
-        trend_valid_short = trend_strength_result.get("short_trend_strong", False)
-        
-        # 가격 변화 조건 (숏)
-        price_valid_short = price_change_pct_short < 2.0
-        
-        # 단기 조정 신호 확인 (숏)
-        correction_signals_short = []
-        correction_likely_short = False
-        
-        if "short_term_correction" in trend_strength_result:
-            correction_signals_short = trend_strength_result["short_term_correction"].get("short_entry_correction_signals", [])
-            correction_likely_short = trend_strength_result["short_term_correction"].get("short_correction_likely", False)
-        
-        # 횡보장 감지 결과 검증 (숏)
-        ranging_valid_short = not is_ranging_market
-        
-        # 타임프레임 신호 테이블 검증 (숏)
-        timeframe_valid_short = True
-        
-        if timeframe_signals:
-            bearish_count = timeframe_signals.get("bearish_count", 0)
-            details = timeframe_signals.get("details", [])
-            
-            # 1. 하락 신호가 3개 이상인지 확인
-            timeframe_count_valid = bearish_count >= 3
-            
-            # 2. 5분봉 신호가 "Bearish"인지 확인
-            five_min_valid = False
-            for tf_signal in details:
-                if tf_signal.get("timeframe") == "5" and tf_signal.get("signal") == "Bearish":
-                    five_min_valid = True
-                    break
-            
-            # 두 조건 모두 만족해야 함
-            timeframe_valid_short = timeframe_count_valid and five_min_valid
-        
-        # 숏 진입 조건 검증 결과 로깅
-        short_entry_reason = f"숏 진입 조건: BlackFlag={blackflag_valid_short}, UTBot={utbot_valid_short}, Volume={volume_valid_short}, " + \
-                          f"PriceChange={price_change_pct_short:.2f}%, PriceValid={price_valid_short}, CorrectionLikely={correction_likely_short}, " + \
-                          f"RangingValid={ranging_valid_short}, TimeframeValid={timeframe_valid_short}, CloudGapValid={cloud_gap_valid_short}"
-        
-        # 모든 기본 조건이 충족되는지 확인 (숏)
-        short_base_conditions_met = (blackflag_valid_short and utbot_valid_short and 
-                                 volume_valid_short and 
-                                 price_valid_short and ranging_valid_short and 
-                                 timeframe_valid_short and cloud_gap_valid_short)
-        
-        # 롱 조건이 충족되지 않고, 숏 조건이 충족되며, 단기 조정 신호가 없는 경우
-        if not long_base_conditions_met and short_base_conditions_met and not correction_likely_short:
-            decision = "sell"
-            # 신호 강도에 따른 포지션 크기 결정
-            if trend_valid_short:
-                percentage = 100  # Strong Signal
-                pl_ratio = 2.5    # Strong Signal PL ratio
-            else:
-                percentage = 40   # Weak Signal
-                pl_ratio = 2.0    # Weak Signal PL ratio
-            
-            reason = short_entry_reason
-            # BlackFlag의 스탑로스 가격 사용
-            stop_loss_price = signals_data.get("StopLoss_Price", entry_price * 1.05)
-    
-    # 현재 포지션이 있는 경우 (위에서 출구 신호 체크 이후)
-    elif current_position_side == "long":
-        # 다른 조건에 관계없이 홀드 (출구 신호가 있었다면 이미 위에서 처리됨)
-        decision = "hold"
-        percentage = 0
-        reason = "Long position maintained - no exit signals"
-        
-    elif current_position_side == "short":
-        # 다른 조건에 관계없이 홀드 (출구 신호가 있었다면 이미 위에서 처리됨)
-        decision = "hold"
-        percentage = 0
-        reason = "Short position maintained - no exit signals"
-    
-    # 정수 형식으로 변환
-    if not isinstance(stop_loss_price, int):
-        try:
-            stop_loss_price = int(float(stop_loss_price))
-        except (ValueError, TypeError):
-            stop_loss_price = int(entry_price * 0.95)
-    
-    # 결과 반환
-    return {
-        "decision": decision,
-        "percentage": percentage,
-        "reason": reason,
-        "stop_loss_price": stop_loss_price,
-        "pl_ratio": pl_ratio
-    }
-
-
 ### 메인 AI 트레이딩 로직
 def ai_trading():
-    """Main trading function with rule-based decision making instead of AI"""
+    """Main AI trading function with pre-calculated trend strength and exit signals"""
     
     # Chart signal processor initialization
     chart_processor = ChartSignalProcessor()
@@ -6086,8 +5793,9 @@ def ai_trading():
     ### Get chart signal data and trading signals text
     trading_signals_text = chart_processor.create_prompt_text()
     signals_data = chart_processor.generate_ai_prompt_data()
-    
+        
     ### PRE-CALCULATE Key Decision Points
+        
     # 1. Assess trend strength (TREND STRENGTH CHECK)
     try:
         trend_strength_result = assess_trend_strength(df_5min, df_hourly, current_price, df_4h)
@@ -6125,6 +5833,7 @@ def ai_trading():
         logger.error(f"Error during exit signals assessment: {e}")
         should_exit = False
         exit_signals_list = []
+    
     
     # 3. Check market overheating conditions
     market_overheating = {
@@ -6171,14 +5880,352 @@ def ai_trading():
     except Exception as e:
         logger.error(f"Error assessing market overheating: {e}")
 
+    # 추가: 진입 조건 검증 함수
+    # 수정: verify_entry_conditions 함수에 횡보장 감지와 타임프레임 신호 테이블 검사 추가
+    def verify_entry_conditions(signals_data, trend_strength_result, decision, current_position_side, df_5min, entry_price, signals_analysis=None):
+        """
+        진입 조건 검증 함수 - 횡보장 감지와 타임프레임 신호 테이블 검사 추가
+        
+        Args:
+            signals_data: 트레이딩 신호 데이터
+            trend_strength_result: 트렌드 강도 분석 결과 (단기 조정 징후 포함)
+            decision: AI 결정 ('buy', 'sell', 'hold')
+            current_position_side: 현재 포지션 방향 ('long', 'short', None)
+            df_5min: 5분 캔들 데이터프레임
+            entry_price: 현재 가격
+            signals_analysis: analyze_chart_signals 함수의 반환 결과
+            
+        Returns:
+            bool: 진입 조건 충족 여부
+        """
+        # 새로 추가: signals_analysis가 None이 아닌 경우 횡보장 감지 및 타임프레임 신호 테이블 검사
+        is_ranging_market = False
+        timeframe_signals = None
+        
+        if signals_analysis is not None:
+            # 횡보장 감지 결과 확인
+            is_ranging_market = signals_analysis.get("IsRangingMarket", False)
+            
+            # 타임프레임 신호 테이블 결과 확인
+            timeframe_signals = signals_analysis.get("TimeframeSignals", {})
+        
+        # 롱 포지션 진입 조건 검증
+        if decision == "buy" and current_position_side is None:
+            # 신호 유효성 확인 (캔들 수 40으로 확장)
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
+            utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
+            
+            # 새로운 CloudGap Valid 확인 방식
+            cloud_gap_valid = False
+            if signals_analysis and "BlackFlag" in signals_analysis:
+                bf_data = signals_analysis["BlackFlag"]
+                if bf_data["flip_detected"] == "long":
+                    cloud_gap_valid = bf_data.get("cloud_gap_valid", False)
+            
+            # 직접적인 신호 데이터를 통한 보조 검증
+            if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
+                direct_cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
+                # 두 소스 중 하나라도 True면 유효 (OR 조건)
+                cloud_gap_valid = cloud_gap_valid or direct_cloud_gap_valid
+            
+            # CloudGap 상태 로깅
+            if blackflag_valid and not cloud_gap_valid:
+                logger.warning("BlackFlag Buy 신호 발생했으나 CloudGap이 유효하지 않음")
+            
+            # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
+            price_change_pct = 0
+            signal_price = None
+            
+            # 첫 번째 신호 찾기
+            first_signal_candles_ago = min(
+                signals_data.get("BlackFlag_CandlesAgo", 999) if signals_data.get("BlackFlag_Signal") == "Buy" else 999,
+                signals_data.get("UTBot_CandlesAgo", 999) if signals_data.get("UTBot_Signal") == "Buy" else 999
+            )
+            
+            # 유효한 첫 신호가 있으면 가격 변화 계산
+            if first_signal_candles_ago < 999 and first_signal_candles_ago < len(df_5min):
+                idx = -1 - first_signal_candles_ago  # 신호가 발생한 캔들의 인덱스
+                signal_price = df_5min['close'].iloc[idx]
+                price_change_pct = (entry_price - signal_price) / signal_price * 100
+            
+            # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
+            # strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("long_trend_strong", False)
+            volume_valid = signals_data.get("VolumeOsc_Current", -999) > -15
+            if signals_data.get("VolumeOsc_Current", -999) < -15:
+                volume_valid = False
+            
+            trend_valid = trend_strength_result.get("long_trend_strong", False)
+            
+            # 가격 변화 조건 (2% 이상 상승하면 진입하지 않음)
+            price_valid = price_change_pct < 2.0
+            
+            # 중요: 단기 조정 신호 확인 - short_term_correction 데이터 활용
+            correction_signals = []
+            correction_likely = False
+            
+            if "short_term_correction" in trend_strength_result:
+                # 롱 포지션에 대한 단기 조정 신호 가져오기
+                correction_signals = trend_strength_result["short_term_correction"].get("long_entry_correction_signals", [])
+                correction_likely = trend_strength_result["short_term_correction"].get("long_correction_likely", False)
+            
+            # 추가: 횡보장 감지 결과 기반 검증
+            ranging_valid = not is_ranging_market
+            if not ranging_valid:
+                logger.info("롱 진입 제한: 현재 시장이 횡보장 상태임")
+            
+            # 추가: 타임프레임 신호 테이블 검증
+            timeframe_valid = True
+            
+            if timeframe_signals:
+                bullish_count = timeframe_signals.get("bullish_count", 0)
+                details = timeframe_signals.get("details", [])
+                
+                # 1. 상승 신호가 3개 이상인지 확인
+                timeframe_count_valid = bullish_count >= 3
+                
+                # 2. 5분봉 신호가 "Bullish"인지 확인
+                five_min_valid = False
+                for tf_signal in details:
+                    if tf_signal.get("timeframe") == "5" and tf_signal.get("signal") == "Bullish":
+                        five_min_valid = True
+                        break
+                
+                # 두 조건 모두 만족해야 함
+                timeframe_valid = timeframe_count_valid and five_min_valid
+                
+                if not timeframe_valid:
+                    if not timeframe_count_valid:
+                        logger.info(f"롱 진입 제한: 충분한 타임프레임 상승 신호가 없음 (bullish_count: {bullish_count})")
+                    if not five_min_valid:
+                        logger.info("롱 진입 제한: 5분봉 상승 신호가 없음")
+            
+            # 단기 조정 가능성 로깅
+            if correction_signals:
+                logger.info(f"롱 진입 전 단기 조정 신호 감지: {correction_signals}")
+                logger.info(f"단기 조정 가능성: {'높음' if correction_likely else '낮음'}")
+            
+            # 추가 로깅 - cloud_gap_valid 추가
+            # logger.info(f"롱 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, " +
+            #             f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
+            #             f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}")
+            logger.info(f"롱 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, " +
+                        f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
+                        f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}") 
+            
+            # 모든 기본 조건이 충족되는지 확인 (cloud_gap_valid 검증)
+            # base_conditions_met = (blackflag_valid and utbot_valid and 
+            #                     volume_valid and trend_valid and 
+            #                     price_valid and ranging_valid and 
+            #                     timeframe_valid and cloud_gap_valid)
+            base_conditions_met = (blackflag_valid and utbot_valid and 
+                                volume_valid and 
+                                price_valid and ranging_valid and 
+                                timeframe_valid and cloud_gap_valid)            
+            # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
+            if base_conditions_met and correction_likely:
+                logger.warning(f"롱 진입 기본 조건 충족하지만 단기 조정 가능성이 높아 진입 보류: {correction_signals}")
+                return False
+            
+            return base_conditions_met
+        
+        # 숏 포지션 진입 조건 검증
+        elif decision == "sell" and current_position_side is None:
+            # 신호 유효성 확인 (캔들 수 40으로 확장)
+            blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
+            utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
+            
+            # 새로운 CloudGap Valid 확인 방식
+            cloud_gap_valid = False
+            if signals_analysis and "BlackFlag" in signals_analysis:
+                bf_data = signals_analysis["BlackFlag"]
+                if bf_data["flip_detected"] == "short":
+                    cloud_gap_valid = bf_data.get("cloud_gap_valid", False)
+            
+            # 직접적인 신호 데이터를 통한 보조 검증
+            if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
+                direct_cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
+                # 두 소스 중 하나라도 True면 유효 (OR 조건)
+                cloud_gap_valid = cloud_gap_valid or direct_cloud_gap_valid
+            
+            # CloudGap 상태 로깅
+            if blackflag_valid and not cloud_gap_valid:
+                logger.warning("BlackFlag Sell 신호 발생했으나 CloudGap이 유효하지 않음")
+            
+            # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
+            price_change_pct = 0
+            signal_price = None
+            
+            # 첫 번째 신호 찾기
+            first_signal_candles_ago = min(
+                signals_data.get("BlackFlag_CandlesAgo", 999) if signals_data.get("BlackFlag_Signal") == "Sell" else 999,
+                signals_data.get("UTBot_CandlesAgo", 999) if signals_data.get("UTBot_Signal") == "Sell" else 999
+            )
+            
+            # 유효한 첫 신호가 있으면 가격 변화 계산
+            if first_signal_candles_ago < 999 and first_signal_candles_ago < len(df_5min):
+                idx = -1 - first_signal_candles_ago  # 신호가 발생한 캔들의 인덱스
+                signal_price = df_5min['close'].iloc[idx]
+                price_change_pct = (signal_price - entry_price) / signal_price * 100
+            
+            # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
+            #  strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("short_trend_strong", False)
+            volume_valid = signals_data.get("VolumeOsc_Current", -999) > -15
+            if signals_data.get("VolumeOsc_Current", -999) < -15:
+                volume_valid = False
+            
+            trend_valid = trend_strength_result.get("short_trend_strong", False)
+            
+            # 가격 변화 조건 (2% 이상 하락하면 진입하지 않음)
+            price_valid = price_change_pct < 2.0
+            
+            # 중요: 단기 조정 신호 확인 - short_term_correction 데이터 활용
+            correction_signals = []
+            correction_likely = False
+            
+            if "short_term_correction" in trend_strength_result:
+                # 숏 포지션에 대한 단기 조정 신호 가져오기
+                correction_signals = trend_strength_result["short_term_correction"].get("short_entry_correction_signals", [])
+                correction_likely = trend_strength_result["short_term_correction"].get("short_correction_likely", False)
+            
+            # 추가: 횡보장 감지 결과 기반 검증
+            ranging_valid = not is_ranging_market
+            if not ranging_valid:
+                logger.info("숏 진입 제한: 현재 시장이 횡보장 상태임")
+            
+            # 추가: 타임프레임 신호 테이블 검증
+            timeframe_valid = True
+            
+            if timeframe_signals:
+                bearish_count = timeframe_signals.get("bearish_count", 0)
+                details = timeframe_signals.get("details", [])
+                
+                # 1. 하락 신호가 3개 이상인지 확인
+                timeframe_count_valid = bearish_count >= 3
+                
+                # 2. 5분봉 신호가 "Bearish"인지 확인
+                five_min_valid = False
+                for tf_signal in details:
+                    if tf_signal.get("timeframe") == "5" and tf_signal.get("signal") == "Bearish":
+                        five_min_valid = True
+                        break
+                
+                # 두 조건 모두 만족해야 함
+                timeframe_valid = timeframe_count_valid and five_min_valid
+                
+                if not timeframe_valid:
+                    if not timeframe_count_valid:
+                        logger.info(f"숏 진입 제한: 충분한 타임프레임 하락 신호가 없음 (bearish_count: {bearish_count})")
+                    if not five_min_valid:
+                        logger.info("숏 진입 제한: 5분봉 하락 신호가 없음")
+            
+            # 단기 조정 가능성 로깅
+            if correction_signals:
+                logger.info(f"숏 진입 전 단기 조정 신호 감지: {correction_signals}")
+                logger.info(f"단기 조정 가능성: {'높음' if correction_likely else '낮음'}")
+            
+            # 추가 로깅 - cloud_gap_valid 추가
+            # logger.info(f"숏 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, " +
+            #             f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
+            #             f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}")
+            logger.info(f"숏 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, " +
+                        f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
+                        f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}")
+        
+            # 모든 기본 조건이 충족되는지 확인 (cloud_gap_valid 검증)
+            # base_conditions_met = (blackflag_valid and utbot_valid and 
+            #                     volume_valid and trend_valid and 
+            #                     price_valid and ranging_valid and 
+            #                     timeframe_valid and cloud_gap_valid)
+            base_conditions_met = (blackflag_valid and utbot_valid and 
+                                volume_valid and 
+                                price_valid and ranging_valid and 
+                                timeframe_valid and cloud_gap_valid)            
+            # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
+            if base_conditions_met and correction_likely:
+                logger.warning(f"숏 진입 기본 조건 충족하지만 단기 조정 가능성이 높아 진입 보류: {correction_signals}")
+                return False
+            
+            return base_conditions_met
+        
+        # 포지션 청산(exit) 조건은 이미 should_exit 변수로 검증됨
+        elif (decision == "sell" and current_position_side == "long") or (decision == "buy" and current_position_side == "short"):
+            return True
+        
+        # 다른 모든 경우 (e.g., "hold")
+        return True
+
+    def verify_exit_conditions(exit_assessment, decision, position_side):
+        """
+        AI의 출구(청산) 결정이 실제 출구 조건과 일치하는지 확인하는 함수
+        
+        Args:
+            exit_assessment: assess_exit_signals 함수의 반환 결과
+            decision: AI 결정 ('buy', 'sell', 'hold')
+            position_side: 현재 포지션 방향 ('long', 'short', None)
+            
+        Returns:
+            bool: 출구 조건 충족 여부
+        """
+        # 포지션이 없으면 청산할 수 없음
+        if not position_side:
+            if decision in ['buy', 'sell']:
+                logger.warning(f"포지션이 없는데 {decision} 결정. 청산 불가능.")
+                return False
+            return True
+        
+        # should_exit 값 확인 (미리 계산된 출구 신호)
+        should_exit = exit_assessment.get("should_exit", False)
+        
+        # 청산 판단 검증
+        if position_side == 'long' and decision == 'sell':
+            # Long 포지션 청산 (sell)
+            if not should_exit:
+                logger.warning("출구 신호가 없는데 Long 포지션 청산 결정. 상충된 판단.")
+                if exit_assessment.get("exit_signals"):
+                    logger.info(f"감지된 출구 신호: {exit_assessment.get('exit_signals')}")
+                    logger.info(f"출구 점수: {exit_assessment.get('exit_score', 0)}")
+                    logger.info(f"임계값: {exit_assessment.get('exit_threshold', 2.0)}")
+                return False
+            return True
+            
+        elif position_side == 'short' and decision == 'buy':
+            # Short 포지션 청산 (buy)
+            if not should_exit:
+                logger.warning("출구 신호가 없는데 Short 포지션 청산 결정. 상충된 판단.")
+                if exit_assessment.get("exit_signals"):
+                    logger.info(f"감지된 출구 신호: {exit_assessment.get('exit_signals')}")
+                    logger.info(f"출구 점수: {exit_assessment.get('exit_score', 0)}")
+                    logger.info(f"임계값: {exit_assessment.get('exit_threshold', 2.0)}")
+                return False
+            return True
+        
+        # hold 결정은 항상 유효
+        elif decision == 'hold':
+            return True
+        
+        # 포지션과 일치하지 않는 방향으로 청산 명령이 내려진 경우
+        elif (position_side == 'long' and decision != 'sell') or (position_side == 'short' and decision != 'buy'):
+            if decision != 'hold':
+                logger.warning(f"{position_side} 포지션에 대해 잘못된 청산 명령: {decision}")
+                return False
+        
+        # 기본적으로 검증 통과
+        return True
+
+
     # 단기 조정 신호 데이터 추출 및 변수 준비
     long_correction_signals = trend_strength_result.get("short_term_correction", {}).get("long_entry_correction_signals", [])
     short_correction_signals = trend_strength_result.get("short_term_correction", {}).get("short_entry_correction_signals", [])
     long_correction_likely = trend_strength_result.get("short_term_correction", {}).get("long_correction_likely", False)
     short_correction_likely = trend_strength_result.get("short_term_correction", {}).get("short_correction_likely", False)
 
-    ### RULE BASED DECISION MAKING (instead of AI)
+    ### AI Decision Making
     try:
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        if not client.api_key:
+            logger.error("OpenAI API key is missing or invalid.")
+            return None
+            
         # Database connection
         conn = get_db_connection()
         if not conn:
@@ -6203,7 +6250,7 @@ def ai_trading():
             # Generate reflection and improvement content
             reflection = generate_reflection(recent_trades, current_market_data)
             
-            # Format pre-calculated data
+            # Format pre-calculated data for the AI prompt
             blackflag_signal = signals_data.get("BlackFlag_Signal", "None") 
             blackflag_candles_ago = signals_data.get("BlackFlag_CandlesAgo", "None")
             utbot_signal = signals_data.get("UTBot_Signal", "None")
@@ -6211,27 +6258,275 @@ def ai_trading():
             volume_osc_current = signals_data.get("VolumeOsc_Current", "None")
             stop_loss_price = signals_data.get("StopLoss_Price", "None")
             
-            # Use rule_based_trading_decision function instead of AI
-            result_dict = rule_based_trading_decision(
-                signals_data=signals_data,
-                trend_strength_result=trend_strength_result,
-                current_position_side=position_side,
-                df_5min=df_5min,
-                entry_price=current_price,
-                signals_analysis=signals_analysis,
-                unrealized_pnl=unrealized_pnl,
-                exit_assessment=exit_assessment,
-                total_usdt=total_usdt
+            # Call OpenAI API with the updated prompt format
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                    "role": "system",
+                    "content": f"""
+# Bitcoin Futures Trading Strategy with Pre-calculated Indicators
+
+You are a Bitcoin futures day trader on the 5-minute timeframe with leveraged positions. Your strategy uses pre-calculated core indicators and trend strength assessments. Capital preservation is paramount.
+
+## 1. CRITICAL: POSITION MANAGEMENT RULES ⚠️
+
+**POSITION MANAGEMENT RULES - READ FIRST**
+
+Before making ANY trading decision:
+
+1. **ALWAYS CHECK** current position in the Portfolio section:
+   - "Current Position Side" will be "long", "short", or "none"
+
+2. **For EXIT decisions:**
+   - If current position is LONG → Must use **"sell"** command to exit
+   - If current position is SHORT → Must use **"buy"** command to exit
+   - If current position is NONE → No exit possible (consider entries only)
+
+3. **For ENTRY decisions:**
+   - To open LONG position → Use **"buy"** command
+   - To open SHORT position → Use **"sell"** command
+
+⚠️ Using the wrong command will INCREASE position risk instead of reducing it.
+
+## 2. Market Data and Portfolio Information
+
+The data below must be considered in your analysis.
+
+**[Market Data]**
+- Current Price: {current_price:.2f} USDT
+
+**Technical Indicators (5-min, 1-hour, 4-hour timeframes)**
+
+→ **5-Minute Chart Data:**
+- RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
+- MACD: {df_5min['macd'].iloc[-1]:.2f}
+- Bollinger Bands (20):
+  * Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}
+  * Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}
+  * Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
+- ATR: {df_5min['atr'].iloc[-1]:.2f}
+- ADX: {df_5min['adx'].iloc[-1]:.2f}
+- DI+: {df_5min['di_plus'].iloc[-1]:.2f}
+- DI-: {df_5min['di_minus'].iloc[-1]:.2f}
+- CMF: {df_5min['cmf'].iloc[-1]:.2f}
+
+→ **1-Hour Chart Data:**
+- RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
+- MACD: {df_hourly['macd'].iloc[-1]:.2f}
+- ADX: {df_hourly['adx'].iloc[-1]:.2f}
+- DI+: {df_hourly['di_plus'].iloc[-1]:.2f}
+- DI-: {df_hourly['di_minus'].iloc[-1]:.2f}
+- CMF: {df_hourly['cmf'].iloc[-1]:.2f}
+
+→ **4-Hour Chart Data:**
+- RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
+- MACD: {df_4h['macd'].iloc[-1]:.2f}
+- ADX: {df_4h['adx'].iloc[-1]:.2f}
+- DI+: {df_4h['di_plus'].iloc[-1]:.2f}
+- DI-: {df_4h['di_minus'].iloc[-1]:.2f}
+- CMF: {df_4h['cmf'].iloc[-1]:.2f}
+
+**[Portfolio]**
+- Total USDT Assets: {total_usdt:.1f}
+- Free USDT Balance: {free_usdt:.1f}
+- Used USDT Holdings: {used_usdt:.1f}
+- BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT
+- Current Position Side: {position_side} ← "long", "short", or "none"
+- Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
+
+## 3. Pre-Calculated Indicators and Signals
+
+**CORE INDICATORS STATUS (PRE-CALCULATED):**
+- BlackFlag FTS Signal: {blackflag_signal} (Candles ago: {blackflag_candles_ago})
+- BlackFlag Cloud Gap: {signals_data.get("BlackFlag", {}).get("cloud_gap_percent", 0):.2f}% (Valid if >= 0.65%)
+- UT Bot Signal: {utbot_signal} (Candles ago: {utbot_candles_ago})
+- Volume Oscillator: {volume_osc_current}
+- Stop Loss Price: {stop_loss_price}
+
+**TREND STRENGTH ASSESSMENT (PRE-CALCULATED):**
+- Long Trend Strength: {"STRONG" if long_trend_strong else "WEAK"}
+- Short Trend Strength: {"STRONG" if short_trend_strong else "WEAK"}
+
+**SHORT-TERM CORRECTION ASSESSMENT (PRE-CALCULATED):**
+- Long Entry Correction Signals: {len(long_correction_signals)} signals detected
+- Short Entry Correction Signals: {len(short_correction_signals)} signals detected
+- Long Correction Likely: {"YES" if long_correction_likely else "NO"}
+- Short Correction Likely: {"YES" if short_correction_likely else "NO"}
+
+**NEW - RANGING MARKET DETECTION (PRE-CALCULATED):**
+- Is Market in Ranging State: {"YES" if signals_analysis.get('IsRangingMarket', False) else "NO"}
+
+**NEW - TIMEFRAME SIGNALS TABLE (PRE-CALCULATED):**
+- Bullish Count: {signals_analysis.get('TimeframeSignals', {}).get('bullish_count', 0)}/5 timeframes
+- Bearish Count: {signals_analysis.get('TimeframeSignals', {}).get('bearish_count', 0)}/5 timeframes
+- Ranging Count: {signals_analysis.get('TimeframeSignals', {}).get('ranging_count', 0)}/5 timeframes
+- 5-Min Timeframe Signal: {next((tf.get('signal', 'Unknown') for tf in signals_analysis.get('TimeframeSignals', {}).get('details', []) if tf.get('timeframe') == '5'), 'Unknown')}
+
+**EXIT SIGNALS ASSESSMENT (PRE-CALCULATED):**
+- Should Exit Current Position: {"YES" if should_exit else "NO"}
+- Exit Signals Detected: {len(exit_signals_list)}
+
+**MARKET OVERHEATING (PRE-CALCULATED):**
+- Long Side Overheated: {"YES" if market_overheating["long_overheated"] else "NO"}
+- Short Side Overheated: {"YES" if market_overheating["short_overheated"] else "NO"}
+
+## 4. Decision Rules
+
+For a valid PRIMARY entry, ALL of the following must be true:
+
+**For Long Entry:**
+1. **BlackFlag FTS:** Must show a BUY signal within the last 50 candles AND the cloud gap must be at least 0.65%.
+2. **UT Bot Alerts:** Must display a BUY alert within the last 50 candles.
+3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
+4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"}).
+5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
+6. **NEW - Timeframe Signals:** At least 3 timeframes must show bullish signals AND the 5-minute timeframe MUST be bullish.
+
+**For Short Entry:**
+1. **BlackFlag FTS:** Must show a SELL signal within the last 50 candles AND the cloud gap must be at least 0.65%.
+2. **UT Bot Alerts:** Must display a SELL alert within the last 50 candles.
+3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
+4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"}).
+5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
+6. **NEW - Timeframe Signals:** At least 3 timeframes must show bearish signals AND the 5-minute timeframe MUST be bearish.
+
+**Additional Rule: Short-Term Correction Detection:**
+1. If short-term correction signals are detected for the direction you are considering entering:
+   - For LONG entries: If "Long Correction Likely" is "YES", HOLD even if all primary conditions are met.
+   - For SHORT entries: If "Short Correction Likely" is "YES", HOLD even if all primary conditions are met.
+   - Provide specific reasoning referencing which correction signals were detected.
+   - Recommend waiting for the temporary reversal to complete for better entry price.
+
+## 5. UPDATED: TREND STRENGTH ASSESSMENT RULES
+The trend strength assessment is pre-calculated and provided as Boolean variables:
+- Long Trend Strength: {"STRONG" if long_trend_strong else "WEAK"}
+- Short Trend Strength: {"STRONG" if short_trend_strong else "WEAK"}
+
+These values already incorporate the following refined criteria:
+- Updated volatility thresholds for Bollinger Bands
+- Adjusted RSI thresholds for potential overheating/oversold conditions
+- Modified price extreme detection parameters
+- Enhanced extended trend requirements
+- Optimized moving average interaction calculations
+- Refined momentum detection parameters
+
+## 6. UPDATED: EXIT SIGNALS ASSESSMENT RULES
+1. If exit signals are detected (pre-calculated as {"YES" if should_exit else "NO"}), exit the current position immediately using the correct command (sell to exit long, buy to exit short).
+
+## 7. Position Sizing Rules:
+1. If the market is overheated in the direction of entry, reduce position size by 50%.
+2. Standard position sizes based on signal strength:
+   - **Strong Signal:** 100% of calculated size.
+   - **Medium Signal:** 70% of calculated size. *(Increased from 60% to better capture movement.)*
+   - **Weak Signal:** 40% of calculated size. *(Adjusted from 30% for improved exposure on less sure signals.)*
+
+## 8. Risk/Reward (PL Ratio) Guidelines (Bitcoin-Specific):
+- **Strong Signal & Low Volatility:** Use a PL ratio of **3**
+- **Strong Signal & High Volatility:** Use a PL ratio of **1.5** (to secure quick profits at lower target prices)
+- **Medium Signal:** Use a PL ratio of **2.5**
+- **Weak Signal:** Use a PL ratio of **2**
+
+## 9. Additional Guidelines:
+- Always consider Bitcoin's rapid volatility alongside its long-term upward trend. This means while the market may be prone to swift moves, the overall bias can be bullish. Trade conservatively to preserve capital and adjust positions accordingly.
+- **Patience is key** - waiting for the right entry after a correction typically results in better risk-reward profiles and reduced drawdowns.
+
+## 10. Response Format
+
+Output a JSON object:
+
+```json
+{{
+  "decision": "buy" or "sell" or "hold",
+  "percentage": integer (0-100),
+  "stop_loss_price": float,
+  "pl_ratio": float (1.5-3.0),
+  "reason": "Concise rationale referencing signals & data"
+}}
+```
+
+decision: MUST FIRST CHECK CURRENT POSITION STATUS:
+
+To exit a LONG position → Use "sell"
+To exit a SHORT position → Use "buy"
+To open a new LONG → Use "buy"
+To open a new SHORT → Use "sell"
+If there is no position and no valid entry signal → Use "hold"
+If primary entry conditions are met but correction signals are present → Use "hold" and explain why
+
+percentage: Position size (0-100) based on the adjusted sizing rules.
+
+stop_loss_price: As defined by the strategy (pre-calculated indicator).
+
+pl_ratio: Based on the signal strength and market volatility, following the Bitcoin-specific guidelines above.
+
+reason: Provide a clear explanation detailing which signals and data informed the decision. If holding due to correction signals, specify which correction indicators triggered the hold decision.
+
+## 11. Final Notes
+
+When in doubt, preserve capital. Considering Bitcoin's rapid volatility paired with its long-term bullish trend, it is essential to balance aggressive entries with conservative management. "hold" is often the safest decision if the signals are not strongly aligned or if correction signals are present.
+
+All key indicators have been pre-calculated for you. Focus on making a clear decision based on the provided data and always trade within your risk parameters.
+                        """
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"""Current investment status: {json.dumps(filtered_balances)}
+                                Orderbook: {json.dumps(modified_orderbook)}
+                                5-minute OHLCV with indicators (5 hours): {df_5min.to_json()}
+                                Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
+                                4-hour OHLCV with indicators (3 days): {df_4h.to_json()}
+                                Recent news headlines: {json.dumps(news_headlines)}
+                                Fear and Greed Index: {json.dumps(fear_greed_index)}
+                                
+                                # Chart Analysis Results
+                                Timeframe Signals: {json.dumps(signals_analysis.get('TimeframeSignals', {}) if signals_analysis else {})}
+                                Is Ranging Market: {signals_analysis.get('IsRangingMarket', False) if signals_analysis else False}
+
+                                # Short-Term Correction Signals
+                                Long Entry Correction Signals: {json.dumps(long_correction_signals)}
+                                Short Entry Correction Signals: {json.dumps(short_correction_signals)}
+                                Long Correction Likely: {"YES" if long_correction_likely else "NO"} ({len(long_correction_signals)} signals)
+                                Short Correction Likely: {"YES" if short_correction_likely else "NO"} ({len(short_correction_signals)} signals)
+                                """
+                            }
+                        ]
+                    }
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "trading_decision",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "decision": {"type": "string", "enum": ["buy", "sell", "hold"]},
+                                "percentage": {"type": "integer"},
+                                "reason": {"type": "string"},
+                                "stop_loss_price": {"type": "integer"},
+                                "pl_ratio": {"type": "number"}
+                            },
+                            "required": ["decision", "percentage", "reason", "stop_loss_price", "pl_ratio"],
+                            "additionalProperties": False
+                        }
+                    }
+                },
+                max_tokens=4095
             )
-            
-            # Create a Pydantic model from the dictionary for validation
+
+            # Validate AI's trading decision with Pydantic
             try:
-                result = TradingDecision.model_validate(result_dict)
+                result = TradingDecision.model_validate_json(response.choices[0].message.content)
             except Exception as e:
-                logger.error(f"Error parsing rule-based decision: {e}")
+                logger.error(f"Error parsing AI response: {e}")
                 return
 
-            # Verify entry and exit conditions
+            # 여기에 추가: 진입 조건 검증
+            # ai_trading 함수 내 verify_entry_conditions 호출 부분 변경
             if not verify_entry_conditions(
                 signals_data, 
                 trend_strength_result, 
@@ -6239,9 +6534,9 @@ def ai_trading():
                 position_side, 
                 df_5min, 
                 current_price,
-                signals_analysis
+                signals_analysis  # signals_analysis 매개변수 명시적 전달
             ):
-                logger.warning(f"Rule-based decision '{result.decision}' does not meet all entry conditions. Changed to 'hold'.")
+                logger.warning(f"AI 결정 '{result.decision}'이 모든 진입 조건을 충족하지 않음. 'hold'로 변경됩니다.")
                 original_decision = result.decision
                 original_reason = result.reason
                 result.decision = "hold"
@@ -6252,14 +6547,15 @@ def ai_trading():
             if ((position_side == 'long' and result.decision == 'sell') or 
                 (position_side == 'short' and result.decision == 'buy')):
                 if not verify_exit_conditions(exit_assessment, result.decision, position_side):
-                    logger.warning(f"Rule-based decision '{result.decision}' does not meet exit conditions. Changed to 'hold'.")
+                    logger.warning(f"AI 결정 '{result.decision}'이 출구 조건을 충족하지 않음. 'hold'로 변경됩니다.")
                     original_decision = result.decision
                     original_reason = result.reason
                     result.decision = "hold"
                     result.percentage = 0
                     result.reason = f"Exit conditions not met for {original_decision} - HOLD position. Original reason: {original_reason}"
 
-            logger.info(f"### Rule-based Decision: {result.decision.upper()} ###")
+
+            logger.info(f"### AI Decision: {result.decision.upper()} ###")
             logger.info(f"### Reason: {result.reason} ###")
 
             order_executed = False
@@ -6482,8 +6778,7 @@ def ai_trading():
                                                 del sl_monitor_functions[position_side]
                             
                             # Schedule monitoring job every minute
-                            # job = schedule.every(1).minutes.do(periodic_sl_monitoring, monitor_sl_func)
-                            job = schedule.every(30).seconds.do(periodic_sl_monitoring, monitor_sl_func)
+                            job = schedule.every(1).minutes.do(periodic_sl_monitoring, monitor_sl_func)
                             job.job_id = job_id
                             job.position_side = current_position_side  # 포지션 방향 정보 추가
                             job.error_count = 0  # 오류 카운터 추가
@@ -6508,1170 +6803,9 @@ def ai_trading():
                 conn.close()
     
     except Exception as e:
-        logger.error(f"Error in trading function: {e}")
+        logger.error(f"Error in AI trading function: {e}")
         # Clean up memory
         gc.collect()
-
-# def ai_trading():
-#     """Main AI trading function with pre-calculated trend strength and exit signals"""
-    
-#     # Chart signal processor initialization
-#     chart_processor = ChartSignalProcessor()
-    
-#     ### Data Collection
-#     # 7. Capture trading view chart with Selenium
-#     chart_image = None
-#     signals_analysis = None
-#     try:
-#         # Try login with cookies first
-#         login_with_cookies()
-        
-#         # Capture chart with retry logic
-#         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
-#             chart_processor=chart_processor, 
-#             save_image=False, 
-#             debug=False,
-#             max_retries=3,
-#             page_load_timeout=40
-#         )
-        
-#         if chart_image and signals_analysis:
-#             logger.info("TradingView screenshot capture and analysis completed")
-#             logger.info(f"  - TimeframeSignals: {signals_analysis.get('TimeframeSignals', {}).get('bullish_count', 0)} bullish, {signals_analysis.get('TimeframeSignals', {}).get('bearish_count', 0)} bearish")
-#             logger.info(f"  - IsRangingMarket: {signals_analysis.get('IsRangingMarket', False)}")
-#         elif chart_image:
-#             logger.info("TradingView screenshot capture completed, but analysis failed")
-#             # 분석 실패 시 기본값 설정
-#             signals_analysis = {
-#                 "TimeframeSignals": {"bullish_count": 0, "bearish_count": 0, "ranging_count": 0, "details": []},
-#                 "IsRangingMarket": False,
-#                 "BlackFlag": {"flip_detected": "none", "cloud_gap_percent": 0},
-#                 "UTBot": {"alert_signal": "None"}
-#             }
-#         else:
-#             logger.error("Screenshot capture failed after maximum retries")
-    
-#     except Exception as e:
-#         logger.error(f"Serious error during chart capture process: {e}", exc_info=True)
-#     finally:
-#         # Always clean up driver
-#         WebDriverManager.quit()
-
-#     # 1. Check current investment status
-#     # Query USDT balance
-#     balance = trader.exchange.fetch_balance()
-#     usdt_balance = balance['USDT']
-#     free_usdt = usdt_balance['free']      # Available balance
-#     used_usdt = usdt_balance['used']      # Balance in orders
-#     total_usdt = usdt_balance['total']    # Total balance
-#     filtered_balances = [used_usdt, free_usdt]
-
-#     # Query position information
-#     positions = trader.exchange.fetch_positions([trader.symbol])
-#     btc_avg_buy_price = 0  # Default value
-#     position_side = None
-#     position_size = 0
-#     unrealized_pnl = None
-
-#     for position in positions:
-#         if float(position.get('contracts', 0) or 0) != 0:
-#             btc_avg_buy_price = float(position['entryPrice'])
-#             position_side = position['side']  # 'long' or 'short'
-#             position_size = float(position['notional']) # contracts * entryPrice = In USDT
-#             unrealized_pnl = float(position.get('percentage', 0))  # Profit/loss (%)
-#             break
-
-#     # 2. Get orderbook data
-#     orderbook = trader.exchange.fetch_order_book('BTC/USDT')
-#     modified_orderbook = modify_orderbook(orderbook)
-
-#     # 3. Get chart data and add technical indicators
-#     # Binance exchange BTC/USDT Perpetual current price
-#     ticker = trader.exchange.fetch_ticker(trader.symbol)
-#     current_price = ticker['last']
-
-#     # Query Binance 5-minute candles
-#     df_5min = pd.DataFrame(
-#         trader.exchange.fetch_ohlcv(
-#             "BTC/USDT",
-#             timeframe='5m',
-#             limit=93 # 60 + 33
-#         ),
-#         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
-#     )
-#     df_5min['timestamp'] = pd.to_datetime(df_5min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
-#     df_5min = df_5min.set_index('timestamp')
-#     df_5min = dropna(df_5min)
-#     df_5min = add_indicators(df_5min)
-    
-#     # Select only the last 60 data points
-#     df_5min = df_5min.tail(60)
-
-#     # Query Binance 1-hour candles
-#     df_hourly = pd.DataFrame(
-#         trader.exchange.fetch_ohlcv(
-#             "BTC/USDT", 
-#             timeframe='1h',
-#             limit=57 # 24 + 33
-#         ),
-#         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
-#     )
-#     df_hourly['timestamp'] = pd.to_datetime(df_hourly['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
-#     df_hourly = df_hourly.set_index('timestamp')
-#     df_hourly = dropna(df_hourly)
-#     df_hourly = add_indicators(df_hourly)
-
-#     # Select only the last 24 data points
-#     df_hourly = df_hourly.tail(24)
-
-#     # Query Binance 4-hour candles
-#     df_4h = pd.DataFrame(
-#         trader.exchange.fetch_ohlcv(
-#             "BTC/USDT",
-#             timeframe='4h',
-#             limit=51 # 18 + 33
-#         ),
-#         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
-#     )
-#     df_4h['timestamp'] = pd.to_datetime(df_4h['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
-#     df_4h = df_4h.set_index('timestamp')
-#     df_4h = dropna(df_4h)
-#     df_4h = add_indicators(df_4h)    
-
-#     # Select only the last 18 data points
-#     df_4h = df_4h.tail(18)
-
-#     # 4. Get Fear & Greed Index
-#     fear_greed_index = get_fear_and_greed_index()
-
-#     # 5. Get news headlines
-#     news_headlines = get_bitcoin_news()
-
-#     # 6. Get YouTube transcript data
-#     try:
-#         f2 = open("strategy2.txt", "r", encoding="utf-8")
-#         youtube_transcript2 = f2.read()
-#         f2.close()
-#     except Exception as e:
-#         logger.error(f"Failed to read strategy file: {e}")
-#         youtube_transcript2 = ""
-        
-#     ### Get chart signal data and trading signals text
-#     trading_signals_text = chart_processor.create_prompt_text()
-#     signals_data = chart_processor.generate_ai_prompt_data()
-        
-#     ### PRE-CALCULATE Key Decision Points
-        
-#     # 1. Assess trend strength (TREND STRENGTH CHECK)
-#     try:
-#         trend_strength_result = assess_trend_strength(df_5min, df_hourly, current_price, df_4h)
-#         if isinstance(trend_strength_result, dict):
-#             long_trend_strong = trend_strength_result.get("long_trend_strong", False)
-#             short_trend_strong = trend_strength_result.get("short_trend_strong", False)
-#         else:
-#             logger.error("trend_strength_result is not a dictionary")
-#             long_trend_strong = False
-#             short_trend_strong = False
-#     except Exception as e:
-#         logger.error(f"Error during trend strength assessment: {e}")
-#         long_trend_strong = False
-#         short_trend_strong = False
-
-#     # 2. Assess exit signals
-#     try:
-#         exit_assessment = assess_exit_signals(
-#             df_5min, 
-#             signals_data, 
-#             position_side, 
-#             unrealized_pnl, 
-#             df_hourly, 
-#             df_4h,
-#             signals_analysis  # signals_analysis 매개변수 명시적 전달
-#         )
-#         if isinstance(exit_assessment, dict):
-#             should_exit = exit_assessment.get("should_exit", False)
-#             exit_signals_list = exit_assessment.get("exit_signals", [])
-#         else:
-#             logger.error("exit_assessment is not a dictionary")
-#             should_exit = False
-#             exit_signals_list = []
-#     except Exception as e:
-#         logger.error(f"Error during exit signals assessment: {e}")
-#         should_exit = False
-#         exit_signals_list = []
-    
-    
-#     # 3. Check market overheating conditions
-#     market_overheating = {
-#         "long_overheated": False,
-#         "short_overheated": False,
-#         "reasons": []
-#     }
-    
-#     try:
-#         # Get latest candle data
-#         latest = df_5min.iloc[-1]
-        
-#         # Long overheating checks
-#         if latest['close'] >= latest['bb_bbh']:
-#             market_overheating["long_overheated"] = True
-#             market_overheating["reasons"].append("Price at/above upper Bollinger Band")
-            
-#         if latest['rsi'] > 70:
-#             market_overheating["long_overheated"] = True
-#             market_overheating["reasons"].append("RSI above 70")
-        
-#         # Check if price moved more than 0.8% in last 5 candles without pullback
-#         recent_5 = df_5min.iloc[-5:]
-#         price_5_candles_ago = recent_5.iloc[0]['close']
-#         price_percent_change = (latest['close'] - price_5_candles_ago) / price_5_candles_ago * 100
-        
-#         if price_percent_change > 0.8 and all(recent_5.iloc[i]['close'] > recent_5.iloc[i-1]['close'] for i in range(1, 5)):
-#             market_overheating["long_overheated"] = True
-#             market_overheating["reasons"].append(f"Price moved up {price_percent_change:.2f}% in last 5 candles without pullback")
-            
-#         # Short overheating checks
-#         if latest['close'] <= latest['bb_bbl']:
-#             market_overheating["short_overheated"] = True
-#             market_overheating["reasons"].append("Price at/below lower Bollinger Band")
-            
-#         if latest['rsi'] < 30:
-#             market_overheating["short_overheated"] = True
-#             market_overheating["reasons"].append("RSI below 30")
-            
-#         if price_percent_change < -0.8 and all(recent_5.iloc[i]['close'] < recent_5.iloc[i-1]['close'] for i in range(1, 5)):
-#             market_overheating["short_overheated"] = True
-#             market_overheating["reasons"].append(f"Price moved down {abs(price_percent_change):.2f}% in last 5 candles without pullback")
-    
-#     except Exception as e:
-#         logger.error(f"Error assessing market overheating: {e}")
-
-#     # 추가: 진입 조건 검증 함수
-#     # 수정: verify_entry_conditions 함수에 횡보장 감지와 타임프레임 신호 테이블 검사 추가
-#     def verify_entry_conditions(signals_data, trend_strength_result, decision, current_position_side, df_5min, entry_price, signals_analysis=None):
-#         """
-#         진입 조건 검증 함수 - 횡보장 감지와 타임프레임 신호 테이블 검사 추가
-        
-#         Args:
-#             signals_data: 트레이딩 신호 데이터
-#             trend_strength_result: 트렌드 강도 분석 결과 (단기 조정 징후 포함)
-#             decision: AI 결정 ('buy', 'sell', 'hold')
-#             current_position_side: 현재 포지션 방향 ('long', 'short', None)
-#             df_5min: 5분 캔들 데이터프레임
-#             entry_price: 현재 가격
-#             signals_analysis: analyze_chart_signals 함수의 반환 결과
-            
-#         Returns:
-#             bool: 진입 조건 충족 여부
-#         """
-#         # 새로 추가: signals_analysis가 None이 아닌 경우 횡보장 감지 및 타임프레임 신호 테이블 검사
-#         is_ranging_market = False
-#         timeframe_signals = None
-        
-#         if signals_analysis is not None:
-#             # 횡보장 감지 결과 확인
-#             is_ranging_market = signals_analysis.get("IsRangingMarket", False)
-            
-#             # 타임프레임 신호 테이블 결과 확인
-#             timeframe_signals = signals_analysis.get("TimeframeSignals", {})
-        
-#         # 롱 포지션 진입 조건 검증
-#         if decision == "buy" and current_position_side is None:
-#             # 신호 유효성 확인 (캔들 수 40으로 확장)
-#             blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
-#             utbot_valid = signals_data.get("UTBot_Signal") == "Buy" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
-            
-#             # 새로운 CloudGap Valid 확인 방식
-#             cloud_gap_valid = False
-#             if signals_analysis and "BlackFlag" in signals_analysis:
-#                 bf_data = signals_analysis["BlackFlag"]
-#                 if bf_data["flip_detected"] == "long":
-#                     cloud_gap_valid = bf_data.get("cloud_gap_valid", False)
-            
-#             # 직접적인 신호 데이터를 통한 보조 검증
-#             if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
-#                 direct_cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
-#                 # 두 소스 중 하나라도 True면 유효 (OR 조건)
-#                 cloud_gap_valid = cloud_gap_valid or direct_cloud_gap_valid
-            
-#             # CloudGap 상태 로깅
-#             if blackflag_valid and not cloud_gap_valid:
-#                 logger.warning("BlackFlag Buy 신호 발생했으나 CloudGap이 유효하지 않음")
-            
-#             # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
-#             price_change_pct = 0
-#             signal_price = None
-            
-#             # 첫 번째 신호 찾기
-#             first_signal_candles_ago = min(
-#                 signals_data.get("BlackFlag_CandlesAgo", 999) if signals_data.get("BlackFlag_Signal") == "Buy" else 999,
-#                 signals_data.get("UTBot_CandlesAgo", 999) if signals_data.get("UTBot_Signal") == "Buy" else 999
-#             )
-            
-#             # 유효한 첫 신호가 있으면 가격 변화 계산
-#             if first_signal_candles_ago < 999 and first_signal_candles_ago < len(df_5min):
-#                 idx = -1 - first_signal_candles_ago  # 신호가 발생한 캔들의 인덱스
-#                 signal_price = df_5min['close'].iloc[idx]
-#                 price_change_pct = (entry_price - signal_price) / signal_price * 100
-            
-#             # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
-#             # strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("long_trend_strong", False)
-#             volume_valid = signals_data.get("VolumeOsc_Current", -999) > -15
-#             if signals_data.get("VolumeOsc_Current", -999) < -15:
-#                 volume_valid = False
-            
-#             trend_valid = trend_strength_result.get("long_trend_strong", False)
-            
-#             # 가격 변화 조건 (2% 이상 상승하면 진입하지 않음)
-#             price_valid = price_change_pct < 2.0
-            
-#             # 중요: 단기 조정 신호 확인 - short_term_correction 데이터 활용
-#             correction_signals = []
-#             correction_likely = False
-            
-#             if "short_term_correction" in trend_strength_result:
-#                 # 롱 포지션에 대한 단기 조정 신호 가져오기
-#                 correction_signals = trend_strength_result["short_term_correction"].get("long_entry_correction_signals", [])
-#                 correction_likely = trend_strength_result["short_term_correction"].get("long_correction_likely", False)
-            
-#             # 추가: 횡보장 감지 결과 기반 검증
-#             ranging_valid = not is_ranging_market
-#             if not ranging_valid:
-#                 logger.info("롱 진입 제한: 현재 시장이 횡보장 상태임")
-            
-#             # 추가: 타임프레임 신호 테이블 검증
-#             timeframe_valid = True
-            
-#             if timeframe_signals:
-#                 bullish_count = timeframe_signals.get("bullish_count", 0)
-#                 details = timeframe_signals.get("details", [])
-                
-#                 # 1. 상승 신호가 3개 이상인지 확인
-#                 timeframe_count_valid = bullish_count >= 3
-                
-#                 # 2. 5분봉 신호가 "Bullish"인지 확인
-#                 five_min_valid = False
-#                 for tf_signal in details:
-#                     if tf_signal.get("timeframe") == "5" and tf_signal.get("signal") == "Bullish":
-#                         five_min_valid = True
-#                         break
-                
-#                 # 두 조건 모두 만족해야 함
-#                 timeframe_valid = timeframe_count_valid and five_min_valid
-                
-#                 if not timeframe_valid:
-#                     if not timeframe_count_valid:
-#                         logger.info(f"롱 진입 제한: 충분한 타임프레임 상승 신호가 없음 (bullish_count: {bullish_count})")
-#                     if not five_min_valid:
-#                         logger.info("롱 진입 제한: 5분봉 상승 신호가 없음")
-            
-#             # 단기 조정 가능성 로깅
-#             if correction_signals:
-#                 logger.info(f"롱 진입 전 단기 조정 신호 감지: {correction_signals}")
-#                 logger.info(f"단기 조정 가능성: {'높음' if correction_likely else '낮음'}")
-            
-#             # 추가 로깅 - cloud_gap_valid 추가
-#             # logger.info(f"롱 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, " +
-#             #             f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
-#             #             f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}")
-#             logger.info(f"롱 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, " +
-#                         f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
-#                         f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}") 
-            
-#             # 모든 기본 조건이 충족되는지 확인 (cloud_gap_valid 검증)
-#             # base_conditions_met = (blackflag_valid and utbot_valid and 
-#             #                     volume_valid and trend_valid and 
-#             #                     price_valid and ranging_valid and 
-#             #                     timeframe_valid and cloud_gap_valid)
-#             base_conditions_met = (blackflag_valid and utbot_valid and 
-#                                 volume_valid and 
-#                                 price_valid and ranging_valid and 
-#                                 timeframe_valid and cloud_gap_valid)            
-#             # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
-#             if base_conditions_met and correction_likely:
-#                 logger.warning(f"롱 진입 기본 조건 충족하지만 단기 조정 가능성이 높아 진입 보류: {correction_signals}")
-#                 return False
-            
-#             return base_conditions_met
-        
-#         # 숏 포지션 진입 조건 검증
-#         elif decision == "sell" and current_position_side is None:
-#             # 신호 유효성 확인 (캔들 수 40으로 확장)
-#             blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 50
-#             utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 50
-            
-#             # 새로운 CloudGap Valid 확인 방식
-#             cloud_gap_valid = False
-#             if signals_analysis and "BlackFlag" in signals_analysis:
-#                 bf_data = signals_analysis["BlackFlag"]
-#                 if bf_data["flip_detected"] == "short":
-#                     cloud_gap_valid = bf_data.get("cloud_gap_valid", False)
-            
-#             # 직접적인 신호 데이터를 통한 보조 검증
-#             if "BlackFlag" in signals_data and isinstance(signals_data["BlackFlag"], dict):
-#                 direct_cloud_gap_valid = signals_data["BlackFlag"].get("cloud_gap_valid", False)
-#                 # 두 소스 중 하나라도 True면 유효 (OR 조건)
-#                 cloud_gap_valid = cloud_gap_valid or direct_cloud_gap_valid
-            
-#             # CloudGap 상태 로깅
-#             if blackflag_valid and not cloud_gap_valid:
-#                 logger.warning("BlackFlag Sell 신호 발생했으나 CloudGap이 유효하지 않음")
-            
-#             # 가격 변화 확인 - 신호 시점 가격과 현재 가격 비교
-#             price_change_pct = 0
-#             signal_price = None
-            
-#             # 첫 번째 신호 찾기
-#             first_signal_candles_ago = min(
-#                 signals_data.get("BlackFlag_CandlesAgo", 999) if signals_data.get("BlackFlag_Signal") == "Sell" else 999,
-#                 signals_data.get("UTBot_CandlesAgo", 999) if signals_data.get("UTBot_Signal") == "Sell" else 999
-#             )
-            
-#             # 유효한 첫 신호가 있으면 가격 변화 계산
-#             if first_signal_candles_ago < 999 and first_signal_candles_ago < len(df_5min):
-#                 idx = -1 - first_signal_candles_ago  # 신호가 발생한 캔들의 인덱스
-#                 signal_price = df_5min['close'].iloc[idx]
-#                 price_change_pct = (signal_price - entry_price) / signal_price * 100
-            
-#             # 수정: Volume Oscillator 조건 완화 - 강한 신호가 있을 경우 음수도 허용
-#             #  strong_signals = blackflag_valid and utbot_valid and trend_strength_result.get("short_trend_strong", False)
-#             volume_valid = signals_data.get("VolumeOsc_Current", -999) > -15
-#             if signals_data.get("VolumeOsc_Current", -999) < -15:
-#                 volume_valid = False
-            
-#             trend_valid = trend_strength_result.get("short_trend_strong", False)
-            
-#             # 가격 변화 조건 (2% 이상 하락하면 진입하지 않음)
-#             price_valid = price_change_pct < 2.0
-            
-#             # 중요: 단기 조정 신호 확인 - short_term_correction 데이터 활용
-#             correction_signals = []
-#             correction_likely = False
-            
-#             if "short_term_correction" in trend_strength_result:
-#                 # 숏 포지션에 대한 단기 조정 신호 가져오기
-#                 correction_signals = trend_strength_result["short_term_correction"].get("short_entry_correction_signals", [])
-#                 correction_likely = trend_strength_result["short_term_correction"].get("short_correction_likely", False)
-            
-#             # 추가: 횡보장 감지 결과 기반 검증
-#             ranging_valid = not is_ranging_market
-#             if not ranging_valid:
-#                 logger.info("숏 진입 제한: 현재 시장이 횡보장 상태임")
-            
-#             # 추가: 타임프레임 신호 테이블 검증
-#             timeframe_valid = True
-            
-#             if timeframe_signals:
-#                 bearish_count = timeframe_signals.get("bearish_count", 0)
-#                 details = timeframe_signals.get("details", [])
-                
-#                 # 1. 하락 신호가 3개 이상인지 확인
-#                 timeframe_count_valid = bearish_count >= 3
-                
-#                 # 2. 5분봉 신호가 "Bearish"인지 확인
-#                 five_min_valid = False
-#                 for tf_signal in details:
-#                     if tf_signal.get("timeframe") == "5" and tf_signal.get("signal") == "Bearish":
-#                         five_min_valid = True
-#                         break
-                
-#                 # 두 조건 모두 만족해야 함
-#                 timeframe_valid = timeframe_count_valid and five_min_valid
-                
-#                 if not timeframe_valid:
-#                     if not timeframe_count_valid:
-#                         logger.info(f"숏 진입 제한: 충분한 타임프레임 하락 신호가 없음 (bearish_count: {bearish_count})")
-#                     if not five_min_valid:
-#                         logger.info("숏 진입 제한: 5분봉 하락 신호가 없음")
-            
-#             # 단기 조정 가능성 로깅
-#             if correction_signals:
-#                 logger.info(f"숏 진입 전 단기 조정 신호 감지: {correction_signals}")
-#                 logger.info(f"단기 조정 가능성: {'높음' if correction_likely else '낮음'}")
-            
-#             # 추가 로깅 - cloud_gap_valid 추가
-#             # logger.info(f"숏 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, Trend={trend_valid}, " +
-#             #             f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
-#             #             f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}")
-#             logger.info(f"숏 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, " +
-#                         f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
-#                         f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}")
-        
-#             # 모든 기본 조건이 충족되는지 확인 (cloud_gap_valid 검증)
-#             # base_conditions_met = (blackflag_valid and utbot_valid and 
-#             #                     volume_valid and trend_valid and 
-#             #                     price_valid and ranging_valid and 
-#             #                     timeframe_valid and cloud_gap_valid)
-#             base_conditions_met = (blackflag_valid and utbot_valid and 
-#                                 volume_valid and 
-#                                 price_valid and ranging_valid and 
-#                                 timeframe_valid and cloud_gap_valid)            
-#             # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
-#             if base_conditions_met and correction_likely:
-#                 logger.warning(f"숏 진입 기본 조건 충족하지만 단기 조정 가능성이 높아 진입 보류: {correction_signals}")
-#                 return False
-            
-#             return base_conditions_met
-        
-#         # 포지션 청산(exit) 조건은 이미 should_exit 변수로 검증됨
-#         elif (decision == "sell" and current_position_side == "long") or (decision == "buy" and current_position_side == "short"):
-#             return True
-        
-#         # 다른 모든 경우 (e.g., "hold")
-#         return True
-
-#     def verify_exit_conditions(exit_assessment, decision, position_side):
-#         """
-#         AI의 출구(청산) 결정이 실제 출구 조건과 일치하는지 확인하는 함수
-        
-#         Args:
-#             exit_assessment: assess_exit_signals 함수의 반환 결과
-#             decision: AI 결정 ('buy', 'sell', 'hold')
-#             position_side: 현재 포지션 방향 ('long', 'short', None)
-            
-#         Returns:
-#             bool: 출구 조건 충족 여부
-#         """
-#         # 포지션이 없으면 청산할 수 없음
-#         if not position_side:
-#             if decision in ['buy', 'sell']:
-#                 logger.warning(f"포지션이 없는데 {decision} 결정. 청산 불가능.")
-#                 return False
-#             return True
-        
-#         # should_exit 값 확인 (미리 계산된 출구 신호)
-#         should_exit = exit_assessment.get("should_exit", False)
-        
-#         # 청산 판단 검증
-#         if position_side == 'long' and decision == 'sell':
-#             # Long 포지션 청산 (sell)
-#             if not should_exit:
-#                 logger.warning("출구 신호가 없는데 Long 포지션 청산 결정. 상충된 판단.")
-#                 if exit_assessment.get("exit_signals"):
-#                     logger.info(f"감지된 출구 신호: {exit_assessment.get('exit_signals')}")
-#                     logger.info(f"출구 점수: {exit_assessment.get('exit_score', 0)}")
-#                     logger.info(f"임계값: {exit_assessment.get('exit_threshold', 2.0)}")
-#                 return False
-#             return True
-            
-#         elif position_side == 'short' and decision == 'buy':
-#             # Short 포지션 청산 (buy)
-#             if not should_exit:
-#                 logger.warning("출구 신호가 없는데 Short 포지션 청산 결정. 상충된 판단.")
-#                 if exit_assessment.get("exit_signals"):
-#                     logger.info(f"감지된 출구 신호: {exit_assessment.get('exit_signals')}")
-#                     logger.info(f"출구 점수: {exit_assessment.get('exit_score', 0)}")
-#                     logger.info(f"임계값: {exit_assessment.get('exit_threshold', 2.0)}")
-#                 return False
-#             return True
-        
-#         # hold 결정은 항상 유효
-#         elif decision == 'hold':
-#             return True
-        
-#         # 포지션과 일치하지 않는 방향으로 청산 명령이 내려진 경우
-#         elif (position_side == 'long' and decision != 'sell') or (position_side == 'short' and decision != 'buy'):
-#             if decision != 'hold':
-#                 logger.warning(f"{position_side} 포지션에 대해 잘못된 청산 명령: {decision}")
-#                 return False
-        
-#         # 기본적으로 검증 통과
-#         return True
-
-
-#     # 단기 조정 신호 데이터 추출 및 변수 준비
-#     long_correction_signals = trend_strength_result.get("short_term_correction", {}).get("long_entry_correction_signals", [])
-#     short_correction_signals = trend_strength_result.get("short_term_correction", {}).get("short_entry_correction_signals", [])
-#     long_correction_likely = trend_strength_result.get("short_term_correction", {}).get("long_correction_likely", False)
-#     short_correction_likely = trend_strength_result.get("short_term_correction", {}).get("short_correction_likely", False)
-
-#     ### AI Decision Making
-#     try:
-#         client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-#         if not client.api_key:
-#             logger.error("OpenAI API key is missing or invalid.")
-#             return None
-            
-#         # Database connection
-#         conn = get_db_connection()
-#         if not conn:
-#             logger.error("Database connection failed.")
-#             return None
-            
-#         try:
-#             # Get recent trades
-#             recent_trades = get_recent_trades(conn)
-            
-#             # Collect current market data
-#             current_market_data = {
-#                 "Current Price": current_price,
-#                 "fear_greed_index": fear_greed_index,
-#                 "news_headlines": news_headlines,
-#                 "orderbook": modified_orderbook,
-#                 "5min_ohlcv": df_5min.to_dict(),
-#                 "hourly_ohlcv": df_hourly.to_dict(),
-#                 "4hour_ohlcv": df_4h.to_dict()
-#             }
-            
-#             # Generate reflection and improvement content
-#             reflection = generate_reflection(recent_trades, current_market_data)
-            
-#             # Format pre-calculated data for the AI prompt
-#             blackflag_signal = signals_data.get("BlackFlag_Signal", "None") 
-#             blackflag_candles_ago = signals_data.get("BlackFlag_CandlesAgo", "None")
-#             utbot_signal = signals_data.get("UTBot_Signal", "None")
-#             utbot_candles_ago = signals_data.get("UTBot_CandlesAgo", "None")
-#             volume_osc_current = signals_data.get("VolumeOsc_Current", "None")
-#             stop_loss_price = signals_data.get("StopLoss_Price", "None")
-            
-#             # Call OpenAI API with the updated prompt format
-#             response = client.chat.completions.create(
-#                 model="gpt-4o-mini",
-#                 messages=[
-#                     {
-#                     "role": "system",
-#                     "content": f"""
-# # Bitcoin Futures Trading Strategy with Pre-calculated Indicators
-
-# You are a Bitcoin futures day trader on the 5-minute timeframe with leveraged positions. Your strategy uses pre-calculated core indicators and trend strength assessments. Capital preservation is paramount.
-
-# ## 1. CRITICAL: POSITION MANAGEMENT RULES ⚠️
-
-# **POSITION MANAGEMENT RULES - READ FIRST**
-
-# Before making ANY trading decision:
-
-# 1. **ALWAYS CHECK** current position in the Portfolio section:
-#    - "Current Position Side" will be "long", "short", or "none"
-
-# 2. **For EXIT decisions:**
-#    - If current position is LONG → Must use **"sell"** command to exit
-#    - If current position is SHORT → Must use **"buy"** command to exit
-#    - If current position is NONE → No exit possible (consider entries only)
-
-# 3. **For ENTRY decisions:**
-#    - To open LONG position → Use **"buy"** command
-#    - To open SHORT position → Use **"sell"** command
-
-# ⚠️ Using the wrong command will INCREASE position risk instead of reducing it.
-
-# ## 2. Market Data and Portfolio Information
-
-# The data below must be considered in your analysis.
-
-# **[Market Data]**
-# - Current Price: {current_price:.2f} USDT
-
-# **Technical Indicators (5-min, 1-hour, 4-hour timeframes)**
-
-# → **5-Minute Chart Data:**
-# - RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
-# - MACD: {df_5min['macd'].iloc[-1]:.2f}
-# - Bollinger Bands (20):
-#   * Middle: {df_5min['bb_bbm'].iloc[-1]:.2f}
-#   * Upper: {df_5min['bb_bbh'].iloc[-1]:.2f}
-#   * Lower: {df_5min['bb_bbl'].iloc[-1]:.2f}
-# - ATR: {df_5min['atr'].iloc[-1]:.2f}
-# - ADX: {df_5min['adx'].iloc[-1]:.2f}
-# - DI+: {df_5min['di_plus'].iloc[-1]:.2f}
-# - DI-: {df_5min['di_minus'].iloc[-1]:.2f}
-# - CMF: {df_5min['cmf'].iloc[-1]:.2f}
-
-# → **1-Hour Chart Data:**
-# - RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
-# - MACD: {df_hourly['macd'].iloc[-1]:.2f}
-# - ADX: {df_hourly['adx'].iloc[-1]:.2f}
-# - DI+: {df_hourly['di_plus'].iloc[-1]:.2f}
-# - DI-: {df_hourly['di_minus'].iloc[-1]:.2f}
-# - CMF: {df_hourly['cmf'].iloc[-1]:.2f}
-
-# → **4-Hour Chart Data:**
-# - RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
-# - MACD: {df_4h['macd'].iloc[-1]:.2f}
-# - ADX: {df_4h['adx'].iloc[-1]:.2f}
-# - DI+: {df_4h['di_plus'].iloc[-1]:.2f}
-# - DI-: {df_4h['di_minus'].iloc[-1]:.2f}
-# - CMF: {df_4h['cmf'].iloc[-1]:.2f}
-
-# **[Portfolio]**
-# - Total USDT Assets: {total_usdt:.1f}
-# - Free USDT Balance: {free_usdt:.1f}
-# - Used USDT Holdings: {used_usdt:.1f}
-# - BTC Average Purchase Price: {btc_avg_buy_price:.1f} USDT
-# - Current Position Side: {position_side} ← "long", "short", or "none"
-# - Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
-
-# ## 3. Pre-Calculated Indicators and Signals
-
-# **CORE INDICATORS STATUS (PRE-CALCULATED):**
-# - BlackFlag FTS Signal: {blackflag_signal} (Candles ago: {blackflag_candles_ago})
-# - BlackFlag Cloud Gap: {signals_data.get("BlackFlag", {}).get("cloud_gap_percent", 0):.2f}% (Valid if >= 0.65%)
-# - UT Bot Signal: {utbot_signal} (Candles ago: {utbot_candles_ago})
-# - Volume Oscillator: {volume_osc_current}
-# - Stop Loss Price: {stop_loss_price}
-
-# **TREND STRENGTH ASSESSMENT (PRE-CALCULATED):**
-# - Long Trend Strength: {"STRONG" if long_trend_strong else "WEAK"}
-# - Short Trend Strength: {"STRONG" if short_trend_strong else "WEAK"}
-
-# **SHORT-TERM CORRECTION ASSESSMENT (PRE-CALCULATED):**
-# - Long Entry Correction Signals: {len(long_correction_signals)} signals detected
-# - Short Entry Correction Signals: {len(short_correction_signals)} signals detected
-# - Long Correction Likely: {"YES" if long_correction_likely else "NO"}
-# - Short Correction Likely: {"YES" if short_correction_likely else "NO"}
-
-# **NEW - RANGING MARKET DETECTION (PRE-CALCULATED):**
-# - Is Market in Ranging State: {"YES" if signals_analysis.get('IsRangingMarket', False) else "NO"}
-
-# **NEW - TIMEFRAME SIGNALS TABLE (PRE-CALCULATED):**
-# - Bullish Count: {signals_analysis.get('TimeframeSignals', {}).get('bullish_count', 0)}/5 timeframes
-# - Bearish Count: {signals_analysis.get('TimeframeSignals', {}).get('bearish_count', 0)}/5 timeframes
-# - Ranging Count: {signals_analysis.get('TimeframeSignals', {}).get('ranging_count', 0)}/5 timeframes
-# - 5-Min Timeframe Signal: {next((tf.get('signal', 'Unknown') for tf in signals_analysis.get('TimeframeSignals', {}).get('details', []) if tf.get('timeframe') == '5'), 'Unknown')}
-
-# **EXIT SIGNALS ASSESSMENT (PRE-CALCULATED):**
-# - Should Exit Current Position: {"YES" if should_exit else "NO"}
-# - Exit Signals Detected: {len(exit_signals_list)}
-
-# **MARKET OVERHEATING (PRE-CALCULATED):**
-# - Long Side Overheated: {"YES" if market_overheating["long_overheated"] else "NO"}
-# - Short Side Overheated: {"YES" if market_overheating["short_overheated"] else "NO"}
-
-# ## 4. Decision Rules
-
-# For a valid PRIMARY entry, ALL of the following must be true:
-
-# **For Long Entry:**
-# 1. **BlackFlag FTS:** Must show a BUY signal within the last 50 candles AND the cloud gap must be at least 0.65%.
-# 2. **UT Bot Alerts:** Must display a BUY alert within the last 50 candles.
-# 3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
-# 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"}).
-# 5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
-# 6. **NEW - Timeframe Signals:** At least 3 timeframes must show bullish signals AND the 5-minute timeframe MUST be bullish.
-
-# **For Short Entry:**
-# 1. **BlackFlag FTS:** Must show a SELL signal within the last 50 candles AND the cloud gap must be at least 0.65%.
-# 2. **UT Bot Alerts:** Must display a SELL alert within the last 50 candles.
-# 3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
-# 4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"}).
-# 5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
-# 6. **NEW - Timeframe Signals:** At least 3 timeframes must show bearish signals AND the 5-minute timeframe MUST be bearish.
-
-# **Additional Rule: Short-Term Correction Detection:**
-# 1. If short-term correction signals are detected for the direction you are considering entering:
-#    - For LONG entries: If "Long Correction Likely" is "YES", HOLD even if all primary conditions are met.
-#    - For SHORT entries: If "Short Correction Likely" is "YES", HOLD even if all primary conditions are met.
-#    - Provide specific reasoning referencing which correction signals were detected.
-#    - Recommend waiting for the temporary reversal to complete for better entry price.
-
-# ## 5. UPDATED: TREND STRENGTH ASSESSMENT RULES
-# The trend strength assessment is pre-calculated and provided as Boolean variables:
-# - Long Trend Strength: {"STRONG" if long_trend_strong else "WEAK"}
-# - Short Trend Strength: {"STRONG" if short_trend_strong else "WEAK"}
-
-# These values already incorporate the following refined criteria:
-# - Updated volatility thresholds for Bollinger Bands
-# - Adjusted RSI thresholds for potential overheating/oversold conditions
-# - Modified price extreme detection parameters
-# - Enhanced extended trend requirements
-# - Optimized moving average interaction calculations
-# - Refined momentum detection parameters
-
-# ## 6. UPDATED: EXIT SIGNALS ASSESSMENT RULES
-# 1. If exit signals are detected (pre-calculated as {"YES" if should_exit else "NO"}), exit the current position immediately using the correct command (sell to exit long, buy to exit short).
-
-# ## 7. Position Sizing Rules:
-# 1. If the market is overheated in the direction of entry, reduce position size by 50%.
-# 2. Standard position sizes based on signal strength:
-#    - **Strong Signal:** 100% of calculated size.
-#    - **Medium Signal:** 70% of calculated size. *(Increased from 60% to better capture movement.)*
-#    - **Weak Signal:** 40% of calculated size. *(Adjusted from 30% for improved exposure on less sure signals.)*
-
-# ## 8. Risk/Reward (PL Ratio) Guidelines (Bitcoin-Specific):
-# - **Strong Signal & Low Volatility:** Use a PL ratio of **3**
-# - **Strong Signal & High Volatility:** Use a PL ratio of **1.5** (to secure quick profits at lower target prices)
-# - **Medium Signal:** Use a PL ratio of **2.5**
-# - **Weak Signal:** Use a PL ratio of **2**
-
-# ## 9. Additional Guidelines:
-# - Always consider Bitcoin's rapid volatility alongside its long-term upward trend. This means while the market may be prone to swift moves, the overall bias can be bullish. Trade conservatively to preserve capital and adjust positions accordingly.
-# - **Patience is key** - waiting for the right entry after a correction typically results in better risk-reward profiles and reduced drawdowns.
-
-# ## 10. Response Format
-
-# Output a JSON object:
-
-# ```json
-# {{
-#   "decision": "buy" or "sell" or "hold",
-#   "percentage": integer (0-100),
-#   "stop_loss_price": float,
-#   "pl_ratio": float (1.5-3.0),
-#   "reason": "Concise rationale referencing signals & data"
-# }}
-# ```
-
-# decision: MUST FIRST CHECK CURRENT POSITION STATUS:
-
-# To exit a LONG position → Use "sell"
-# To exit a SHORT position → Use "buy"
-# To open a new LONG → Use "buy"
-# To open a new SHORT → Use "sell"
-# If there is no position and no valid entry signal → Use "hold"
-# If primary entry conditions are met but correction signals are present → Use "hold" and explain why
-
-# percentage: Position size (0-100) based on the adjusted sizing rules.
-
-# stop_loss_price: As defined by the strategy (pre-calculated indicator).
-
-# pl_ratio: Based on the signal strength and market volatility, following the Bitcoin-specific guidelines above.
-
-# reason: Provide a clear explanation detailing which signals and data informed the decision. If holding due to correction signals, specify which correction indicators triggered the hold decision.
-
-# ## 11. Final Notes
-
-# When in doubt, preserve capital. Considering Bitcoin's rapid volatility paired with its long-term bullish trend, it is essential to balance aggressive entries with conservative management. "hold" is often the safest decision if the signals are not strongly aligned or if correction signals are present.
-
-# All key indicators have been pre-calculated for you. Focus on making a clear decision based on the provided data and always trade within your risk parameters.
-#                         """
-#                     },
-#                     {
-#                         "role": "user",
-#                         "content": [
-#                             {
-#                                 "type": "text",
-#                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
-#                                 Orderbook: {json.dumps(modified_orderbook)}
-#                                 5-minute OHLCV with indicators (5 hours): {df_5min.to_json()}
-#                                 Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
-#                                 4-hour OHLCV with indicators (3 days): {df_4h.to_json()}
-#                                 Recent news headlines: {json.dumps(news_headlines)}
-#                                 Fear and Greed Index: {json.dumps(fear_greed_index)}
-                                
-#                                 # Chart Analysis Results
-#                                 Timeframe Signals: {json.dumps(signals_analysis.get('TimeframeSignals', {}) if signals_analysis else {})}
-#                                 Is Ranging Market: {signals_analysis.get('IsRangingMarket', False) if signals_analysis else False}
-
-#                                 # Short-Term Correction Signals
-#                                 Long Entry Correction Signals: {json.dumps(long_correction_signals)}
-#                                 Short Entry Correction Signals: {json.dumps(short_correction_signals)}
-#                                 Long Correction Likely: {"YES" if long_correction_likely else "NO"} ({len(long_correction_signals)} signals)
-#                                 Short Correction Likely: {"YES" if short_correction_likely else "NO"} ({len(short_correction_signals)} signals)
-#                                 """
-#                             }
-#                         ]
-#                     }
-#                 ],
-#                 response_format={
-#                     "type": "json_schema",
-#                     "json_schema": {
-#                         "name": "trading_decision",
-#                         "strict": True,
-#                         "schema": {
-#                             "type": "object",
-#                             "properties": {
-#                                 "decision": {"type": "string", "enum": ["buy", "sell", "hold"]},
-#                                 "percentage": {"type": "integer"},
-#                                 "reason": {"type": "string"},
-#                                 "stop_loss_price": {"type": "integer"},
-#                                 "pl_ratio": {"type": "number"}
-#                             },
-#                             "required": ["decision", "percentage", "reason", "stop_loss_price", "pl_ratio"],
-#                             "additionalProperties": False
-#                         }
-#                     }
-#                 },
-#                 max_tokens=4095
-#             )
-
-#             # Validate AI's trading decision with Pydantic
-#             try:
-#                 result = TradingDecision.model_validate_json(response.choices[0].message.content)
-#             except Exception as e:
-#                 logger.error(f"Error parsing AI response: {e}")
-#                 return
-
-#             # 여기에 추가: 진입 조건 검증
-#             # ai_trading 함수 내 verify_entry_conditions 호출 부분 변경
-#             if not verify_entry_conditions(
-#                 signals_data, 
-#                 trend_strength_result, 
-#                 result.decision, 
-#                 position_side, 
-#                 df_5min, 
-#                 current_price,
-#                 signals_analysis  # signals_analysis 매개변수 명시적 전달
-#             ):
-#                 logger.warning(f"AI 결정 '{result.decision}'이 모든 진입 조건을 충족하지 않음. 'hold'로 변경됩니다.")
-#                 original_decision = result.decision
-#                 original_reason = result.reason
-#                 result.decision = "hold"
-#                 result.percentage = 0
-#                 result.reason = f"Entry conditions not fully met for {original_decision} - HOLD for capital preservation. Original reason: {original_reason}"
-
-#             # 출구 조건 검증 추가
-#             if ((position_side == 'long' and result.decision == 'sell') or 
-#                 (position_side == 'short' and result.decision == 'buy')):
-#                 if not verify_exit_conditions(exit_assessment, result.decision, position_side):
-#                     logger.warning(f"AI 결정 '{result.decision}'이 출구 조건을 충족하지 않음. 'hold'로 변경됩니다.")
-#                     original_decision = result.decision
-#                     original_reason = result.reason
-#                     result.decision = "hold"
-#                     result.percentage = 0
-#                     result.reason = f"Exit conditions not met for {original_decision} - HOLD position. Original reason: {original_reason}"
-
-
-#             logger.info(f"### AI Decision: {result.decision.upper()} ###")
-#             logger.info(f"### Reason: {result.reason} ###")
-
-#             order_executed = False
-#             order_info = None  # Initialize variable
-
-#             try:
-#                 # Get current price
-#                 ticker = trader.exchange.fetch_ticker('BTC/USDT')
-#                 current_btc_price = ticker['last']
-                
-#                 # Check account balance
-#                 balance = trader.exchange.fetch_balance()
-#                 total_balance = float(balance['USDT']['free'])
-                
-#                 # Calculate order amount (considering fees)
-#                 # When position is active
-#                 if position_side:
-#                     # If order direction is opposite to current position, calculate based on position size
-#                     if ((position_side == 'long' and result.decision == 'sell') or 
-#                         (position_side == 'short' and result.decision == 'buy')):
-#                             order_amount = position_size * (result.percentage / 100)
-#                     # If adding to existing position in same direction, calculate based on balance
-#                     else:
-#                         order_amount = total_balance * (result.percentage / 100) * 0.9996
-#                 else:  # For new entries, calculate based on balance
-#                     order_amount = total_balance * (result.percentage / 100) * 0.9996
-                
-#                 if result.decision == "buy" and result.percentage > 0:
-#                     # Long position entry or short position exit
-#                     order_info = trader.market_order_with_tp_sl(
-#                         side='buy',
-#                         buy_amount=order_amount,
-#                         pl_ratio=result.pl_ratio,
-#                         sl_price=result.stop_loss_price
-#                     )
-                    
-#                     if order_info != None:
-#                         logger.info(f"Buy order executed: Amount={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
-#                         order_executed = True
-                        
-#                 elif result.decision == "sell" and result.percentage > 0:
-#                     # Short position entry or long position exit
-#                     order_info = trader.market_order_with_tp_sl(
-#                         side='sell',
-#                         buy_amount=order_amount,
-#                         pl_ratio=result.pl_ratio,
-#                         sl_price=result.stop_loss_price
-#                     )
-                    
-#                     if order_info != None:
-#                         logger.info(f"Sell order executed: Amount={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
-#                         order_executed = True
-                        
-#             except Exception as e:
-#                 logger.error(f"Error executing order: {str(e)}")
-                
-#             # Update balance info after order (executed or not)
-#             time.sleep(1)  # Brief delay to allow API updates
-#             balance = trader.exchange.fetch_balance()
-#             usdt_balance = balance['USDT']
-#             free_usdt = usdt_balance['free']
-#             used_usdt = usdt_balance['used']
-#             total_usdt = usdt_balance['total']
-            
-#             # Get current position info
-#             try:
-#                 positions = trader.exchange.fetch_positions([trader.symbol])
-#                 if positions and len(positions) > 0:
-#                     position = positions[0]
-#                     btc_avg_buy_price = float(position['entryPrice']) 
-#                     position_size = float(position['contracts'])
-#                 else:
-#                     btc_avg_buy_price = 0
-#                     position_size = 0
-#             except Exception as e:
-#                 logger.error(f"Error fetching position: {e}")
-#                 btc_avg_buy_price = 0 
-#                 position_size = 0
-                
-#             # Get current BTC price
-#             ticker = trader.exchange.fetch_ticker('BTC/USDT')
-#             current_btc_price = ticker['last']
-
-#             # Record trade in database
-#             if order_executed and order_info != None:
-#                 order_id = order_info['entry']['id']
-#                 tp_order_id = order_info['tp']['id'] if order_info.get('tp') else None
-#                 sl_order_id = order_info['sl']['id'] if order_info.get('sl') else None
-                
-#                 # signals_data에 cloud_gap_valid 값 추가
-#                 if chart_processor and hasattr(chart_processor, 'signal_tracker'):
-#                     cloud_gap_valid = chart_processor.signal_tracker.signals["BlackFlag"].get("cloud_gap_valid", False)
-#                     signals_data["cloud_gap_valid"] = cloud_gap_valid
-#                     logger.info(f"Added cloud_gap_valid={cloud_gap_valid} to signals_data")
-                
-#                 log_trade(conn, 'AI', order_id, result.decision, result.percentage, result.reason, 
-#                         used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
-#                         reflection, tp_order_id, sl_order_id, signals_data)
-                
-#                 # Set up trailing stop loss monitoring if available
-#                 if 'monitor_sl' in order_info:
-#                     global sl_monitor_jobs
-#                     global sl_monitor_functions
-                    
-#                     # 새로운 포지션 방향 확인
-#                     current_position_side = None
-#                     try:
-#                         positions = trader.exchange.fetch_positions([trader.symbol])
-#                         for pos in positions:
-#                             if float(pos.get('contracts', 0) or 0) != 0:
-#                                 current_position_side = pos['side']  # 'long' 또는 'short'
-#                                 break
-#                     except Exception as e:
-#                         logger.error(f"Error fetching position for monitoring: {e}")
-                    
-#                     # 기존 모니터링 함수 유지 여부 확인
-#                     retain_existing = order_info.get('retain_existing_sl_monitor', False)
-                    
-#                     if current_position_side:
-#                         # 같은 방향의 기존 모니터링 작업 처리
-#                         if retain_existing and current_position_side in sl_monitor_functions:
-#                             logger.info(f"유지: 기존 {current_position_side} 포지션의 SL 모니터링 작업")
-#                         else:
-#                             # 같은 방향의 기존 작업 제거 (유지 플래그가 없는 경우)
-#                             if current_position_side in sl_monitor_functions:
-#                                 logger.info(f"교체: 기존 {current_position_side} 포지션의 SL 모니터링 작업")
-                                
-#                                 # 기존 모니터링 작업 제거
-#                                 for job in sl_monitor_jobs[:]:
-#                                     if hasattr(job, 'position_side') and job.position_side == current_position_side:
-#                                         schedule.cancel_job(job)
-#                                         sl_monitor_jobs.remove(job)
-#                                         logger.info(f"Cancelled previous {current_position_side} SL monitoring job: {getattr(job, 'job_id', 'unknown')}")
-                                
-#                                 # 기존 함수 딕셔너리에서 제거
-#                                 if current_position_side in sl_monitor_functions:
-#                                     del sl_monitor_functions[current_position_side]
-                        
-#                         # 새 모니터링 함수가 있고 기존에 없는 경우에만 새로 등록
-#                         if 'monitor_sl' in order_info and (current_position_side not in sl_monitor_functions or not retain_existing):
-#                             # Store monitor function
-#                             monitor_sl_func = order_info['monitor_sl']
-#                             sl_monitor_functions[current_position_side] = monitor_sl_func
-                            
-#                             # Create unique job ID
-#                             job_id = f"sl_monitor_{current_position_side}_{order_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                            
-#                             def periodic_sl_monitoring(monitor_func, job_id=job_id, position_side=current_position_side):
-#                                 try:
-#                                     # Measure function execution time
-#                                     start_time = time.time()
-                                    
-#                                     # 현재 해당 방향의 포지션이 있는지 확인
-#                                     positions_check = trader.exchange.fetch_positions([trader.symbol])
-#                                     position_exists = False
-#                                     for pos in positions_check:
-#                                         if float(pos.get('contracts', 0) or 0) != 0 and pos['side'] == position_side:
-#                                             position_exists = True
-#                                             break
-                                    
-#                                     # 포지션이 없는 경우 모니터링 중단
-#                                     if not position_exists:
-#                                         logger.info(f"{position_side} 포지션이 더 이상 존재하지 않음 - 모니터링 중단")
-                                        
-#                                         # 해당 방향의 모든 모니터링 작업 제거
-#                                         for job in sl_monitor_jobs[:]:
-#                                             if hasattr(job, 'position_side') and job.position_side == position_side:
-#                                                 schedule.cancel_job(job)
-#                                                 sl_monitor_jobs.remove(job)
-#                                                 logger.info(f"Cancelled {position_side} SL monitoring job: {getattr(job, 'job_id', 'unknown')}")
-                                        
-#                                         # 함수 딕셔너리에서 제거
-#                                         if position_side in sl_monitor_functions:
-#                                             del sl_monitor_functions[position_side]
-                                        
-#                                         return
-                                    
-#                                     # 모니터링 함수 실행
-#                                     new_sl_order = monitor_func()
-                                    
-#                                     if new_sl_order:
-#                                         logger.info(f"Trailing SL order updated: {new_sl_order}")
-                                    
-#                                     # Log execution time
-#                                     elapsed_time = time.time() - start_time
-#                                     logger.debug(f"SL monitoring job completed in {elapsed_time:.2f} seconds")
-                                    
-#                                     # Check resource usage
-#                                     memory_percent = psutil.virtual_memory().percent
-#                                     if memory_percent > 85:
-#                                         logger.warning(f"High memory usage in SL monitoring: {memory_percent}%")
-#                                         gc.collect()
-                                        
-#                                 except Exception as e:
-#                                     # Remove job if error occurs
-#                                     logger.error(f"Error in SL monitoring: {e}")
-#                                     # 오류 발생 시에도 작업은 유지 (중요한 보호 메커니즘)
-#                                     # 단, 심각한 오류가 5회 이상 연속으로 발생하면 작업 제거
-#                                     job_obj = None
-#                                     for job in sl_monitor_jobs:
-#                                         if getattr(job, 'job_id', None) == job_id:
-#                                             job_obj = job
-#                                             break
-                                            
-#                                     if job_obj:
-#                                         error_count = getattr(job_obj, 'error_count', 0) + 1
-#                                         job_obj.error_count = error_count
-                                        
-#                                         # 연속 5회 이상 오류 발생 시 작업 제거
-#                                         if error_count >= 5:
-#                                             logger.error(f"연속 {error_count}회 오류 발생, {position_side} SL 모니터링 작업 제거")
-#                                             for job in sl_monitor_jobs[:]:
-#                                                 if job.job_id == job_id:
-#                                                     schedule.cancel_job(job)
-#                                                     sl_monitor_jobs.remove(job)
-#                                                     break
-                                            
-#                                             # 함수 딕셔너리에서 제거
-#                                             if position_side in sl_monitor_functions:
-#                                                 del sl_monitor_functions[position_side]
-                            
-#                             # Schedule monitoring job every minute
-#                             job = schedule.every(1).minutes.do(periodic_sl_monitoring, monitor_sl_func)
-#                             job.job_id = job_id
-#                             job.position_side = current_position_side  # 포지션 방향 정보 추가
-#                             job.error_count = 0  # 오류 카운터 추가
-                            
-#                             # Add to global job list
-#                             sl_monitor_jobs.append(job)
-#                             logger.info(f"Created trailing SL monitoring job: {job_id} for {current_position_side} position")
-#             else:
-#                 # If no trade was executed (hold or failed)
-#                 # signals_data에 cloud_gap_valid 값 추가
-#                 if chart_processor and hasattr(chart_processor, 'signal_tracker'):
-#                     cloud_gap_valid = chart_processor.signal_tracker.signals["BlackFlag"].get("cloud_gap_valid", False)
-#                     signals_data["cloud_gap_valid"] = cloud_gap_valid
-#                     logger.info(f"Added cloud_gap_valid={cloud_gap_valid} to signals_data (hold)")
-                
-#                 log_trade(conn, 'AI', None, result.decision, 0, result.reason, 
-#                         used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
-#                         reflection, None, None, signals_data)
-        
-#         finally:
-#             if conn:
-#                 conn.close()
-    
-#     except Exception as e:
-#         logger.error(f"Error in AI trading function: {e}")
-#         # Clean up memory
-#         gc.collect()
 
 
 def simple_disk_cleanup(logger=None):
@@ -7989,7 +7123,7 @@ if __name__ == "__main__":
         monitoring_job()
         
         # 스케줄 설정
-        schedule.every(3).minutes.do(trading_job)
+        schedule.every(5).minutes.do(trading_job)
         schedule.every(1).minutes.do(monitoring_job)
         
         
