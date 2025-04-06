@@ -6248,8 +6248,9 @@ def ai_trading():
             }
             
             # Generate reflection and improvement content
-            reflection = generate_reflection(recent_trades, current_market_data)
-            
+            # reflection = generate_reflection(recent_trades, current_market_data)
+            reflection = None
+
             # Format pre-calculated data for the AI prompt
             blackflag_signal = signals_data.get("BlackFlag_Signal", "None") 
             blackflag_candles_ago = signals_data.get("BlackFlag_CandlesAgo", "None")
@@ -6475,12 +6476,6 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                             {
                                 "type": "text",
                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
-                                Orderbook: {json.dumps(modified_orderbook)}
-                                5-minute OHLCV with indicators (5 hours): {df_5min.to_json()}
-                                Hourly OHLCV with indicators (24 hours): {df_hourly.to_json()}
-                                4-hour OHLCV with indicators (3 days): {df_4h.to_json()}
-                                Recent news headlines: {json.dumps(news_headlines)}
-                                Fear and Greed Index: {json.dumps(fear_greed_index)}
                                 
                                 # Chart Analysis Results
                                 Timeframe Signals: {json.dumps(signals_analysis.get('TimeframeSignals', {}) if signals_analysis else {})}
