@@ -5779,7 +5779,7 @@ def ai_trading():
     fear_greed_index = get_fear_and_greed_index()
 
     # 5. Get news headlines
-    news_headlines = get_bitcoin_news()
+    #news_headlines = get_bitcoin_news()
 
     # 6. Get YouTube transcript data
     try:
@@ -6237,15 +6237,15 @@ def ai_trading():
             recent_trades = get_recent_trades(conn)
             
             # Collect current market data
-            current_market_data = {
-                "Current Price": current_price,
-                "fear_greed_index": fear_greed_index,
-                "news_headlines": news_headlines,
-                "orderbook": modified_orderbook,
-                "5min_ohlcv": df_5min.to_dict(),
-                "hourly_ohlcv": df_hourly.to_dict(),
-                "4hour_ohlcv": df_4h.to_dict()
-            }
+            # current_market_data = {
+            #     "Current Price": current_price,
+            #     "fear_greed_index": fear_greed_index,
+            #     "news_headlines": news_headlines,
+            #     "orderbook": modified_orderbook,
+            #     "5min_ohlcv": df_5min.to_dict(),
+            #     "hourly_ohlcv": df_hourly.to_dict(),
+            #     "4hour_ohlcv": df_4h.to_dict()
+            # }
             
             # Generate reflection and improvement content
             # reflection = generate_reflection(recent_trades, current_market_data)
@@ -6476,6 +6476,7 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                             {
                                 "type": "text",
                                 "text": f"""Current investment status: {json.dumps(filtered_balances)}
+                                Fear and Greed Index: {json.dumps(fear_greed_index)}
                                 
                                 # Chart Analysis Results
                                 Timeframe Signals: {json.dumps(signals_analysis.get('TimeframeSignals', {}) if signals_analysis else {})}
