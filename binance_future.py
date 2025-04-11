@@ -788,7 +788,7 @@ def analyze_chart_signals(image_path,
         # Step D: flip_x_global 및 flip time OCR
         flip_x_global = cx1 + flip_x_local
         cv2.line(debug_img, (flip_x_global, cy1), (flip_x_global, cy2), (0,255,255), 2)
-        x_margin = 50
+        x_margin = 30
         x1px = max(0, flip_x_global - x_margin)
         x2px = min(w, flip_x_global + x_margin)
         y1p = int(blackflag_xaxis_yrange[0] * h)
@@ -828,7 +828,7 @@ def analyze_chart_signals(image_path,
                 candidate_center_y = int(np.mean(candidate_points[:,1]))
                 
         s_x1 = int(w * 0.92)
-        s_x2 = int(w * 0.97)
+        s_x2 = int(w * 0.973)
         new_s_y1 = cy1  # 기본값으로 cy1 사용
         new_s_y2 = cy2  # 기본값으로 cy2 사용
         
@@ -1048,7 +1048,7 @@ def analyze_chart_signals(image_path,
             cv2.rectangle(debug_img, (bx,by), (bx+bw,by+bh), (0,255,255), 3)
             
         if alert_signal != "None" and center_x is not None:
-            x_margin = 35
+            x_margin = 30
             x1px = max(0, center_x - x_margin)
             x2px = min(w, center_x + x_margin)
             y1p = int(utbot_xaxis_yrange[0] * h)
@@ -5663,8 +5663,8 @@ def ai_trading():
         # Capture chart with retry logic
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=True, 
-            debug=True,
+            save_image=False, 
+            debug=False,
             max_retries=3,
             page_load_timeout=40
         )
