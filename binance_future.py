@@ -756,8 +756,10 @@ def analyze_chart_signals(image_path,
             second_color = "red"
             first_needed = blackflag_needed_green_chunks
             second_needed = blackflag_needed_red_chunks
-            
-        flip_x_local = None
+        
+        # 개선된 부분: 모든 flip 패턴을 찾고 가장 오른쪽(최신) 것을 선택
+        all_flip_positions = []
+        
         i_idx = 0
         while i_idx < n_chunks:
             valid_first = True
@@ -778,9 +780,14 @@ def analyze_chart_signals(image_path,
                     
             if valid_second:
                 flip_x_local = start_second_idx * blackflag_chunk_size
-                break
+                all_flip_positions.append(flip_x_local)
+                # 중요 변경: 이제 첫 번째 발견 후 종료하지 않고 계속 검색
+                i_idx = start_second_idx + 1  # 다음 패턴을 찾기 위해 진행
             else:
                 i_idx += 1
+        
+        # 모든 flip 패턴을 검색한 후, 가장 오른쪽(최신) 패턴 선택
+        flip_x_local = max(all_flip_positions) if all_flip_positions else None
 
         if flip_x_local is None:
             return {"flip_detected": False, "flip_x": None, "flip_time": "", "stop_loss_price": None, "cloud_gap_valid": False}
@@ -847,17 +854,17 @@ def analyze_chart_signals(image_path,
             new_s_y2 = s_y2
             roi_stoploss = img_bf[new_s_y1:new_s_y2, s_x1:s_x2]
             cv2.rectangle(debug_img, (s_x1, new_s_y1), (s_x2, new_s_y2), (255,0,255), 2)
-            
+                
         roi_stoploss_hsv = cv2.cvtColor(roi_stoploss, cv2.COLOR_BGR2HSV)
         if direction == "long":
             mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_green, upper_green)
         else:
             mask_stoploss_sl = cv2.inRange(roi_stoploss_hsv, lower_red1, upper_red1) | cv2.inRange(roi_stoploss_hsv, lower_red2, upper_red2)
-            
+                
         kernel = np.ones((3,3), np.uint8)
         mask_stoploss_sl = cv2.morphologyEx(mask_stoploss_sl, cv2.MORPH_OPEN, kernel)
         contours_sl, _ = cv2.findContours(mask_stoploss_sl, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
+            
         if contours_sl:
             candidate_contours = [cnt for cnt in contours_sl if cv2.contourArea(cnt) > 500]
             if candidate_contours:
@@ -875,7 +882,7 @@ def analyze_chart_signals(image_path,
                         stop_loss_price = float(matches[0])
                     except:
                         stop_loss_price = None
-                        
+                            
         if stop_loss_price is None:
             ocr_config_sl = "--psm 7 -c tessedit_char_whitelist=0123456789,."
             stop_loss_text = pytesseract.image_to_string(roi_stoploss, config=ocr_config_sl)
@@ -890,7 +897,7 @@ def analyze_chart_signals(image_path,
 
         # 새로운 기능: CloudGap 유효성 검출 - 색상 기반 (노란색/파란색 사각형)
         cloud_gap_valid = False
-        
+            
         # CloudGap ROI 설정 - flip_x_global 근처에서 검색
         # Y 좌표 범위는 상대적인 높이의 0.1~0.65 (조정 가능)
         cloudgap_y_range = (0.1, 0.65)  # 정규화된 Y 좌표 범위
@@ -899,31 +906,31 @@ def analyze_chart_signals(image_path,
         cloudgap_x_diff = 0.07
         gap_x1 = max(0, flip_x_global - int(cloudgap_x_diff*w))  # flip_x 위치 근처 ±100 픽셀
         gap_x2 = min(w, flip_x_global + int(cloudgap_x_diff*w))
-        
+            
         roi_cloudgap = img_bf[gap_y1:gap_y2, gap_x1:gap_x2]
         roi_cloudgap_hsv = cv2.cvtColor(roi_cloudgap, cv2.COLOR_BGR2HSV)
-        
+            
         # 디버그용 CloudGap ROI 표시
         if debug:
             cv2.rectangle(debug_img, (gap_x1, gap_y1), (gap_x2, gap_y2), (255, 0, 0), 2)
-        
+            
         # 방향에 따라 다른 색상 검출
         if direction == "long":
             # 롱 CloudGap: 노란색 사각형 검출
             # 노란색 HSV 범위
             lower_yellow = np.array([20, 100, 100])
             upper_yellow = np.array([30, 255, 255])
-            
+                
             # 노란색 마스크 생성
             mask_yellow = cv2.inRange(roi_cloudgap_hsv, lower_yellow, upper_yellow)
-            
+                
             # 노이즈 제거
             mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_OPEN, kernel)
             mask_yellow = cv2.morphologyEx(mask_yellow, cv2.MORPH_CLOSE, kernel)
-            
+                
             # 윤곽선 찾기
             contours_yellow, _ = cv2.findContours(mask_yellow, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
+                
             # 유효한 사각형 찾기 (면적 기준)
             valid_yellow_rects = []
             for cnt in contours_yellow:
@@ -939,26 +946,26 @@ def analyze_chart_signals(image_path,
                             cv2.rectangle(debug_img, (abs_x, abs_y), (abs_x + w, abs_y + h), (0, 255, 255), 2)
                             cv2.putText(debug_img, "CloudGap-Long", (abs_x, abs_y - 5),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-            
+                
             # 유효한 노란색 사각형이 하나 이상 있으면 CloudGap Valid
             cloud_gap_valid = len(valid_yellow_rects) > 0
-            
+                
         else:  # direction == "short"
             # 숏 CloudGap: 파란색 사각형 검출
             # 파란색 HSV 범위
             lower_blue = np.array([100, 100, 100])
             upper_blue = np.array([130, 255, 255])
-            
+                
             # 파란색 마스크 생성
             mask_blue = cv2.inRange(roi_cloudgap_hsv, lower_blue, upper_blue)
-            
+                
             # 노이즈 제거
             mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_OPEN, kernel)
             mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_CLOSE, kernel)
-            
+                
             # 윤곽선 찾기
             contours_blue, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            
+                
             # 유효한 사각형 찾기 (면적 기준)
             valid_blue_rects = []
             for cnt in contours_blue:
@@ -974,16 +981,16 @@ def analyze_chart_signals(image_path,
                             cv2.rectangle(debug_img, (abs_x, abs_y), (abs_x + w, abs_y + h), (255, 0, 0), 2)
                             cv2.putText(debug_img, "CloudGap-Short", (abs_x, abs_y - 5),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
-            
+                
             # 유효한 파란색 사각형이 하나 이상 있으면 CloudGap Valid
             cloud_gap_valid = len(valid_blue_rects) > 0
-        
+            
         # CloudGap 검출 결과 로깅
         if cloud_gap_valid:
             print(f"BlackFlag {direction} CloudGap 검출 - 유효")
         else:
             print(f"BlackFlag {direction} CloudGap 검출 실패 - 무효")
-        
+            
         return {
             "flip_detected": True,
             "flip_x": flip_x_global,
