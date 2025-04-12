@@ -1153,7 +1153,7 @@ def analyze_chart_signals(image_path,
             h_roi, w_roi = roi_table.shape[:2]
             row_height = h_roi // 5
             
-            timeframes = ["5", "10", "30", "60", "120"]
+            timeframes = ["5", "15", "30", "60", "120"]
             
             for i, tf in enumerate(timeframes):
                 # 각 행 추출
@@ -6030,8 +6030,8 @@ def ai_trading():
         # Capture chart with retry logic
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=False, 
-            debug=False,
+            save_image=True, 
+            debug=True,
             max_retries=3,
             page_load_timeout=40
         )
