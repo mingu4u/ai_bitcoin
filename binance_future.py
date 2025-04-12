@@ -6290,7 +6290,7 @@ def ai_trading():
             use_new_trend_filter=True,
             wave_analysis_period=14,
             wave_intensity_threshold=1.5,
-            consecutive_candles=3,
+            consecutive_candles=2,
             macd_strength_threshold=0.25,
             volume_ratio_threshold=1.35,
             use_volume_confirmation=True,
@@ -6943,6 +6943,8 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                 result.decision, 
                 position_side, 
                 df_5min, 
+                df_15min,
+                df_hourly,
                 current_price,
                 signals_analysis  # signals_analysis 매개변수 명시적 전달
             ):
