@@ -4520,6 +4520,366 @@ def assess_trend_strength(df_5min, df_hourly, current_price, df_4h=None):
     
     return result
 
+
+def additional_trend_check(df_5min, df_15min=None, df_60min=None, 
+                          use_new_trend_filter=True, 
+                          wave_analysis_period=14,
+                          wave_intensity_threshold=1.5,
+                          consecutive_candles=3,
+                          macd_strength_threshold=0.25,
+                          volume_ratio_threshold=1.35,
+                          use_volume_confirmation=True,
+                          use_adx_filter=True,
+                          adx_threshold=25,
+                          adx_period=14,
+                          use_multi_timeframe=True,
+                          higher_tf_weight=1.25):
+    """
+    추가 추세 확인 필터 및 다중 타임프레임 분석을 수행하는 함수
+    
+    Args:
+        df_5min: 5분 OHLCV 데이터프레임 (지표 포함)
+        df_15min: 15분 OHLCV 데이터프레임 (선택사항)
+        df_60min: 60분 OHLCV 데이터프레임 (선택사항)
+        use_new_trend_filter: 추가 추세 필터 사용 여부
+        wave_analysis_period: 파동 분석 기간
+        wave_intensity_threshold: 파동 강도 임계값
+        consecutive_candles: 동일 방향 연속 캔들 수
+        macd_strength_threshold: MACD 강도 임계값
+        volume_ratio_threshold: 볼륨 비율 임계값
+        use_volume_confirmation: 볼륨으로 추세 확인 여부
+        use_adx_filter: ADX 필터 사용 여부
+        adx_threshold: ADX 임계값
+        adx_period: ADX 기간
+        use_multi_timeframe: 다중 타임프레임 확인 여부
+        higher_tf_weight: 상위 타임프레임 가중치
+        
+    Returns:
+        dict: 상승/하락 추세 강도와 유효성에 관한 결과
+    """
+    # 필터를 사용하지 않는 경우 즉시 True 반환
+    if not use_new_trend_filter and not use_multi_timeframe:
+        return {
+            "bullish_trend_strong": True,
+            "bearish_trend_strong": True,
+            "trend_strength_bull": 0,
+            "trend_strength_bear": 0,
+            "strong_bull_trend_threshold": 0,
+            "strong_bear_trend_threshold": 0
+        }
+    
+    # 결과 초기화
+    results = {
+        "bullish_trend_strong": False,
+        "bearish_trend_strong": False,
+        "trend_strength_bull": 0,
+        "trend_strength_bear": 0,
+        "strong_bull_trend_threshold": 3,
+        "strong_bear_trend_threshold": 3
+    }
+    
+    try:
+        # 최신 데이터 확인
+        if len(df_5min) < wave_analysis_period + 10:
+            logger.warning(f"추세 분석에 충분한 데이터가 없음: {len(df_5min)} 캔들 (최소 {wave_analysis_period+10} 필요)")
+            return results
+        
+        # 최신 캔들 데이터
+        latest = df_5min.iloc[-1]
+        
+        # 1. Wave 분석 - 가격 움직임의 강도 측정
+        wave_intensity = calculate_wave_intensity(df_5min, wave_analysis_period)
+        
+        # 2. 연속 캔들 방향 확인
+        bullish_count, bearish_count = get_consecutive_direction(df_5min, consecutive_candles + 2)
+        
+        # 3. MACD 강도 계산
+        hist_direction, hist_strength, macd_direction, macd_distance = calculate_macd_strength(df_5min)
+        
+        # 4. 볼륨 확인
+        bull_volume_confirmed = True
+        bear_volume_confirmed = True
+        if use_volume_confirmation:
+            bull_volume_confirmed = check_volume_confirmation(df_5min, 1, volume_ratio_threshold)
+            bear_volume_confirmed = check_volume_confirmation(df_5min, -1, volume_ratio_threshold)
+        
+        # 5. ADX로 추세 강도 측정
+        adx_value, di_plus, di_minus = 0, 0, 0
+        if use_adx_filter and 'adx' in df_5min.columns:
+            adx_value = df_5min['adx'].iloc[-1]
+            di_plus = df_5min['di_plus'].iloc[-1]
+            di_minus = df_5min['di_minus'].iloc[-1]
+        
+        # 6. 다중 타임프레임 추세 확인
+        higher_tf_trend = 0
+        highest_tf_trend = 0
+        
+        if use_multi_timeframe:
+            # 상위 타임프레임 추세 확인
+            if df_15min is not None and len(df_15min) > 10:
+                higher_tf_trend = get_trend_from_df(df_15min)
+            
+            # 최상위 타임프레임 추세 확인
+            if df_60min is not None and len(df_60min) > 10:
+                highest_tf_trend = get_trend_from_df(df_60min)
+            
+            # 상위 타임프레임이 있는 경우 임계값 조정
+            results["strong_bull_trend_threshold"] = 3 + (higher_tf_weight if use_multi_timeframe else 0)
+            results["strong_bear_trend_threshold"] = 3 + (higher_tf_weight if use_multi_timeframe else 0)
+        
+        # 7. 최종 추세 강도 계산
+        trend_strength_bull = 0
+        trend_strength_bear = 0
+        
+        if use_new_trend_filter:
+            # 상승 추세 강도 계산
+            trend_strength_bull = (
+                (1 if wave_intensity > wave_intensity_threshold else 0) +  # 파동 강도
+                (1 if bullish_count >= consecutive_candles else 0) +       # 연속 상승 캔들
+                (1 if hist_direction > 0 and hist_strength > macd_strength_threshold else 0) +  # MACD 히스토그램
+                (1 if macd_direction > 0 and macd_distance > macd_strength_threshold else 0) +  # MACD 라인
+                (1 if use_adx_filter and adx_value > adx_threshold and di_plus > di_minus else 0)  # ADX
+            )
+            
+            # 다중 타임프레임 요소 추가
+            if use_multi_timeframe:
+                trend_strength_bull += (higher_tf_weight if higher_tf_trend > 0 else 0)
+                trend_strength_bull += (higher_tf_weight * 1.5 if highest_tf_trend > 0 else 0)
+            
+            # 하락 추세 강도 계산
+            trend_strength_bear = (
+                (1 if wave_intensity > wave_intensity_threshold else 0) +  # 파동 강도
+                (1 if bearish_count >= consecutive_candles else 0) +       # 연속 하락 캔들
+                (1 if hist_direction < 0 and hist_strength > macd_strength_threshold else 0) +  # MACD 히스토그램
+                (1 if macd_direction < 0 and macd_distance > macd_strength_threshold else 0) +  # MACD 라인
+                (1 if use_adx_filter and adx_value > adx_threshold and di_minus > di_plus else 0)  # ADX
+            )
+            
+            # 다중 타임프레임 요소 추가
+            if use_multi_timeframe:
+                trend_strength_bear += (higher_tf_weight if higher_tf_trend < 0 else 0)
+                trend_strength_bear += (higher_tf_weight * 1.5 if highest_tf_trend < 0 else 0)
+        
+        # 추세 강도가 임계값을 넘고 볼륨 확인이 만족되면 강한 추세로 판단
+        results["trend_strength_bull"] = trend_strength_bull
+        results["trend_strength_bear"] = trend_strength_bear
+        results["bullish_trend_strong"] = (
+            trend_strength_bull >= results["strong_bull_trend_threshold"] and 
+            bull_volume_confirmed
+        )
+        results["bearish_trend_strong"] = (
+            trend_strength_bear >= results["strong_bear_trend_threshold"] and 
+            bear_volume_confirmed
+        )
+        
+        # 로깅
+        logger.info(f"추가 추세 필터 결과: Bull 강도={trend_strength_bull:.1f}/{results['strong_bull_trend_threshold']:.1f}, " +
+                   f"Bear 강도={trend_strength_bear:.1f}/{results['strong_bear_trend_threshold']:.1f}")
+        logger.info(f"추세 확인: 상승={results['bullish_trend_strong']}, 하락={results['bearish_trend_strong']}")
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"추세 확인 필터 중 오류: {e}")
+        return results
+
+# 헬퍼 함수들
+
+def calculate_wave_intensity(df, period):
+    """
+    가격 파동의 강도를 계산하는 함수
+    
+    Args:
+        df: OHLCV 데이터프레임
+        period: 분석 기간
+        
+    Returns:
+        float: 파동 강도 (ATR로 표준화)
+    """
+    try:
+        # 데이터가 충분한지 확인
+        if len(df) < period:
+            return 0
+        
+        # 고점과 저점 식별을 위한 배열
+        high_points = []
+        low_points = []
+        
+        # 피봇 고점과 저점 찾기
+        for i in range(1, min(period, len(df) - 1)):
+            idx = -i - 1  # 최신 데이터부터 역순으로
+            
+            # 고점 (피봇 고점)
+            if df['high'].iloc[idx] > df['high'].iloc[idx+1] and df['high'].iloc[idx] > df['high'].iloc[idx-1]:
+                high_points.append(df['high'].iloc[idx])
+                
+            # 저점 (피봇 저점)
+            if df['low'].iloc[idx] < df['low'].iloc[idx+1] and df['low'].iloc[idx] < df['low'].iloc[idx-1]:
+                low_points.append(df['low'].iloc[idx])
+        
+        # 최근 5개 고점/저점만 유지
+        max_points = 5
+        high_points = high_points[:max_points]
+        low_points = low_points[:max_points]
+        
+        # 파동 크기 계산
+        if not high_points or not low_points:
+            return 0
+            
+        high_points_avg = sum(high_points) / len(high_points) if high_points else df['high'].iloc[-1]
+        low_points_avg = sum(low_points) / len(low_points) if low_points else df['low'].iloc[-1]
+        
+        # ATR로 표준화된 파동 크기
+        wave_range = abs(high_points_avg - low_points_avg)
+        normalized_wave = wave_range / df['atr'].iloc[-1] if 'atr' in df.columns and df['atr'].iloc[-1] > 0 else 0
+        
+        return normalized_wave
+        
+    except Exception as e:
+        logger.error(f"파동 강도 계산 중 오류: {e}")
+        return 0
+
+def get_consecutive_direction(df, count):
+    """
+    연속적인 상승/하락 캔들 수를 확인하는 함수
+    
+    Args:
+        df: OHLCV 데이터프레임
+        count: 확인할 캔들 수
+        
+    Returns:
+        tuple: (연속 상승 캔들 수, 연속 하락 캔들 수)
+    """
+    try:
+        bullish_count = 0
+        bearish_count = 0
+        
+        # 최근 캔들부터 count개까지 확인
+        for i in range(min(count, len(df))):
+            if df['close'].iloc[-i-1] > df['open'].iloc[-i-1]:
+                bullish_count += 1
+            elif df['close'].iloc[-i-1] < df['open'].iloc[-i-1]:
+                bearish_count += 1
+        
+        return bullish_count, bearish_count
+        
+    except Exception as e:
+        logger.error(f"연속 캔들 방향 확인 중 오류: {e}")
+        return 0, 0
+
+def calculate_macd_strength(df):
+    """
+    MACD의 강도를 계산하는 함수
+    
+    Args:
+        df: OHLCV 데이터프레임 (MACD 지표 포함)
+        
+    Returns:
+        tuple: (히스토그램 방향, 히스토그램 강도, MACD 라인 방향, MACD 시그널과의 거리)
+    """
+    try:
+        # MACD 지표가 있는지 확인
+        if 'macd' not in df.columns or 'macd_signal' not in df.columns or 'macd_diff' not in df.columns:
+            return 0, 0, 0, 0
+        
+        # 최근 MACD 데이터
+        macd_line = df['macd'].iloc[-1]
+        signal_line = df['macd_signal'].iloc[-1]
+        hist_line = df['macd_diff'].iloc[-1]
+        
+        # 이전 히스토그램 값 (방향 확인용)
+        prev_hist = df['macd_diff'].iloc[-2] if len(df) > 1 else 0
+        
+        # 히스토그램 방향
+        hist_direction = 1 if hist_line > prev_hist else -1
+        
+        # 히스토그램 강도 (ATR로 표준화)
+        hist_strength = abs(hist_line) / df['atr'].iloc[-1] if 'atr' in df.columns and df['atr'].iloc[-1] > 0 else 0
+        
+        # MACD 라인 방향과 시그널 라인과의 거리
+        macd_direction = 1 if macd_line > signal_line else -1
+        macd_distance = abs(macd_line - signal_line) / df['atr'].iloc[-1] if 'atr' in df.columns and df['atr'].iloc[-1] > 0 else 0
+        
+        return hist_direction, hist_strength, macd_direction, macd_distance
+        
+    except Exception as e:
+        logger.error(f"MACD 강도 계산 중 오류: {e}")
+        return 0, 0, 0, 0
+
+def check_volume_confirmation(df, direction, volume_ratio_threshold=1.35):
+    """
+    볼륨 확인 함수
+    
+    Args:
+        df: OHLCV 데이터프레임
+        direction: 방향 (1=상승, -1=하락)
+        volume_ratio_threshold: 볼륨 비율 임계값
+        
+    Returns:
+        bool: 볼륨 확인 결과
+    """
+    try:
+        if 'volume' not in df.columns:
+            return True
+        
+        # 최근 볼륨 vs 이전 볼륨
+        recent_volume = df['volume'].iloc[-3:].mean()
+        prev_volume = df['volume'].iloc[-6:-3].mean()
+        
+        # 상승 캔들과 하락 캔들의 볼륨 비교
+        bullish_volume = 0.0
+        bearish_volume = 0.0
+        
+        for i in range(6):
+            if i < len(df):
+                if df['close'].iloc[-i-1] > df['open'].iloc[-i-1]:
+                    bullish_volume += df['volume'].iloc[-i-1]
+                else:
+                    bearish_volume += df['volume'].iloc[-i-1]
+        
+        volume_ratio = recent_volume / prev_volume if prev_volume > 0 else 0
+        
+        # 방향에 따른 볼륨 확인
+        if direction == 1:  # 상승
+            return volume_ratio > volume_ratio_threshold and bullish_volume > bearish_volume
+        else:  # 하락
+            return volume_ratio > volume_ratio_threshold and bearish_volume > bullish_volume
+            
+    except Exception as e:
+        logger.error(f"볼륨 확인 중 오류: {e}")
+        return True
+
+def get_trend_from_df(df):
+    """
+    데이터프레임에서 추세 방향 추출
+    
+    Args:
+        df: OHLCV 데이터프레임
+        
+    Returns:
+        int: 추세 방향 (1=상승, -1=하락, 0=중립)
+    """
+    try:
+        if len(df) < 10:
+            return 0
+            
+        # 10캔들 전과 현재 가격 비교
+        price_trend = 1 if df['close'].iloc[-1] > df['close'].iloc[-10] else -1
+        
+        # 이동평균 확인
+        ema8 = df['close'].ewm(span=8).mean().iloc[-1]
+        ema21 = df['close'].ewm(span=21).mean().iloc[-1]
+        ma_trend = 1 if ema8 > ema21 else -1
+        
+        # 두 지표가 일치할 때만 추세 반환
+        if price_trend == ma_trend:
+            return price_trend
+        return 0
+        
+    except Exception as e:
+        logger.error(f"타임프레임 추세 추출 중 오류: {e}")
+        return 0
+
 def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=None, df_hourly=None, df_4h=None, signals_analysis=None):
     """
     출구 신호 평가 - 좀 더 엄격한 기준 적용 및 중장기적 신호 우선시
@@ -5748,12 +6108,29 @@ def ai_trading():
     # Select only the last 60 data points
     df_5min = df_5min.tail(60)
 
+    # Query Binance 15-minute candles
+    df_15min = pd.DataFrame(
+        trader.exchange.fetch_ohlcv(
+            "BTC/USDT", 
+            timeframe='15m',
+            limit=63 # 30 + 33
+        ),
+        columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    )
+    df_15min['timestamp'] = pd.to_datetime(df_15min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
+    df_15min = df_15min.set_index('timestamp')
+    df_15min = dropna(df_15min)
+    df_15min = add_indicators(df_15min)
+
+    # Select only the last 30 data points
+    df_15min = df_15min.tail(30)
+
     # Query Binance 1-hour candles
     df_hourly = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT", 
             timeframe='1h',
-            limit=57 # 24 + 33
+            limit=63 # 30 + 33
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
@@ -5762,8 +6139,8 @@ def ai_trading():
     df_hourly = dropna(df_hourly)
     df_hourly = add_indicators(df_hourly)
 
-    # Select only the last 24 data points
-    df_hourly = df_hourly.tail(24)
+    # Select only the last 30 data points
+    df_hourly = df_hourly.tail(30)
 
     # Query Binance 4-hour candles
     df_4h = pd.DataFrame(
@@ -5889,7 +6266,7 @@ def ai_trading():
 
     # 추가: 진입 조건 검증 함수
     # 수정: verify_entry_conditions 함수에 횡보장 감지와 타임프레임 신호 테이블 검사 추가
-    def verify_entry_conditions(signals_data, trend_strength_result, decision, current_position_side, df_5min, entry_price, signals_analysis=None):
+    def verify_entry_conditions(signals_data, trend_strength_result, decision, current_position_side, df_5min, df_15min, df_hourly, entry_price, signals_analysis=None):
         """
         진입 조건 검증 함수 - 횡보장 감지와 타임프레임 신호 테이블 검사 추가
         
@@ -5905,6 +6282,24 @@ def ai_trading():
         Returns:
             bool: 진입 조건 충족 여부
         """
+    # 새로 추가: 추가 추세 확인 필터 실행
+        additional_trend_results = additional_trend_check(
+            df_5min=df_5min,
+            df_15min=df_15min,
+            df_60min=df_hourly,
+            use_new_trend_filter=True,
+            wave_analysis_period=14,
+            wave_intensity_threshold=1.5,
+            consecutive_candles=3,
+            macd_strength_threshold=0.25,
+            volume_ratio_threshold=1.35,
+            use_volume_confirmation=True,
+            use_adx_filter=True,
+            adx_threshold=25,
+            adx_period=14,
+            use_multi_timeframe=True,
+            higher_tf_weight=1.25
+        )
         # 새로 추가: signals_analysis가 None이 아닌 경우 횡보장 감지 및 타임프레임 신호 테이블 검사
         is_ranging_market = False
         timeframe_signals = None
@@ -6006,6 +6401,9 @@ def ai_trading():
                     if not five_min_valid:
                         logger.info("롱 진입 제한: 5분봉 상승 신호가 없음")
             
+            # 추가 추세 필터 검증 (새로 추가)
+            additional_trend_valid = additional_trend_results["bullish_trend_strong"]
+            
             # 단기 조정 가능성 로깅
             if correction_signals:
                 logger.info(f"롱 진입 전 단기 조정 신호 감지: {correction_signals}")
@@ -6019,15 +6417,18 @@ def ai_trading():
                         f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
                         f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}") 
             
-            # 모든 기본 조건이 충족되는지 확인 (cloud_gap_valid 검증)
-            # base_conditions_met = (blackflag_valid and utbot_valid and 
-            #                     volume_valid and trend_valid and 
-            #                     price_valid and ranging_valid and 
-            #                     timeframe_valid and cloud_gap_valid)
-            base_conditions_met = (blackflag_valid and utbot_valid and 
-                                volume_valid and 
-                                price_valid and ranging_valid and 
-                                timeframe_valid and cloud_gap_valid)            
+              # 모든 기본 조건이 충족되는지 확인 (추세 필터 포함)
+            base_conditions_met = (
+                blackflag_valid and utbot_valid and 
+                volume_valid and price_valid and 
+                ranging_valid and timeframe_valid and 
+                cloud_gap_valid and additional_trend_valid  # 추가 추세 필터 추가
+            )  
+
+            # 추가 추세 필터 결과 로깅
+            logger.info(f"추가 추세 필터 검증 결과: {additional_trend_valid}, " +
+                    f"Bull 강도: {additional_trend_results['trend_strength_bull']:.1f}/{additional_trend_results['strong_bull_trend_threshold']:.1f}")         
+            
             # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
             if base_conditions_met and correction_likely:
                 logger.warning(f"롱 진입 기본 조건 충족하지만 단기 조정 가능성이 높아 진입 보류: {correction_signals}")
@@ -6124,7 +6525,10 @@ def ai_trading():
                         logger.info(f"숏 진입 제한: 충분한 타임프레임 하락 신호가 없음 (bearish_count: {bearish_count})")
                     if not five_min_valid:
                         logger.info("숏 진입 제한: 5분봉 하락 신호가 없음")
-            
+
+            # 추가 추세 필터 검증 (새로 추가)
+            additional_trend_valid = additional_trend_results["bearish_trend_strong"]
+
             # 단기 조정 가능성 로깅
             if correction_signals:
                 logger.info(f"숏 진입 전 단기 조정 신호 감지: {correction_signals}")
@@ -6138,15 +6542,18 @@ def ai_trading():
                         f"PriceChange={price_change_pct:.2f}%, PriceValid={price_valid}, CorrectionLikely={correction_likely}, " +
                         f"RangingValid={ranging_valid}, TimeframeValid={timeframe_valid}, CloudGapValid={cloud_gap_valid}")
         
-            # 모든 기본 조건이 충족되는지 확인 (cloud_gap_valid 검증)
-            # base_conditions_met = (blackflag_valid and utbot_valid and 
-            #                     volume_valid and trend_valid and 
-            #                     price_valid and ranging_valid and 
-            #                     timeframe_valid and cloud_gap_valid)
-            base_conditions_met = (blackflag_valid and utbot_valid and 
-                                volume_valid and 
-                                price_valid and ranging_valid and 
-                                timeframe_valid and cloud_gap_valid)            
+            # 모든 기본 조건이 충족되는지 확인 (추세 필터 포함)
+            base_conditions_met = (
+                blackflag_valid and utbot_valid and 
+                volume_valid and price_valid and 
+                ranging_valid and timeframe_valid and 
+                cloud_gap_valid and additional_trend_valid  # 추가 추세 필터 추가
+            )     
+
+            # 추가 추세 필터 결과 로깅
+            logger.info(f"추가 추세 필터 검증 결과: {additional_trend_valid}, " +
+                    f"Bear 강도: {additional_trend_results['trend_strength_bear']:.1f}/{additional_trend_results['strong_bear_trend_threshold']:.1f}")
+            
             # 단기 조정 신호가 있으면 진입 보류 (모든 기본 조건은 충족하지만 조정 가능성이 높은 경우)
             if base_conditions_met and correction_likely:
                 logger.warning(f"숏 진입 기본 조건 충족하지만 단기 조정 가능성이 높아 진입 보류: {correction_signals}")
