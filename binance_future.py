@@ -2602,8 +2602,8 @@ def load_cookies(driver, filename="tradingview_cookies.pkl"):
 def login_with_cookies():
     try:
         driver = WebDriverManager.get_driver()
-        cookies_path = "my_cookies.pkl"
-        
+        #cookies_path = "my_cookies.pkl"
+        cookies_path = "cookies_tradingview.pkl"
         # 먼저 도메인에 접속 (쿠키 설정을 위해 필요)
         driver.get("https://www.tradingview.com/accounts/signin/")
         time.sleep(2)
