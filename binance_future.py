@@ -6855,7 +6855,7 @@ Output a JSON object:
   "decision": "buy" or "sell" or "hold",
   "percentage": integer (0-100),
   "stop_loss_price": float,
-  "pl_ratio": float (1.5-3.0),
+  "pl_ratio": float (long : 3.5, short : 3),
   "reason": "Concise rationale referencing signals & data"
 }}
 ```
@@ -6997,6 +6997,8 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                 
                 if result.decision == "buy" and result.percentage > 0:
                     # Long position entry or short position exit
+                    if result.pl_ratio != 3.5:
+                        result.pl_ratio = 3.5 
                     order_info = trader.market_order_with_tp_sl(
                         side='buy',
                         buy_amount=order_amount,
@@ -7010,6 +7012,8 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                         
                 elif result.decision == "sell" and result.percentage > 0:
                     # Short position entry or long position exit
+                    if result.pl_ratio != 3:
+                        result.pl_ratio = 3
                     order_info = trader.market_order_with_tp_sl(
                         side='sell',
                         buy_amount=order_amount,
