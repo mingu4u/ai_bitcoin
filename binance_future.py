@@ -4525,7 +4525,7 @@ def additional_trend_check(df_5min, df_15min=None, df_60min=None,
                           use_new_trend_filter=True, 
                           wave_analysis_period=14,
                           wave_intensity_threshold=1.5,
-                          consecutive_candles=3,
+                          consecutive_candles=2,
                           macd_strength_threshold=0.25,
                           volume_ratio_threshold=1.35,
                           use_volume_confirmation=True,
@@ -4533,7 +4533,7 @@ def additional_trend_check(df_5min, df_15min=None, df_60min=None,
                           adx_threshold=25,
                           adx_period=14,
                           use_multi_timeframe=True,
-                          higher_tf_weight=1.25):
+                          higher_tf_weight=1.5):
     """
     추가 추세 확인 필터 및 다중 타임프레임 분석을 수행하는 함수
     
@@ -6855,7 +6855,7 @@ Output a JSON object:
   "decision": "buy" or "sell" or "hold",
   "percentage": integer (0-100),
   "stop_loss_price": float,
-  "pl_ratio": float (long : 3.5, short : 3),
+  "pl_ratio": float (long : 3, short : 2),
   "reason": "Concise rationale referencing signals & data"
 }}
 ```
@@ -6997,8 +6997,8 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                 
                 if result.decision == "buy" and result.percentage > 0:
                     # Long position entry or short position exit
-                    if result.pl_ratio != 3.5:
-                        result.pl_ratio = 3.5 
+                    if result.pl_ratio != 3:
+                        result.pl_ratio = 3 
                     order_info = trader.market_order_with_tp_sl(
                         side='buy',
                         buy_amount=order_amount,
@@ -7012,8 +7012,8 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                         
                 elif result.decision == "sell" and result.percentage > 0:
                     # Short position entry or long position exit
-                    if result.pl_ratio != 3:
-                        result.pl_ratio = 3
+                    if result.pl_ratio != 2:
+                        result.pl_ratio = 2
                     order_info = trader.market_order_with_tp_sl(
                         side='sell',
                         buy_amount=order_amount,
