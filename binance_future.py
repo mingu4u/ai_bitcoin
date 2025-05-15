@@ -4526,7 +4526,7 @@ def additional_trend_check(df_5min, df_15min=None, df_60min=None,
                           wave_analysis_period=14,
                           wave_intensity_threshold=1.5,
                           consecutive_candles=2,
-                          macd_strength_threshold=0.25,
+                          macd_strength_threshold=0.55, # 0.25
                           volume_ratio_threshold=1.35,
                           use_volume_confirmation=True,
                           use_adx_filter=True,
@@ -6291,14 +6291,14 @@ def ai_trading():
             wave_analysis_period=14,
             wave_intensity_threshold=1.5,
             consecutive_candles=2,
-            macd_strength_threshold=0.25,
+            macd_strength_threshold=0.55, # 0.25
             volume_ratio_threshold=1.35,
             use_volume_confirmation=True,
             use_adx_filter=True,
             adx_threshold=25,
             adx_period=14,
             use_multi_timeframe=True,
-            higher_tf_weight=1.25
+            higher_tf_weight=1.5
         )
         # 새로 추가: signals_analysis가 None이 아닌 경우 횡보장 감지 및 타임프레임 신호 테이블 검사
         is_ranging_market = False
