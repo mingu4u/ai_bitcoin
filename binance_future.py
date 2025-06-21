@@ -6143,6 +6143,32 @@ def assess_exit_signals(df_5min, signals_data, position_side, unrealized_pnl=Non
     
     return result
 
+def convert_to_heikin_ashi(df):
+    """
+    일반 OHLC 데이터프레임을 하이킨 아시로 변환
+    """
+    ha_df = df.copy()
+    
+    # 하이킨 아시 Close 계산
+    ha_df['close'] = (df['open'] + df['high'] + df['low'] + df['close']) / 4
+    
+    # 첫 번째 캔들의 하이킨 아시 Open 초기화
+    ha_df.iloc[0, ha_df.columns.get_loc('open')] = (df.iloc[0]['open'] + df.iloc[0]['close']) / 2
+    
+    # 나머지 하이킨 아시 Open 계산
+    for i in range(1, len(ha_df)):
+        ha_df.iloc[i, ha_df.columns.get_loc('open')] = (ha_df.iloc[i-1]['open'] + ha_df.iloc[i-1]['close']) / 2
+    
+    # 하이킨 아시 High 계산
+    ha_df['high'] = ha_df[['high', 'open', 'close']].max(axis=1)
+    
+    # 하이킨 아시 Low 계산
+    ha_df['low'] = ha_df[['low', 'open', 'close']].min(axis=1)
+    
+    # Volume은 그대로 유지
+    
+    return ha_df
+
 
 ### 메인 AI 트레이딩 로직
 def ai_trading():
@@ -6224,72 +6250,156 @@ def ai_trading():
     current_price = ticker['last']
 
     # Query Binance 5-minute candles
+    # df_5min = pd.DataFrame(
+    #     trader.exchange.fetch_ohlcv(
+    #         "BTC/USDT",
+    #         timeframe='5m',
+    #         limit=93 # 60 + 33
+    #     ),
+    #     columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    # )
+    # df_5min['timestamp'] = pd.to_datetime(df_5min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
+    # df_5min = df_5min.set_index('timestamp')
+    # df_5min = dropna(df_5min)
+    # df_5min = add_indicators(df_5min)
+    
+    # # Select only the last 60 data points
+    # df_5min = df_5min.tail(60)
     df_5min = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT",
             timeframe='5m',
-            limit=93 # 60 + 33
+            limit=93  # 60 + 33
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
     df_5min['timestamp'] = pd.to_datetime(df_5min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
     df_5min = df_5min.set_index('timestamp')
     df_5min = dropna(df_5min)
+
+    # 하이킨 아시로 변환
+    df_5min = convert_to_heikin_ashi(df_5min)
+
+    # 지표 추가
     df_5min = add_indicators(df_5min)
-    
-    # Select only the last 60 data points
+
+    # 마지막 60개 데이터만 선택
     df_5min = df_5min.tail(60)
 
+
     # Query Binance 15-minute candles
+    # df_15min = pd.DataFrame(
+    #     trader.exchange.fetch_ohlcv(
+    #         "BTC/USDT", 
+    #         timeframe='15m',
+    #         limit=63 # 30 + 33
+    #     ),
+    #     columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    # )
+    # df_15min['timestamp'] = pd.to_datetime(df_15min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
+    # df_15min = df_15min.set_index('timestamp')
+    # df_15min = dropna(df_15min)
+    # df_15min = add_indicators(df_15min)
+
+    # # Select only the last 30 data points
+    # df_15min = df_15min.tail(30)
+
     df_15min = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT", 
             timeframe='15m',
-            limit=63 # 30 + 33
+            limit=63  # 30 + 33
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
     df_15min['timestamp'] = pd.to_datetime(df_15min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
     df_15min = df_15min.set_index('timestamp')
     df_15min = dropna(df_15min)
+
+    # 하이킨 아시로 변환
+    df_15min = convert_to_heikin_ashi(df_15min)
+
+    # 지표 추가
     df_15min = add_indicators(df_15min)
 
-    # Select only the last 30 data points
+    # 마지막 30개 데이터만 선택
     df_15min = df_15min.tail(30)
 
     # Query Binance 1-hour candles
+    # df_hourly = pd.DataFrame(
+    #     trader.exchange.fetch_ohlcv(
+    #         "BTC/USDT", 
+    #         timeframe='1h',
+    #         limit=63 # 30 + 33
+    #     ),
+    #     columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    # )
+    # df_hourly['timestamp'] = pd.to_datetime(df_hourly['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
+    # df_hourly = df_hourly.set_index('timestamp')
+    # df_hourly = dropna(df_hourly)
+    # df_hourly = add_indicators(df_hourly)
+
+    # # Select only the last 30 data points
+    # df_hourly = df_hourly.tail(30)
     df_hourly = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT", 
             timeframe='1h',
-            limit=63 # 30 + 33
+            limit=63  # 30 + 33
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
     df_hourly['timestamp'] = pd.to_datetime(df_hourly['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
     df_hourly = df_hourly.set_index('timestamp')
     df_hourly = dropna(df_hourly)
+
+    # 하이킨 아시로 변환
+    df_hourly = convert_to_heikin_ashi(df_hourly)
+
+    # 지표 추가
     df_hourly = add_indicators(df_hourly)
 
-    # Select only the last 30 data points
+    # 마지막 30개 데이터만 선택
     df_hourly = df_hourly.tail(30)
 
+
     # Query Binance 4-hour candles
+    # df_4h = pd.DataFrame(
+    #     trader.exchange.fetch_ohlcv(
+    #         "BTC/USDT",
+    #         timeframe='4h',
+    #         limit=51 # 18 + 33
+    #     ),
+    #     columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+    # )
+    # df_4h['timestamp'] = pd.to_datetime(df_4h['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
+    # df_4h = df_4h.set_index('timestamp')
+    # df_4h = dropna(df_4h)
+    # df_4h = add_indicators(df_4h)    
+
+    # # Select only the last 18 data points
+    # df_4h = df_4h.tail(18)
     df_4h = pd.DataFrame(
         trader.exchange.fetch_ohlcv(
             "BTC/USDT",
             timeframe='4h',
-            limit=51 # 18 + 33
+            limit=51  # 18 + 33
         ),
         columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
     )
     df_4h['timestamp'] = pd.to_datetime(df_4h['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul').dt.strftime('%Y/%m/%d %H:%M (KST)')
     df_4h = df_4h.set_index('timestamp')
     df_4h = dropna(df_4h)
-    df_4h = add_indicators(df_4h)    
 
-    # Select only the last 18 data points
+    # 하이킨 아시로 변환
+    df_4h = convert_to_heikin_ashi(df_4h)
+
+    # 지표 추가
+    df_4h = add_indicators(df_4h)
+
+    # 마지막 18개 데이터만 선택
     df_4h = df_4h.tail(18)
+
 
     # 4. Get Fear & Greed Index
     fear_greed_index = get_fear_and_greed_index()
