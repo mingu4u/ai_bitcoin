@@ -6197,8 +6197,8 @@ def ai_trading():
         # Capture chart with retry logic
         chart_image, signals_analysis, saved_file_path = capture_tradingview_chart_with_retry(
             chart_processor=chart_processor, 
-            save_image=True, 
-            debug=True,
+            save_image=False, 
+            debug=False,
             max_retries=3,
             page_load_timeout=40
         )
