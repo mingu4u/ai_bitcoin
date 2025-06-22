@@ -5,403 +5,473 @@ import plotly.express as px
 import math
 
 def get_connection():
-   return sqlite3.connect('bitcoin_trades.db')
+    return sqlite3.connect('bitcoin_trades.db')
 
 def load_data():
-   try:
-       conn = get_connection()
-       query = """SELECT timestamp, trade_type, order_id, decision, percentage, reason, 
-                 btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                 btc_current_price, reflection, tp_order_id, sl_order_id,
-                 blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                 utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid
-                 FROM trades"""
-       df = pd.read_sql_query(query, conn)
-       conn.close()
-       
-       # 불리언 컬럼 변환 - SQLite에서는 0/1로 저장되므로 명시적 변환 필요
-       if 'cloud_gap_valid' in df.columns:
-           df['cloud_gap_valid'] = df['cloud_gap_valid'].astype(bool)
-       
-       return df
-   except sqlite3.Error as e:
-       st.error(f"Database error: {e}")
-       return pd.DataFrame()
-   except Exception as e:
-       st.error(f"Error loading data: {e}")
-       return pd.DataFrame()
+    try:
+        conn = get_connection()
+        query = """SELECT timestamp, trade_type, order_id, decision, percentage, reason, 
+                  btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
+                  btc_current_price, reflection, tp_order_id, sl_order_id,
+                  blackflag_signal, blackflag_candles_ago, utbot_signal, 
+                  utbot_candles_ago, volume_osc_current, stop_loss_price, 
+                  cloud_gap_valid, position_type
+                  FROM trades"""
+        df = pd.read_sql_query(query, conn)
+        conn.close()
+        
+        # 불리언 컬럼 변환
+        if 'cloud_gap_valid' in df.columns:
+            df['cloud_gap_valid'] = df['cloud_gap_valid'].astype(bool)
+        
+        # position_type 기본값 처리
+        if 'position_type' in df.columns:
+            df['position_type'] = df['position_type'].fillna('normal')
+        
+        return df
+    except sqlite3.Error as e:
+        st.error(f"Database error: {e}")
+        return pd.DataFrame()
 
 def paginate_dataframe(df, page_size=30):
-   if df.empty:
-       return 1
-   return math.ceil(len(df) / page_size)
+    if df.empty:
+        return 1
+    return math.ceil(len(df) / page_size)
 
 def calculate_performance_metrics(trades_df):
-   if trades_df.empty:
-       return {
-           'total_trades': 0,
-           'total_return': 0,
-           'win_rate': 0,
-           'avg_profit_per_trade': 0,
-           'max_drawdown': 0,
-           'risk_adjusted_return': 0
-       }
-   
-   trades_df = trades_df.sort_values('timestamp')
-   
-   # 총 수익률
-   total_return = ((trades_df['total_assets'].iloc[-1] - trades_df['total_assets'].iloc[0]) 
-                  / trades_df['total_assets'].iloc[0]) * 100
-   
-   # 승률 계산
-   trades_df['pnl'] = trades_df['total_assets'].diff()
-   wins = (trades_df['pnl'] > 0).sum()
-   win_rate = (wins / len(trades_df[trades_df['pnl'].notna()])) * 100
-   
-   # 평균 수익/거래
-   avg_profit_per_trade = trades_df['pnl'].mean() / trades_df['total_assets'].shift(1) * 100
-   
-   # 최대 낙폭
-   cummax = trades_df['total_assets'].cummax()
-   drawdowns = (trades_df['total_assets'] - cummax) / cummax * 100
-   max_drawdown = abs(drawdowns.min())
-   
-   # 리스크 조정 수익률 (Daily Sharpe Ratio)
-   daily_returns = trades_df['total_assets'].pct_change()
-   risk_adjusted_return = (daily_returns.mean() / daily_returns.std()) if daily_returns.std() != 0 else 0
-   
-   return {
-       'total_trades': len(trades_df),
-       'total_return': total_return,
-       'win_rate': win_rate,
-       'avg_profit_per_trade': avg_profit_per_trade,
-       'max_drawdown': max_drawdown,
-       'risk_adjusted_return': risk_adjusted_return
-   }
+    if trades_df.empty:
+        return {
+            'total_trades': 0,
+            'total_return': 0,
+            'win_rate': 0,
+            'avg_profit_per_trade': 0,
+            'max_drawdown': 0,
+            'risk_adjusted_return': 0
+        }
+    
+    trades_df = trades_df.sort_values('timestamp')
+    
+    # 총 수익률
+    total_return = ((trades_df['total_assets'].iloc[-1] - trades_df['total_assets'].iloc[0]) 
+                   / trades_df['total_assets'].iloc[0]) * 100
+    
+    # 승률 계산
+    trades_df['pnl'] = trades_df['total_assets'].diff()
+    wins = (trades_df['pnl'] > 0).sum()
+    win_rate = (wins / len(trades_df[trades_df['pnl'].notna()])) * 100
+    
+    # 평균 수익/거래
+    avg_profit_per_trade = trades_df['pnl'].mean() / trades_df['total_assets'].shift(1) * 100
+    
+    # 최대 낙폭
+    cummax = trades_df['total_assets'].cummax()
+    drawdowns = (trades_df['total_assets'] - cummax) / cummax * 100
+    max_drawdown = abs(drawdowns.min())
+    
+    # 리스크 조정 수익률 (Daily Sharpe Ratio)
+    daily_returns = trades_df['total_assets'].pct_change()
+    risk_adjusted_return = (daily_returns.mean() / daily_returns.std()) if daily_returns.std() != 0 else 0
+    
+    return {
+        'total_trades': len(trades_df),
+        'total_return': total_return,
+        'win_rate': win_rate,
+        'avg_profit_per_trade': avg_profit_per_trade,
+        'max_drawdown': max_drawdown,
+        'risk_adjusted_return': risk_adjusted_return
+    }
 
 def main():
-   st.title("Ming9's Bitcoin Trading Bot Dashboard 😊")
+    st.title("Ming9's Bitcoin Trading Bot Dashboard 😊")
 
-   # 데이터 로드
-   df = load_data()
-   
-   if df.empty:
-       st.warning("No trading data available. Please check if the database is properly initialized.")
-       return
+    # 데이터 로드
+    df = load_data()
+    
+    if df.empty:
+        st.warning("No trading data available. Please check if the database is properly initialized.")
+        return
 
-   # 시간 역순 정렬
-   df = df.sort_values('timestamp', ascending=False).reset_index(drop=True)
+    # 시간 역순 정렬
+    df = df.sort_values('timestamp', ascending=False).reset_index(drop=True)
 
-   # 거래 유형 선택 필터
-   trade_type = st.selectbox('Select Trade Type', ['ALL', 'AI', 'MANUAL'])
-   
-   filtered_df = df[df['trade_type'] == trade_type] if trade_type != 'ALL' else df
+    # 거래 유형 선택 필터
+    trade_type = st.selectbox('Select Trade Type', ['ALL', 'AI', 'MANUAL'])
+    
+    filtered_df = df[df['trade_type'] == trade_type] if trade_type != 'ALL' else df
 
-   # 기본 통계
-   st.header('Basic Statistics')
-   if not filtered_df.empty:
-       st.write(f"Total number of trades: {len(filtered_df)}")
-       st.write(f"First trade date: {filtered_df['timestamp'].min()}")
-       st.write(f"Last trade date: {filtered_df['timestamp'].max()}")
-       
-       # 최근 세 지표 상태와 손절가 설정 표시
-       latest_trade = df.iloc[0]
-       
-       # 세 지표 상태를 확장 가능한 섹션으로 표시
-       with st.expander("Latest Trading Signals Status"):
-           col1, col2 = st.columns(2)
-           
-           with col1:
-               st.subheader("BlackFlag FTS")
-               if 'blackflag_signal' in latest_trade and pd.notna(latest_trade['blackflag_signal']):
-                   st.write(f"Signal: {latest_trade['blackflag_signal']}")
-                   if 'blackflag_candles_ago' in latest_trade and pd.notna(latest_trade['blackflag_candles_ago']):
-                       st.write(f"Candles Ago: {latest_trade['blackflag_candles_ago']}")
-                   # Cloud Gap Valid 추가
-                   if 'cloud_gap_valid' in latest_trade and pd.notna(latest_trade['cloud_gap_valid']):
-                       st.write(f"Cloud Gap: {latest_trade['cloud_gap_valid']}")
-               else:
-                   st.write("No BlackFlag signal data available")
-               
-               st.subheader("UT Bot Alert")
-               if 'utbot_signal' in latest_trade and pd.notna(latest_trade['utbot_signal']):
-                   st.write(f"Signal: {latest_trade['utbot_signal']}")
-                   if 'utbot_candles_ago' in latest_trade and pd.notna(latest_trade['utbot_candles_ago']):
-                       st.write(f"Candles Ago: {latest_trade['utbot_candles_ago']}")
-               else:
-                   st.write("No UT Bot signal data available")
-           
-           with col2:
-               st.subheader("Volume Oscillator")
-               if 'volume_osc_current' in latest_trade and pd.notna(latest_trade['volume_osc_current']):
-                   st.write(f"Current Value: {latest_trade['volume_osc_current']:.2f}")
-               else:
-                   st.write("No Volume Oscillator data available")
-               
-               st.subheader("Stop Loss Price")
-               if 'stop_loss_price' in latest_trade and pd.notna(latest_trade['stop_loss_price']):
-                   st.write(f"Price: {latest_trade['stop_loss_price']:.2f} USDT")
-               else:
-                   st.write("No Stop Loss price data available")
-       
-       # reflection을 확장 가능한 섹션으로 표시
-       if not df.empty and 'reflection' in df.columns and pd.notna(df.iloc[0]['reflection']):
-           with st.expander("Recent trade reflection"):
-               st.write(df.iloc[0]['reflection'])
-   else:
-       st.write("No trades found for the selected type.")
+    # 기본 통계
+    st.header('Basic Statistics')
+    if not filtered_df.empty:
+        st.write(f"Total number of trades: {len(filtered_df)}")
+        st.write(f"First trade date: {filtered_df['timestamp'].min()}")
+        st.write(f"Last trade date: {filtered_df['timestamp'].max()}")
+        
+        # 최근 세 지표 상태와 손절가 설정 표시
+        latest_trade = df.iloc[0]
+        
+        # 세 지표 상태를 확장 가능한 섹션으로 표시
+        with st.expander("Latest Trading Signals Status"):
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.subheader("BlackFlag FTS")
+                if 'blackflag_signal' in latest_trade and pd.notna(latest_trade['blackflag_signal']):
+                    st.write(f"Signal: {latest_trade['blackflag_signal']}")
+                    if 'blackflag_candles_ago' in latest_trade and pd.notna(latest_trade['blackflag_candles_ago']):
+                        st.write(f"Candles Ago: {latest_trade['blackflag_candles_ago']}")
+                    # Cloud Gap Valid 추가
+                    if 'cloud_gap_valid' in latest_trade and pd.notna(latest_trade['cloud_gap_valid']):
+                        st.write(f"Cloud Gap: {latest_trade['cloud_gap_valid']}")
+                else:
+                    st.write("No BlackFlag signal data available")
+                
+                st.subheader("UT Bot Alert")
+                if 'utbot_signal' in latest_trade and pd.notna(latest_trade['utbot_signal']):
+                    st.write(f"Signal: {latest_trade['utbot_signal']}")
+                    if 'utbot_candles_ago' in latest_trade and pd.notna(latest_trade['utbot_candles_ago']):
+                        st.write(f"Candles Ago: {latest_trade['utbot_candles_ago']}")
+                else:
+                    st.write("No UT Bot signal data available")
+            
+            with col2:
+                st.subheader("Volume Oscillator")
+                if 'volume_osc_current' in latest_trade and pd.notna(latest_trade['volume_osc_current']):
+                    st.write(f"Current Value: {latest_trade['volume_osc_current']:.2f}")
+                else:
+                    st.write("No Volume Oscillator data available")
+                
+                st.subheader("Stop Loss Price")
+                if 'stop_loss_price' in latest_trade and pd.notna(latest_trade['stop_loss_price']):
+                    st.write(f"Price: {latest_trade['stop_loss_price']:.2f} USDT")
+                else:
+                    st.write("No Stop Loss price data available")
+        
+        # reflection을 확장 가능한 섹션으로 표시
+        if not df.empty and 'reflection' in df.columns and pd.notna(df.iloc[0]['reflection']):
+            with st.expander("Recent trade reflection"):
+                st.write(df.iloc[0]['reflection'])
+    else:
+        st.write("No trades found for the selected type.")
 
-   # 거래 내역 표시
-   st.header('Trade History')
-   if not filtered_df.empty:
-       page_size = 30
-       n_pages = paginate_dataframe(filtered_df, page_size)
-       
-       page_number = st.selectbox('Page', range(1, n_pages + 1), 
-                                format_func=lambda x: f'Page {x} of {n_pages}')
-       
-       start_idx = (page_number - 1) * page_size
-       end_idx = min(start_idx + page_size, len(filtered_df))
-       
-       # 표시할 컬럼 선택 - cloud_gap_valid 추가
-       display_columns = ['timestamp', 'trade_type', 'decision', 'percentage', 'reason', 
+    # 거래 내역 표시
+    st.header('Trade History')
+    if not filtered_df.empty:
+        page_size = 30
+        n_pages = paginate_dataframe(filtered_df, page_size)
+        
+        page_number = st.selectbox('Page', range(1, n_pages + 1), 
+                                 format_func=lambda x: f'Page {x} of {n_pages}')
+        
+        start_idx = (page_number - 1) * page_size
+        end_idx = min(start_idx + page_size, len(filtered_df))
+        
+        # 표시할 컬럼 선택 - cloud_gap_valid, position_type 추가
+        display_columns = ['timestamp', 'trade_type', 'decision', 'percentage', 'reason', 
                          'btc_balance', 'usdt_balance', 'total_assets', 'btc_current_price',
                          'blackflag_signal', 'blackflag_candles_ago', 'utbot_signal', 
-                         'utbot_candles_ago', 'volume_osc_current', 'stop_loss_price', 'cloud_gap_valid']
-       
-       # 컬럼 폭 조정을 위해 display_df 생성
-       display_df = filtered_df.iloc[start_idx:end_idx][display_columns].copy()
-       
-       # 필요한 경우 일부 컬럼 이름을 더 짧게 표시
-       display_df = display_df.rename(columns={
-           'blackflag_signal': 'BF_Signal',
-           'blackflag_candles_ago': 'BF_Age',
-           'utbot_signal': 'UTBot_Signal',
-           'utbot_candles_ago': 'UTBot_Age',
-           'volume_osc_current': 'Vol_Osc',
-           'stop_loss_price': 'SL_Price',
-           'cloud_gap_valid': 'Cloud_Gap'  # 컬럼명 변경
-       })
-       
-       # 스크롤 가능한 테이블로 표시
-       st.dataframe(display_df, height=500, use_container_width=True)
-   else:
-       st.info("No trade history available for the selected type.")
+                         'utbot_candles_ago', 'volume_osc_current', 'stop_loss_price', 
+                         'cloud_gap_valid', 'position_type']
+        
+        # 컬럼 폭 조정을 위해 display_df 생성
+        display_df = filtered_df.iloc[start_idx:end_idx][display_columns].copy()
+        
+        # 필요한 경우 일부 컬럼 이름을 더 짧게 표시
+        display_df = display_df.rename(columns={
+            'blackflag_signal': 'BF_Signal',
+            'blackflag_candles_ago': 'BF_Age',
+            'utbot_signal': 'UTBot_Signal',
+            'utbot_candles_ago': 'UTBot_Age',
+            'volume_osc_current': 'Vol_Osc',
+            'stop_loss_price': 'SL_Price',
+            'cloud_gap_valid': 'Cloud_Gap',
+            'position_type': 'Pos_Type'
+        })
+        
+        # 스크롤 가능한 테이블로 표시
+        st.dataframe(display_df, height=500, use_container_width=True)
+    else:
+        st.info("No trade history available for the selected type.")
 
-   # 거래 결정 분포
-   st.header('Trade Decision Distribution')
-   if not filtered_df.empty and 'decision' in filtered_df.columns:
-       decision_counts = filtered_df['decision'].value_counts()
-       if not decision_counts.empty:
-           fig = px.pie(
-               values=decision_counts.values, 
-               names=decision_counts.index,
-               title=f'Trade Decisions ({trade_type})',
-               color=decision_counts.index,
-               color_discrete_map={
-                   'buy': '#FF0000',
-                   'sell': '#000080',
-                   'hold': '#87CEEB'
-               }
-           )
-           st.plotly_chart(fig)
-   else:
-       st.info("No decision data available for visualization.")
+    # 거래 결정 분포
+    st.header('Trade Decision Distribution')
+    if not filtered_df.empty and 'decision' in filtered_df.columns:
+        decision_counts = filtered_df['decision'].value_counts()
+        if not decision_counts.empty:
+            fig = px.pie(
+                values=decision_counts.values, 
+                names=decision_counts.index,
+                title=f'Trade Decisions ({trade_type})',
+                color=decision_counts.index,
+                color_discrete_map={
+                    'buy': '#FF0000',
+                    'sell': '#000080',
+                    'hold': '#87CEEB'
+                }
+            )
+            st.plotly_chart(fig)
+    else:
+        st.info("No decision data available for visualization.")
 
-   # 자산 변화 그래프
-   if not filtered_df.empty:
-       col1, col2 = st.columns(2)
-       
-       with col1:
-           st.header('BTC Balance Over Time')
-           if 'btc_balance' in filtered_df.columns:
-               fig = px.line(filtered_df, x='timestamp', y='btc_balance', 
-                           title=f'BTC Balance ({trade_type})')
-               st.plotly_chart(fig)
+    # 자산 변화 그래프
+    if not filtered_df.empty:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.header('BTC Balance Over Time')
+            if 'btc_balance' in filtered_df.columns:
+                fig = px.line(filtered_df, x='timestamp', y='btc_balance', 
+                            title=f'BTC Balance ({trade_type})')
+                st.plotly_chart(fig)
 
-           st.header('Total Assets Over Time')
-           if 'total_assets' in filtered_df.columns:
-               fig = px.line(filtered_df, x='timestamp', y='total_assets', 
-                           title=f'Total Assets ({trade_type})')
-               st.plotly_chart(fig)
+            st.header('Total Assets Over Time')
+            if 'total_assets' in filtered_df.columns:
+                fig = px.line(filtered_df, x='timestamp', y='total_assets', 
+                            title=f'Total Assets ({trade_type})')
+                st.plotly_chart(fig)
 
-       with col2:
-           st.header('USDT Balance Over Time')
-           if 'usdt_balance' in filtered_df.columns:
-               fig = px.line(filtered_df, x='timestamp', y='usdt_balance', 
-                           title=f'USDT Balance ({trade_type})')
-               st.plotly_chart(fig)
+        with col2:
+            st.header('USDT Balance Over Time')
+            if 'usdt_balance' in filtered_df.columns:
+                fig = px.line(filtered_df, x='timestamp', y='usdt_balance', 
+                            title=f'USDT Balance ({trade_type})')
+                st.plotly_chart(fig)
 
-           st.header('BTC Price Over Time')
-           if 'btc_current_price' in filtered_df.columns:
-               fig = px.line(filtered_df, x='timestamp', y='btc_current_price', 
-                           title=f'BTC Price ({trade_type})')
-               st.plotly_chart(fig)
-   else:
-       st.info("No balance data available for visualization.")
+            st.header('BTC Price Over Time')
+            if 'btc_current_price' in filtered_df.columns:
+                fig = px.line(filtered_df, x='timestamp', y='btc_current_price', 
+                            title=f'BTC Price ({trade_type})')
+                st.plotly_chart(fig)
+    else:
+        st.info("No balance data available for visualization.")
 
-   # 신호 분석 섹션 추가
-   if not filtered_df.empty:
-       st.header('Trading Signals Analysis')
-       
-       # 신호별 성공률 분석
-       if 'blackflag_signal' in filtered_df.columns and 'utbot_signal' in filtered_df.columns:
-           # 신호 분석 탭 생성
-           tabs = st.tabs(["BlackFlag Analysis", "UT Bot Analysis", "Signal Combination"])
-           
-           with tabs[0]:
-               # BlackFlag 신호별 성공률
-               if filtered_df['blackflag_signal'].notna().any():
-                   st.subheader('BlackFlag FTS Signal Success Rate')
-                   
-                   # 신호별 거래 분류
-                   filtered_df['trade_success'] = filtered_df['total_assets'].diff() > 0
-                   blackflag_success = filtered_df.groupby('blackflag_signal')['trade_success'].agg(['count', 'sum'])
-                   blackflag_success['success_rate'] = (blackflag_success['sum'] / blackflag_success['count']) * 100
-                   
-                   st.dataframe(blackflag_success.reset_index().rename(
-                       columns={'count': 'Total Trades', 'sum': 'Successful Trades', 'success_rate': 'Success Rate (%)'}))
-                   
-                   # 신호별 수익률 시각화
-                   fig = px.bar(
-                       blackflag_success.reset_index(),
-                       x='blackflag_signal',
-                       y='success_rate',
-                       title='BlackFlag Signal Success Rate (%)',
-                       color='blackflag_signal'
-                   )
-                   st.plotly_chart(fig)
-               else:
-                   st.info("No BlackFlag signal data available for analysis.")
-           
-           with tabs[1]:
-               # UT Bot 신호별 성공률
-               if filtered_df['utbot_signal'].notna().any():
-                   st.subheader('UT Bot Alert Success Rate')
-                   
-                   utbot_success = filtered_df.groupby('utbot_signal')['trade_success'].agg(['count', 'sum'])
-                   utbot_success['success_rate'] = (utbot_success['sum'] / utbot_success['count']) * 100
-                   
-                   st.dataframe(utbot_success.reset_index().rename(
-                       columns={'count': 'Total Trades', 'sum': 'Successful Trades', 'success_rate': 'Success Rate (%)'}))
-                   
-                   # 신호별 수익률 시각화
-                   fig = px.bar(
-                       utbot_success.reset_index(),
-                       x='utbot_signal',
-                       y='success_rate',
-                       title='UT Bot Signal Success Rate (%)',
-                       color='utbot_signal'
-                   )
-                   st.plotly_chart(fig)
-               else:
-                   st.info("No UT Bot signal data available for analysis.")
-           
-           with tabs[2]:
-               # 신호 조합별 성공률
-               if filtered_df['blackflag_signal'].notna().any() and filtered_df['utbot_signal'].notna().any():
-                   st.subheader('Signal Combination Analysis')
-                   
-                   # 신호 조합 생성
-                   filtered_df['signal_combo'] = filtered_df['blackflag_signal'].fillna('None') + ' + ' + filtered_df['utbot_signal'].fillna('None')
-                   
-                   combo_success = filtered_df.groupby('signal_combo')['trade_success'].agg(['count', 'sum'])
-                   combo_success['success_rate'] = (combo_success['sum'] / combo_success['count']) * 100
-                   
-                   st.dataframe(combo_success.reset_index().rename(
-                       columns={'count': 'Total Trades', 'sum': 'Successful Trades', 'success_rate': 'Success Rate (%)'}))
-                   
-                   # 조합별 수익률 시각화
-                   fig = px.bar(
-                       combo_success.reset_index(),
-                       x='signal_combo',
-                       y='success_rate',
-                       title='Signal Combination Success Rate (%)',
-                       color='signal_combo'
-                   )
-                   st.plotly_chart(fig)
-               else:
-                   st.info("Insufficient signal data for combination analysis.")
+    # 신호 분석 섹션 추가
+    if not filtered_df.empty:
+        st.header('Trading Signals Analysis')
+        
+        # 신호별 성공률 분석
+        if 'blackflag_signal' in filtered_df.columns and 'utbot_signal' in filtered_df.columns:
+            # 신호 분석 탭 생성
+            tabs = st.tabs(["BlackFlag Analysis", "UT Bot Analysis", "Signal Combination"])
+            
+            with tabs[0]:
+                # BlackFlag 신호별 성공률
+                if filtered_df['blackflag_signal'].notna().any():
+                    st.subheader('BlackFlag FTS Signal Success Rate')
+                    
+                    # 신호별 거래 분류
+                    filtered_df['trade_success'] = filtered_df['total_assets'].diff() > 0
+                    blackflag_success = filtered_df.groupby('blackflag_signal')['trade_success'].agg(['count', 'sum'])
+                    blackflag_success['success_rate'] = (blackflag_success['sum'] / blackflag_success['count']) * 100
+                    
+                    st.dataframe(blackflag_success.reset_index().rename(
+                        columns={'count': 'Total Trades', 'sum': 'Successful Trades', 'success_rate': 'Success Rate (%)'}))
+                    
+                    # 신호별 수익률 시각화
+                    fig = px.bar(
+                        blackflag_success.reset_index(),
+                        x='blackflag_signal',
+                        y='success_rate',
+                        title='BlackFlag Signal Success Rate (%)',
+                        color='blackflag_signal'
+                    )
+                    st.plotly_chart(fig)
+                else:
+                    st.info("No BlackFlag signal data available for analysis.")
+            
+            with tabs[1]:
+                # UT Bot 신호별 성공률
+                if filtered_df['utbot_signal'].notna().any():
+                    st.subheader('UT Bot Alert Success Rate')
+                    
+                    utbot_success = filtered_df.groupby('utbot_signal')['trade_success'].agg(['count', 'sum'])
+                    utbot_success['success_rate'] = (utbot_success['sum'] / utbot_success['count']) * 100
+                    
+                    st.dataframe(utbot_success.reset_index().rename(
+                        columns={'count': 'Total Trades', 'sum': 'Successful Trades', 'success_rate': 'Success Rate (%)'}))
+                    
+                    # 신호별 수익률 시각화
+                    fig = px.bar(
+                        utbot_success.reset_index(),
+                        x='utbot_signal',
+                        y='success_rate',
+                        title='UT Bot Signal Success Rate (%)',
+                        color='utbot_signal'
+                    )
+                    st.plotly_chart(fig)
+                else:
+                    st.info("No UT Bot signal data available for analysis.")
+            
+            with tabs[2]:
+                # 신호 조합별 성공률
+                if filtered_df['blackflag_signal'].notna().any() and filtered_df['utbot_signal'].notna().any():
+                    st.subheader('Signal Combination Analysis')
+                    
+                    # 신호 조합 생성
+                    filtered_df['signal_combo'] = filtered_df['blackflag_signal'].fillna('None') + ' + ' + filtered_df['utbot_signal'].fillna('None')
+                    
+                    combo_success = filtered_df.groupby('signal_combo')['trade_success'].agg(['count', 'sum'])
+                    combo_success['success_rate'] = (combo_success['sum'] / combo_success['count']) * 100
+                    
+                    st.dataframe(combo_success.reset_index().rename(
+                        columns={'count': 'Total Trades', 'sum': 'Successful Trades', 'success_rate': 'Success Rate (%)'}))
+                    
+                    # 조합별 수익률 시각화
+                    fig = px.bar(
+                        combo_success.reset_index(),
+                        x='signal_combo',
+                        y='success_rate',
+                        title='Signal Combination Success Rate (%)',
+                        color='signal_combo'
+                    )
+                    st.plotly_chart(fig)
+                else:
+                    st.info("Insufficient signal data for combination analysis.")
 
-   # AI와 수동 거래 비교 분석
-   if trade_type == 'ALL' and not df.empty:
-       st.header('AI vs Manual Trading Comparison')
-       
-       ai_trades = df[df['trade_type'] == 'AI']
-       manual_trades = df[df['trade_type'] == 'MANUAL']
-       
-       ai_metrics = calculate_performance_metrics(ai_trades)
-       manual_metrics = calculate_performance_metrics(manual_trades)
-       
-       comparison_data = pd.DataFrame({
-           'Metric': [
-               'Total Trades',
-               'Total Return (%)',
-               'Win Rate (%)',
-               'Avg Profit/Trade (%)',
-               'Max Drawdown (%)',
-               'Risk-Adjusted Return'
-           ],
-           'AI Trading': [
-               ai_metrics['total_trades'],
-               round(ai_metrics['total_return'], 2),
-               round(ai_metrics['win_rate'], 2),
-               round(ai_metrics['avg_profit_per_trade'], 2),
-               round(ai_metrics['max_drawdown'], 2),
-               round(ai_metrics['risk_adjusted_return'], 2)
-           ],
-           'Manual Trading': [
-               manual_metrics['total_trades'],
-               round(manual_metrics['total_return'], 2),
-               round(manual_metrics['win_rate'], 2),
-               round(manual_metrics['avg_profit_per_trade'], 2),
-               round(manual_metrics['max_drawdown'], 2),
-               round(manual_metrics['risk_adjusted_return'], 2)
-           ]
-       })
-       
-       st.write("Trading Performance Comparison:")
-       st.dataframe(comparison_data)
-       
-       # 성과 비교 시각화 - 각 지표별로 분리
-       metrics_to_plot = {
-           'Win Rate (%)': 'Win Rate',
-           'Total Return (%)': 'Returns',
-           'Risk-Adjusted Return': 'Risk-Adjusted'
-       }
+    # Position Type Analysis 섹션 추가
+    if not filtered_df.empty and 'position_type' in filtered_df.columns:
+        st.header('Position Type Analysis')
+        
+        # 포지션 타입별 통계
+        position_stats = filtered_df.groupby('position_type').agg({
+            'total_assets': ['count', 'mean'],
+            'percentage': 'mean'
+        })
+        
+        st.subheader('Trading Performance by Position Type')
+        st.dataframe(position_stats)
+        
+        # RSI vs Normal 성공률 비교
+        # trade_success 컬럼 생성 (이미 위에서 생성되지 않았다면)
+        if 'trade_success' not in filtered_df.columns:
+            filtered_df['trade_success'] = filtered_df['total_assets'].diff() > 0
+            
+        rsi_trades = filtered_df[filtered_df['position_type'].str.contains('rsi', na=False)]
+        normal_trades = filtered_df[filtered_df['position_type'].str.contains('normal', na=False)]
+        
+        if not rsi_trades.empty and not normal_trades.empty:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("RSI Entry Success Rate", 
+                         f"{(rsi_trades['trade_success'].sum() / len(rsi_trades) * 100):.1f}%")
+            with col2:
+                st.metric("Normal Entry Success Rate", 
+                         f"{(normal_trades['trade_success'].sum() / len(normal_trades) * 100):.1f}%")
+        
+        # 포지션 타입별 수익률 분포 시각화
+        if not filtered_df['position_type'].isna().all():
+            fig = px.box(
+                filtered_df,
+                x='position_type',
+                y='percentage',
+                title='Trading Performance Distribution by Position Type',
+                color='position_type',
+                color_discrete_map={
+                    'rsi_long': '#00FF00',
+                    'rsi_short': '#FF0000',
+                    'normal_long': '#90EE90',
+                    'normal_short': '#FFA07A',
+                    'normal': '#808080'
+                }
+            )
+            st.plotly_chart(fig)
+            
+            # 포지션 타입별 거래 횟수
+            position_counts = filtered_df['position_type'].value_counts()
+            fig_counts = px.bar(
+                x=position_counts.index,
+                y=position_counts.values,
+                title='Number of Trades by Position Type',
+                labels={'x': 'Position Type', 'y': 'Number of Trades'},
+                color=position_counts.index,
+                color_discrete_map={
+                    'rsi_long': '#00FF00',
+                    'rsi_short': '#FF0000',
+                    'normal_long': '#90EE90',
+                    'normal_short': '#FFA07A',
+                    'normal': '#808080'
+                }
+            )
+            st.plotly_chart(fig_counts)
 
-       for metric_name, metric_title in metrics_to_plot.items():
-           metric_data = comparison_data[comparison_data['Metric'] == metric_name]
-           fig = px.bar(
-               metric_data,
-               x='Metric',
-               y=['AI Trading', 'Manual Trading'],
-               title=f'{metric_title} Comparison',
-               barmode='group'
-           )
-           st.plotly_chart(fig)
-       
-       # ROI 추이 비교
-       if not ai_trades.empty and not manual_trades.empty:
-           ai_roi = ((ai_trades['total_assets'] - ai_trades.iloc[0]['total_assets']) 
-                    / ai_trades.iloc[0]['total_assets']) * 100
-           manual_roi = ((manual_trades['total_assets'] - manual_trades.iloc[0]['total_assets']) 
-                        / manual_trades.iloc[0]['total_assets']) * 100
-           
-           roi_df = pd.DataFrame({
-               'timestamp': pd.concat([ai_trades['timestamp'], manual_trades['timestamp']]),
-               'ROI (%)': pd.concat([ai_roi, manual_roi]),
-               'Trade Type': ['AI'] * len(ai_trades) + ['Manual'] * len(manual_trades)
-           })
-           
-           roi_fig = px.line(
-               roi_df,
-               x='timestamp',
-               y='ROI (%)',
-               color='Trade Type',
-               title='Cumulative ROI Comparison'
-           )
-           st.plotly_chart(roi_fig)
+    # AI와 수동 거래 비교 분석
+    if trade_type == 'ALL' and not df.empty:
+        st.header('AI vs Manual Trading Comparison')
+        
+        ai_trades = df[df['trade_type'] == 'AI']
+        manual_trades = df[df['trade_type'] == 'MANUAL']
+        
+        ai_metrics = calculate_performance_metrics(ai_trades)
+        manual_metrics = calculate_performance_metrics(manual_trades)
+        
+        comparison_data = pd.DataFrame({
+            'Metric': [
+                'Total Trades',
+                'Total Return (%)',
+                'Win Rate (%)',
+                'Avg Profit/Trade (%)',
+                'Max Drawdown (%)',
+                'Risk-Adjusted Return'
+            ],
+            'AI Trading': [
+                ai_metrics['total_trades'],
+                round(ai_metrics['total_return'], 2),
+                round(ai_metrics['win_rate'], 2),
+                round(ai_metrics['avg_profit_per_trade'], 2),
+                round(ai_metrics['max_drawdown'], 2),
+                round(ai_metrics['risk_adjusted_return'], 2)
+            ],
+            'Manual Trading': [
+                manual_metrics['total_trades'],
+                round(manual_metrics['total_return'], 2),
+                round(manual_metrics['win_rate'], 2),
+                round(manual_metrics['avg_profit_per_trade'], 2),
+                round(manual_metrics['max_drawdown'], 2),
+                round(manual_metrics['risk_adjusted_return'], 2)
+            ]
+        })
+        
+        st.write("Trading Performance Comparison:")
+        st.dataframe(comparison_data)
+        
+        # 성과 비교 시각화 - 각 지표별로 분리
+        metrics_to_plot = {
+            'Win Rate (%)': 'Win Rate',
+            'Total Return (%)': 'Returns',
+            'Risk-Adjusted Return': 'Risk-Adjusted'
+        }
+
+        for metric_name, metric_title in metrics_to_plot.items():
+            metric_data = comparison_data[comparison_data['Metric'] == metric_name]
+            fig = px.bar(
+                metric_data,
+                x='Metric',
+                y=['AI Trading', 'Manual Trading'],
+                title=f'{metric_title} Comparison',
+                barmode='group'
+            )
+            st.plotly_chart(fig)
+        
+        # ROI 추이 비교
+        if not ai_trades.empty and not manual_trades.empty:
+            ai_roi = ((ai_trades['total_assets'] - ai_trades.iloc[0]['total_assets']) 
+                     / ai_trades.iloc[0]['total_assets']) * 100
+            manual_roi = ((manual_trades['total_assets'] - manual_trades.iloc[0]['total_assets']) 
+                         / manual_trades.iloc[0]['total_assets']) * 100
+            
+            roi_df = pd.DataFrame({
+                'timestamp': pd.concat([ai_trades['timestamp'], manual_trades['timestamp']]),
+                'ROI (%)': pd.concat([ai_roi, manual_roi]),
+                'Trade Type': ['AI'] * len(ai_trades) + ['Manual'] * len(manual_trades)
+            })
+            
+            roi_fig = px.line(
+                roi_df,
+                x='timestamp',
+                y='ROI (%)',
+                color='Trade Type',
+                title='Cumulative ROI Comparison'
+            )
+            st.plotly_chart(roi_fig)
 
 if __name__ == "__main__":
-   main()
+    main()

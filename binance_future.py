@@ -3197,8 +3197,6 @@ def setup_logging():
     
     return logger
 
-
-
 # 시그널 핸들러 함수
 def signal_handler(signum, frame):
     logger.info(f"Signal {signum} received. Performing cleanup...")
@@ -3241,7 +3239,8 @@ def init_db():
                             utbot_candles_ago INTEGER,
                             volume_osc_current REAL,
                             stop_loss_price REAL,
-                            cloud_gap_valid BOOLEAN)''')  # cloud_gap_percent 대신 cloud_gap_valid 사용
+                            cloud_gap_valid BOOLEAN,
+                            position_type TEXT DEFAULT 'normal')''')  # position_type 추가
             else:
                 # 필요한 새 컬럼 추가
                 new_columns = {
@@ -3251,7 +3250,8 @@ def init_db():
                     'utbot_candles_ago': 'INTEGER',
                     'volume_osc_current': 'REAL',
                     'stop_loss_price': 'REAL',
-                    'cloud_gap_valid': 'BOOLEAN'  # cloud_gap_percent 대신 cloud_gap_valid 추가
+                    'cloud_gap_valid': 'BOOLEAN',
+                    'position_type': 'TEXT DEFAULT \'normal\''  # position_type 추가
                 }
                 
                 # 존재하지 않는 컬럼만 추가
@@ -3301,6 +3301,7 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
             volume_osc_current = None
             stop_loss_price = None
             cloud_gap_valid = False  # 기본값
+            position_type = 'normal'  # 기본값 추가
             
             if signals_data:
                 blackflag_signal = signals_data.get("BlackFlag_Signal")
@@ -3313,26 +3314,34 @@ def log_trade(conn, trade_type, order_id, decision, percentage, reason, btc_bala
                 # cloud_gap_valid 값을 직접 추출
                 cloud_gap_valid = signals_data.get("cloud_gap_valid", False)
                 
+                # position_type 추출
+                position_type = signals_data.get("position_type", "normal")
+                
                 # 디버깅 로그 (필요시)
                 logger.debug(f"cloud_gap_valid 값: {cloud_gap_valid}")
+                logger.debug(f"position_type 값: {position_type}")
             
-            # SQL 문에 cloud_gap_valid 추가 - 1 또는 0으로 명시적 변환
+            # SQL 문에 cloud_gap_valid와 position_type 추가
             c.execute("""INSERT INTO trades 
                         (timestamp, trade_type, order_id, decision, percentage, reason, 
                         btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
                         btc_current_price, reflection, tp_order_id, sl_order_id,
                         blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                        utbot_candles_ago, volume_osc_current, stop_loss_price, cloud_gap_valid) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        utbot_candles_ago, volume_osc_current, stop_loss_price, 
+                        cloud_gap_valid, position_type) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (timestamp, trade_type, order_id, decision, percentage, reason, 
                     btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
                     btc_current_price, reflection, tp_order_id, sl_order_id,
                     blackflag_signal, blackflag_candles_ago, utbot_signal,
-                    utbot_candles_ago, volume_osc_current, stop_loss_price, 1 if cloud_gap_valid else 0))
+                    utbot_candles_ago, volume_osc_current, stop_loss_price, 
+                    1 if cloud_gap_valid else 0, position_type))
             return True
     except Exception as e:
         logger.error(f"거래 기록 오류: {e}")
         return False
+    
+
 def get_recent_trades(conn, num_trades=20):
     """
     최근 n개의 거래 내역을 시간 역순으로 가져오는 함수
@@ -6596,13 +6605,16 @@ def ai_trading():
 
         # 롱 포지션 진입 조건 검증
         if decision == "buy" and current_position_side is None:
-            # RSI 극단값 진입 조건 확인 (Pine Script와 동일)
+            # RSI 극단값 진입 조건 확인
             rsi_long_condition = False
+            position_type = "normal_long"  # 기본값
+            
             if TRADING_CONFIG["use_rsi_signals"] and rsi is not None:
                 rsi_long_condition = rsi < TRADING_CONFIG["rsi_oversold_level"]
                 if rsi_long_condition:
                     logger.info(f"RSI 과매도 진입 조건 충족: RSI={rsi:.2f}")
-                    return True  # RSI 극단값 진입은 다른 조건 무시
+                    position_type = "rsi_long"
+                    return True, position_type
             
             # 기본 신호 유효성 확인
             blackflag_valid = signals_data.get("BlackFlag_Signal") == "Buy" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 13
@@ -6664,18 +6676,24 @@ def ai_trading():
                     f"CloudGap={cloud_gap_valid}, TrendConfirm={trend_confirm_buy}, " +
                     f"Gaussian={gaussian_check_buy}, Range={range_check}, ADX={adx_check}")
             
-            return final_buy_signal
+            if final_buy_signal:
+                return True, position_type
+            else:
+                return False, None
         
         # 숏 포지션 진입 조건 검증
         elif decision == "sell" and current_position_side is None:
             # RSI 극단값 진입 조건 확인
             rsi_short_condition = False
+            position_type = "normal_short"  # 기본값
+            
             if TRADING_CONFIG["use_rsi_signals"] and rsi is not None:
                 rsi_short_condition = rsi > TRADING_CONFIG["rsi_overbought_level"]
                 if rsi_short_condition:
                     logger.info(f"RSI 과매수 진입 조건 충족: RSI={rsi:.2f}")
-                    return True  # RSI 극단값 진입은 다른 조건 무시
-            
+                    position_type = "rsi_short"
+                    return True, position_type
+
             # 기본 신호 유효성 확인
             blackflag_valid = signals_data.get("BlackFlag_Signal") == "Sell" and signals_data.get("BlackFlag_CandlesAgo", 999) <= 13
             utbot_valid = signals_data.get("UTBot_Signal") == "Sell" and signals_data.get("UTBot_CandlesAgo", 999) <= 13
@@ -6721,7 +6739,7 @@ def ai_trading():
                 base_signal_sell = base_signal_sell and cloud_gap_valid
             
             # 최종 매도 신호
-            final_sell_signal = (base_signal_sell and trend_confirm_sell and gaussian_check_sell and range_check) or rsi_long_condition
+            final_sell_signal = (base_signal_sell and trend_confirm_sell and gaussian_check_sell and range_check) or rsi_short_condition
             
             # ADX 필터 적용
             if TRADING_CONFIG["use_adx_filter"] and not rsi_short_condition:
@@ -6731,15 +6749,16 @@ def ai_trading():
             logger.info(f"숏 진입 조건 검증: BlackFlag={blackflag_valid}, UTBot={utbot_valid}, Volume={volume_valid}, " +
                         f"CloudGap={cloud_gap_valid}, TrendConfirm={trend_confirm_sell}, " +
                         f"Gaussian={gaussian_check_sell}, Range={range_check}, ADX={adx_check}")
+                
+            if final_sell_signal:
+                return True, position_type
+            return False, None
             
-            return final_sell_signal
-        
         # 포지션 청산(exit) 조건은 이미 should_exit 변수로 검증됨
         elif (decision == "sell" and current_position_side == "long") or (decision == "buy" and current_position_side == "short"):
-            return True
+            return True, None
         
-        # 다른 모든 경우 (e.g., "hold")
-        return True
+        return True, None
 
     def verify_exit_conditions(exit_assessment, decision, position_side):
         """
@@ -7110,7 +7129,7 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
 
             # 여기에 추가: 진입 조건 검증
             # ai_trading 함수 내 verify_entry_conditions 호출 부분 변경
-            if not verify_entry_conditions(
+            entry_valid, position_type = verify_entry_conditions(
                 signals_data, 
                 result.decision, 
                 position_side, 
@@ -7118,8 +7137,9 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                 df_15min,
                 df_hourly,
                 current_price,
-                signals_analysis  # signals_analysis 매개변수 명시적 전달
-            ):
+                signals_analysis
+            )
+            if not entry_valid:
                 logger.warning(f"AI 결정 '{result.decision}'이 모든 진입 조건을 충족하지 않음. 'hold'로 변경됩니다.")
                 original_decision = result.decision
                 original_reason = result.reason
@@ -7169,33 +7189,81 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                 
                 if result.decision == "buy" and result.percentage > 0:
                     # Long position entry or short position exit
-                    if result.pl_ratio != 3:
-                        result.pl_ratio = 3 
-                    order_info = trader.market_order_with_tp_sl(
-                        side='buy',
-                        buy_amount=order_amount,
-                        pl_ratio=result.pl_ratio,
-                        sl_price=result.stop_loss_price
-                    )
                     
-                    if order_info != None:
-                        logger.info(f"Buy order executed: Amount={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
-                        order_executed = True
+                    # RSI 진입인지 확인
+                    if position_side is None and position_type == "rsi_long":
+                        # RSI 롱 진입: 0.8% TP, 0.4% SL
+                        rsi_target_percent = TRADING_CONFIG.get("rsi_target_percent", 0.8)
+                        entry_price = current_btc_price
+                        
+                        # RSI 진입은 2:1 비율 (0.8% : 0.4%)
+                        result.pl_ratio = 2.0
+                        result.stop_loss_price = entry_price * (1 - rsi_target_percent / 200)  # -0.4%
+                        
+                        order_info = trader.market_order_with_tp_sl(
+                            side='buy',
+                            buy_amount=order_amount,
+                            pl_ratio=result.pl_ratio,
+                            sl_price=result.stop_loss_price
+                        )
+                        
+                        if order_info != None:
+                            tp_price = entry_price * (1 + rsi_target_percent / 100)  # +0.8%
+                            logger.info(f"RSI Long order executed: Amount={order_amount}, TP=${tp_price:.2f} (+{rsi_target_percent}%), SL=${result.stop_loss_price:.2f} (-{rsi_target_percent/2}%)")
+                            order_executed = True
+                    else:
+                        # 일반 롱 진입 또는 숏 청산
+                        if result.pl_ratio != 3:
+                            result.pl_ratio = 3 
+                        order_info = trader.market_order_with_tp_sl(
+                            side='buy',
+                            buy_amount=order_amount,
+                            pl_ratio=result.pl_ratio,
+                            sl_price=result.stop_loss_price
+                        )
+                        
+                        if order_info != None:
+                            logger.info(f"Buy order executed: Amount={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
+                            order_executed = True
                         
                 elif result.decision == "sell" and result.percentage > 0:
                     # Short position entry or long position exit
-                    if result.pl_ratio != 2:
-                        result.pl_ratio = 2
-                    order_info = trader.market_order_with_tp_sl(
-                        side='sell',
-                        buy_amount=order_amount,
-                        pl_ratio=result.pl_ratio,
-                        sl_price=result.stop_loss_price
-                    )
                     
-                    if order_info != None:
-                        logger.info(f"Sell order executed: Amount={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
-                        order_executed = True
+                    # RSI 진입인지 확인
+                    if position_side is None and position_type == "rsi_short":
+                        # RSI 숏 진입: 0.8% TP, 0.4% SL
+                        rsi_target_percent = TRADING_CONFIG.get("rsi_target_percent", 0.8)
+                        entry_price = current_btc_price
+                        
+                        # RSI 진입은 2:1 비율 (0.8% : 0.4%)
+                        result.pl_ratio = 2.0
+                        result.stop_loss_price = entry_price * (1 + rsi_target_percent / 200)  # +0.4%
+                        
+                        order_info = trader.market_order_with_tp_sl(
+                            side='sell',
+                            buy_amount=order_amount,
+                            pl_ratio=result.pl_ratio,
+                            sl_price=result.stop_loss_price
+                        )
+                        
+                        if order_info != None:
+                            tp_price = entry_price * (1 - rsi_target_percent / 100)  # -0.8%
+                            logger.info(f"RSI Short order executed: Amount={order_amount}, TP=${tp_price:.2f} (-{rsi_target_percent}%), SL=${result.stop_loss_price:.2f} (+{rsi_target_percent/2}%)")
+                            order_executed = True
+                    else:
+                        # 일반 숏 진입 또는 롱 청산
+                        if result.pl_ratio != 2:
+                            result.pl_ratio = 2
+                        order_info = trader.market_order_with_tp_sl(
+                            side='sell',
+                            buy_amount=order_amount,
+                            pl_ratio=result.pl_ratio,
+                            sl_price=result.stop_loss_price
+                        )
+                        
+                        if order_info != None:
+                            logger.info(f"Sell order executed: Amount={order_amount}, P&L ratio={result.pl_ratio}, SL={result.stop_loss_price}")
+                            order_executed = True
                         
             except Exception as e:
                 logger.error(f"Error executing order: {str(e)}")
@@ -7239,6 +7307,10 @@ All key indicators have been pre-calculated for you. Focus on making a clear dec
                     signals_data["cloud_gap_valid"] = cloud_gap_valid
                     logger.info(f"Added cloud_gap_valid={cloud_gap_valid} to signals_data")
                 
+
+                # signals_data에 position_type 추가
+                signals_data["position_type"] = position_type if position_type else "normal"
+
                 log_trade(conn, 'AI', order_id, result.decision, result.percentage, result.reason, 
                         used_usdt, free_usdt, total_usdt, btc_avg_buy_price, current_btc_price, 
                         reflection, tp_order_id, sl_order_id, signals_data)
