@@ -6943,7 +6943,6 @@ The data below must be considered in your analysis.
 - Current Position PnL: {unrealized_pnl} % ← -100~100 or None(no position)
 
 ## 3. Pre-Calculated Indicators and Signals
-
 **CORE INDICATORS STATUS (PRE-CALCULATED):**
 - BlackFlag FTS Signal: {blackflag_signal} (Candles ago: {blackflag_candles_ago})
 - BlackFlag Cloud Gap: {signals_data.get("BlackFlag", {}).get("cloud_gap_percent", 0):.2f}% (Valid if >= 0.65%)
@@ -6970,76 +6969,106 @@ The data below must be considered in your analysis.
 - Ranging Count: {signals_analysis.get('TimeframeSignals', {}).get('ranging_count', 0)}/5 timeframes
 - 5-Min Timeframe Signal: {next((tf.get('signal', 'Unknown') for tf in signals_analysis.get('TimeframeSignals', {}).get('details', []) if tf.get('timeframe') == '5'), 'Unknown')}
 
-**EXIT SIGNALS ASSESSMENT (PRE-CALCULATED):**
-- Should Exit Current Position: {"YES" if should_exit else "NO"}
-- Exit Signals Detected: {len(exit_signals_list)}
-
-**MARKET OVERHEATING (PRE-CALCULATED):**
-- Long Side Overheated: {"YES" if market_overheating["long_overheated"] else "NO"}
-- Short Side Overheated: {"YES" if market_overheating["short_overheated"] else "NO"}
-
 ## 4. Decision Rules
 
-For a valid PRIMARY entry, ALL of the following must be true:
+### PRIMARY ENTRY CONDITIONS
 
-**For Long Entry:**
-1. **BlackFlag FTS:** Must show a BUY signal within the last 13 candles AND the cloud gap must be at least 0.65%.
-2. **UT Bot Alerts:** Must display a BUY alert within the last 13 candles.
-3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
-4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if long_trend_strong else "WEAK"}).
-5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
-6. **NEW - Timeframe Signals:** At least 3 timeframes must show bullish signals AND the 5-minute timeframe MUST be bullish.
+**For PRIMARY Long Entry (Regular Long):**
+ALL of the following conditions must be met:
+1. **BlackFlag FTS:** BUY signal within last 13 candles AND cloud gap ≥ 0.64%
+2. **UT Bot Alerts:** BUY alert within last 13 candles
+3. **Volume Oscillator:** Should be > -15 (can be negative if other signals strong)
+4. **Trend Strength:** Long trend must be STRONG
+5. **Range Detection:** Market NOT in ranging state (IsRangingMarket = FALSE)
+6. **Gaussian Filter (if active):** 
+   - 5-minute timeframe MUST show bullish signal
+   - At least 2 out of 5 timeframes must show bullish signals
+7. **ADX Filter:** ADX > 25 (indicates strong trend)
+8. **No Position:** Current position must be "none"
 
-**For Short Entry:**
-1. **BlackFlag FTS:** Must show a SELL signal within the last 13 candles AND the cloud gap must be at least 0.65%.
-2. **UT Bot Alerts:** Must display a SELL alert within the last 13 candles.
-3. **Volume Oscillator:** Should generally be POSITIVE, but can be moderately negative (-15 or higher) if other signals are strong and aligned.
-4. **Trend Strength:** Must be STRONG (pre-calculated as {"STRONG" if short_trend_strong else "WEAK"}).
-5. **NEW - Range Detection:** Market must NOT be in ranging state ("IsRangingMarket" must be FALSE).
-6. **NEW - Timeframe Signals:** At least 3 timeframes must show bearish signals AND the 5-minute timeframe MUST be bearish.
+**For PRIMARY Short Entry (Regular Short):**
+ALL of the following conditions must be met:
+1. **BlackFlag FTS:** SELL signal within last 13 candles AND cloud gap ≥ 0.64%
+2. **UT Bot Alerts:** SELL alert within last 13 candles
+3. **Volume Oscillator:** Should be > -15 (can be negative if other signals strong)
+4. **Trend Strength:** Short trend must be STRONG
+5. **Range Detection:** Market NOT in ranging state (IsRangingMarket = FALSE)
+6. **Gaussian Filter (if active):**
+   - 5-minute timeframe MUST show bearish signal
+   - At least 2 out of 5 timeframes must show bearish signals
+7. **ADX Filter:** ADX > 25 (indicates strong trend)
+8. **No Position:** Current position must be "none"
 
-**Additional Rule: Short-Term Correction Detection:**
-1. If short-term correction signals are detected for the direction you are considering entering:
-   - For LONG entries: If "Long Correction Likely" is "YES", HOLD even if all primary conditions are met.
-   - For SHORT entries: If "Short Correction Likely" is "YES", HOLD even if all primary conditions are met.
-   - Provide specific reasoning referencing which correction signals were detected.
-   - Recommend waiting for the temporary reversal to complete for better entry price.
+### RSI EXTREME ENTRY CONDITIONS (SPECIAL ENTRY)
 
-## 5. UPDATED: TREND STRENGTH ASSESSMENT RULES
-The trend strength assessment is pre-calculated and provided as Boolean variables:
-- Long Trend Strength: {"STRONG" if long_trend_strong else "WEAK"}
-- Short Trend Strength: {"STRONG" if short_trend_strong else "WEAK"}
+**For RSI Long Entry (Counter-trend):**
+- **RSI Condition:** RSI < 20 (oversold)
+- **No Position:** Current position must be "none"
+- **Independent Signal:** Does NOT require other indicators to align
+- **Note:** This is a mean-reversion play with tighter targets
 
-These values already incorporate the following refined criteria:
-- Updated volatility thresholds for Bollinger Bands
-- Adjusted RSI thresholds for potential overheating/oversold conditions
-- Modified price extreme detection parameters
-- Enhanced extended trend requirements
-- Optimized moving average interaction calculations
-- Refined momentum detection parameters
+**For RSI Short Entry (Counter-trend):**
+- **RSI Condition:** RSI > 80 (overbought)
+- **No Position:** Current position must be "none"
+- **Independent Signal:** Does NOT require other indicators to align
+- **Note:** This is a mean-reversion play with tighter targets
 
-## 6. UPDATED: EXIT SIGNALS ASSESSMENT RULES
-1. If exit signals are detected (pre-calculated as {"YES" if should_exit else "NO"}), exit the current position immediately using the correct command (sell to exit long, buy to exit short).
+### ADDITIONAL RULES
 
-## 7. Position Sizing Rules:
-1. If the market is overheated in the direction of entry, reduce position size by 50%.
-2. Standard position sizes based on signal strength:
-   - **Strong Signal:** 100% of calculated size.
-   - **Medium Signal:** 70% of calculated size. *(Increased from 60% to better capture movement.)*
-   - **Weak Signal:** 40% of calculated size. *(Adjusted from 30% for improved exposure on less sure signals.)*
+**Short-Term Correction Detection:**
+- If "Long Correction Likely" = YES → HOLD even if primary long conditions met
+- If "Short Correction Likely" = YES → HOLD even if primary short conditions met
+- Wait for correction to complete for better entry price
 
-## 8. Risk/Reward (PL Ratio) Guidelines (Bitcoin-Specific):
-- **Strong Signal & Low Volatility:** Use a PL ratio of **3**
-- **Strong Signal & High Volatility:** Use a PL ratio of **1.5** (to secure quick profits at lower target prices)
-- **Medium Signal:** Use a PL ratio of **2.5**
-- **Weak Signal:** Use a PL ratio of **2**
+## 5. Position Sizing Rules
 
-## 9. Additional Guidelines:
+### Standard Position Sizing:
+- **Strong Signal (All conditions perfectly aligned):** 100% of calculated size
+- **Medium Signal (Most conditions aligned):** 70% of calculated size
+- **Weak Signal (Minimum conditions met):** 40% of calculated size
+- **RSI Extreme Entries:** 60% of calculated size (moderate risk for counter-trend)
+
+### Overheating Adjustment:
+- If market overheated in entry direction → Reduce position size by 50%
+
+## 6. Risk/Reward Guidelines
+
+### For PRIMARY Positions (Regular Long/Short):
+- **Long Position:**
+  - Default PL Ratio: 3.0
+  - Stop Loss: BlackFlag trailing stop level
+  - Take Profit: Entry + (3.0 × stop loss distance)
+
+- **Short Position:**
+  - Default PL Ratio: 2.0
+  - Stop Loss: BlackFlag trailing stop level
+  - Take Profit: Entry - (2.0 × stop loss distance)
+
+### For RSI EXTREME Positions (RSI Long/Short):
+- **RSI Long Position:**
+  - Target Profit: 0.8% from entry
+  - Stop Loss: 0.4% from entry (2:1 ratio)
+  - PL Ratio: 2.0
+
+- **RSI Short Position:**
+  - Target Profit: 0.8% from entry
+  - Stop Loss: 0.4% from entry (2:1 ratio)
+  - PL Ratio: 2.0
+
+## 7. Exit Management Rules
+
+### For ALL Positions:
+1. **Exit Signal Detection:** If "Should Exit Current Position" = YES → Exit immediately
+
+### Position-Specific Exits:
+- **Regular Positions:** Use dynamic BlackFlag trailing stop
+- **RSI Positions:** Use fixed percentage stops (tighter management)
+
+## 8. Additional Guidelines:
 - Always consider Bitcoin's rapid volatility alongside its long-term upward trend. This means while the market may be prone to swift moves, the overall bias can be bullish. Trade conservatively to preserve capital and adjust positions accordingly.
 - **Patience is key** - waiting for the right entry after a correction typically results in better risk-reward profiles and reduced drawdowns.
 
-## 10. Response Format
-
+## 9. Response Format
 Output a JSON object:
 
 ```json
@@ -7068,13 +7097,7 @@ stop_loss_price: As defined by the strategy (pre-calculated indicator).
 pl_ratio: Based on the signal strength and market volatility, following the Bitcoin-specific guidelines above.
 
 reason: Provide a clear explanation detailing which signals and data informed the decision. If holding due to correction signals, specify which correction indicators triggered the hold decision.
-
-## 11. Final Notes
-
-When in doubt, preserve capital. Considering Bitcoin's rapid volatility paired with its long-term bullish trend, it is essential to balance aggressive entries with conservative management. "hold" is often the safest decision if the signals are not strongly aligned or if correction signals are present.
-
-All key indicators have been pre-calculated for you. Focus on making a clear decision based on the provided data and always trade within your risk parameters.
-                        """
+                       """
                     },
                     {
                         "role": "user",
