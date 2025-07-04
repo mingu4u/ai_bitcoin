@@ -54,8 +54,8 @@ TRADING_CONFIG = {
     "rsi_overbought_level": 80,
     
     # 기존 필터 설정
-    "use_cloud_gap_filter": True,  # 구름대 갭 필터 사용
-    "min_cloud_gap_percent": 0.64,
+    "use_cloud_gap_filter": False,  # 구름대 갭 필터 사용
+    "min_cloud_gap_percent": 0.3,
     
     # 추세 필터 설정
     "use_multi_timeframe": True,  # 다중 타임프레임 확인
