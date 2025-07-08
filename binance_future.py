@@ -6945,7 +6945,7 @@ The data below must be considered in your analysis.
 ## 3. Pre-Calculated Indicators and Signals
 **CORE INDICATORS STATUS (PRE-CALCULATED):**
 - BlackFlag FTS Signal: {blackflag_signal} (Candles ago: {blackflag_candles_ago})
-- BlackFlag Cloud Gap: {signals_data.get("BlackFlag", {}).get("cloud_gap_percent", 0):.2f}% (Valid if >= 0.65%)
+- BlackFlag Cloud Gap: {signals_data.get("BlackFlag", {}).get("cloud_gap_percent", 0):.2f}% (Valid if >= 0.3%)
 - UT Bot Signal: {utbot_signal} (Candles ago: {utbot_candles_ago})
 - Volume Oscillator: {volume_osc_current}
 - Stop Loss Price: {stop_loss_price}
@@ -6963,12 +6963,6 @@ The data below must be considered in your analysis.
 **NEW - RANGING MARKET DETECTION (PRE-CALCULATED):**
 - Is Market in Ranging State: {"YES" if signals_analysis.get('IsRangingMarket', False) else "NO"}
 
-**NEW - TIMEFRAME SIGNALS TABLE (PRE-CALCULATED):**
-- Bullish Count: {signals_analysis.get('TimeframeSignals', {}).get('bullish_count', 0)}/5 timeframes
-- Bearish Count: {signals_analysis.get('TimeframeSignals', {}).get('bearish_count', 0)}/5 timeframes
-- Ranging Count: {signals_analysis.get('TimeframeSignals', {}).get('ranging_count', 0)}/5 timeframes
-- 5-Min Timeframe Signal: {next((tf.get('signal', 'Unknown') for tf in signals_analysis.get('TimeframeSignals', {}).get('details', []) if tf.get('timeframe') == '5'), 'Unknown')}
-
 ## 4. Decision Rules
 
 ### PRIMARY ENTRY CONDITIONS
@@ -6980,11 +6974,8 @@ ALL of the following conditions must be met:
 3. **Volume Oscillator:** Should be > -15 (can be negative if other signals strong)
 4. **Trend Strength:** Long trend must be STRONG
 5. **Range Detection:** Market NOT in ranging state (IsRangingMarket = FALSE)
-6. **Gaussian Filter (if active):** 
-   - 5-minute timeframe MUST show bullish signal
-   - At least 2 out of 5 timeframes must show bullish signals
-7. **ADX Filter:** ADX > 25 (indicates strong trend)
-8. **No Position:** Current position must be "none"
+6. **ADX Filter:** ADX > 25 (indicates strong trend)
+7. **No Position:** Current position must be "none"
 
 **For PRIMARY Short Entry (Regular Short):**
 ALL of the following conditions must be met:
@@ -6993,11 +6984,8 @@ ALL of the following conditions must be met:
 3. **Volume Oscillator:** Should be > -15 (can be negative if other signals strong)
 4. **Trend Strength:** Short trend must be STRONG
 5. **Range Detection:** Market NOT in ranging state (IsRangingMarket = FALSE)
-6. **Gaussian Filter (if active):**
-   - 5-minute timeframe MUST show bearish signal
-   - At least 2 out of 5 timeframes must show bearish signals
-7. **ADX Filter:** ADX > 25 (indicates strong trend)
-8. **No Position:** Current position must be "none"
+6. **ADX Filter:** ADX > 25 (indicates strong trend)
+7. **No Position:** Current position must be "none"
 
 ### RSI EXTREME ENTRY CONDITIONS (SPECIAL ENTRY)
 
@@ -7108,7 +7096,6 @@ reason: Provide a clear explanation detailing which signals and data informed th
                                 Fear and Greed Index: {json.dumps(fear_greed_index)}
                                 
                                 # Chart Analysis Results
-                                Timeframe Signals: {json.dumps(signals_analysis.get('TimeframeSignals', {}) if signals_analysis else {})}
                                 Is Ranging Market: {signals_analysis.get('IsRangingMarket', False) if signals_analysis else False}
 
                                 # Short-Term Correction Signals
