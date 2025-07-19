@@ -82,7 +82,8 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
         # 레버리지 설정
         exchange.set_leverage(10, SYMBOL)
         
-        # 메인 주문 실행
+        # 1. 메인 주문 실행
+        logging.info(f"메인 주문 실행: {side} {amount} BTC @ market")
         main_order = exchange.create_order(
             symbol=SYMBOL,
             type='market',
@@ -92,42 +93,59 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
         
         if main_order:
             order_id = main_order['id']
-            actual_entry = main_order.get('average', entry_price)
+            actual_entry = main_order.get('average', main_order.get('price', entry_price))
+            
+            logging.info(f"메인 주문 체결: Entry @ ${actual_entry:.2f}")
             
             # 실제 체결가로 TP 재계산
             if abs(actual_entry - entry_price) > entry_price * 0.001:  # 0.1% 이상 차이
+                logging.info(f"체결가 차이 감지. TP 재계산: {entry_price} -> {actual_entry}")
                 take_profit_price = calculate_tp_from_pl_ratio(
                     actual_entry, stop_loss_price, pl_ratio, side
                 )
             
-            # 손절 주문
+            # 2. 손절 주문 설정
             stop_side = 'sell' if side == 'buy' else 'buy'
             
+            logging.info(f"손절 주문 설정: {stop_side} {amount} BTC @ stop ${stop_loss_price:.2f}")
+            
+            # Binance Futures의 경우 Stop Market 주문 사용
             sl_order = exchange.create_order(
                 symbol=SYMBOL,
-                type='stop_market',
+                type='stop_market',  # 'stop' 대신 'stop_market' 사용
                 side=stop_side,
                 amount=amount,
                 stopPrice=stop_loss_price,
                 params={
-                    'reduceOnly': True
-                }
-            )
-            
-            # 익절 주문
-            tp_order = exchange.create_order(
-                symbol=SYMBOL,
-                type='limit',
-                side=stop_side,
-                amount=amount,
-                price=take_profit_price,
-                params={
+                    'stopPrice': stop_loss_price,
+                    'workingType': 'MARK_PRICE',  # Mark Price 기준
                     'reduceOnly': True,
                     'postOnly': False
                 }
             )
             
-            # 포지션 정보 저장
+            logging.info(f"손절 주문 생성 완료: Order ID = {sl_order['id'] if sl_order else 'None'}")
+            
+            # 3. 익절 주문 설정
+            logging.info(f"익절 주문 설정: {stop_side} {amount} BTC @ limit ${take_profit_price:.2f}")
+            
+            tp_order = exchange.create_order(
+                symbol=SYMBOL,
+                type='take_profit_market',  # 'limit' 대신 'take_profit_market' 사용
+                side=stop_side,
+                amount=amount,
+                stopPrice=take_profit_price,
+                params={
+                    'stopPrice': take_profit_price,
+                    'workingType': 'MARK_PRICE',
+                    'reduceOnly': True,
+                    'postOnly': False
+                }
+            )
+            
+            logging.info(f"익절 주문 생성 완료: Order ID = {tp_order['id'] if tp_order else 'None'}")
+            
+            # 4. 포지션 정보 저장
             current_positions[SYMBOL] = {
                 'side': side,
                 'amount': amount,
@@ -140,6 +158,16 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
                 'timestamp': datetime.now().isoformat()
             }
             
+            # 5. 주문 확인
+            logging.info("=== 주문 완료 요약 ===")
+            logging.info(f"포지션: {side.upper()}")
+            logging.info(f"수량: {amount} BTC")
+            logging.info(f"진입가: ${actual_entry:.2f}")
+            logging.info(f"손절가: ${stop_loss_price:.2f} (리스크: ${abs(actual_entry - stop_loss_price):.2f})")
+            logging.info(f"익절가: ${take_profit_price:.2f} (수익: ${abs(take_profit_price - actual_entry):.2f})")
+            logging.info(f"손익비: {pl_ratio}:1")
+            logging.info("====================")
+            
             return {
                 'main_order': main_order,
                 'sl_order': sl_order,
@@ -149,6 +177,57 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
             
     except Exception as e:
         logging.error(f"주문 실행 실패: {str(e)}")
+        logging.error(f"상세 오류: {type(e).__name__}")
+        
+        # Binance 오류 메시지 상세 출력
+        if hasattr(e, 'response'):
+            logging.error(f"Binance 응답: {e.response}")
+            
+        return None
+
+def check_open_orders():
+    """현재 열린 주문 확인"""
+    try:
+        open_orders = exchange.fetch_open_orders(SYMBOL)
+        
+        if open_orders:
+            logging.info(f"=== 열린 주문 {len(open_orders)}개 ===")
+            for order in open_orders:
+                logging.info(f"- {order['type']} {order['side']} @ ${order.get('stopPrice', order.get('price'))}")
+        else:
+            logging.info("열린 주문 없음")
+            
+        return open_orders
+    except Exception as e:
+        logging.error(f"주문 조회 실패: {str(e)}")
+        return []
+
+def check_position_status():
+    """현재 포지션과 주문 상태 확인"""
+    try:
+        # 포지션 확인
+        positions = exchange.fetch_positions([SYMBOL])
+        active_position = None
+        
+        for pos in positions:
+            if pos['contracts'] > 0:
+                active_position = pos
+                break
+        
+        if active_position:
+            logging.info(f"=== 활성 포지션 ===")
+            logging.info(f"방향: {active_position['side']}")
+            logging.info(f"수량: {active_position['contracts']}")
+            logging.info(f"진입가: ${active_position['average']}")
+            logging.info(f"현재가: ${active_position['markPrice']}")
+            logging.info(f"미실현 손익: ${active_position['unrealizedPnl']}")
+        
+        # 열린 주문 확인
+        check_open_orders()
+        
+        return active_position
+    except Exception as e:
+        logging.error(f"포지션 상태 확인 실패: {str(e)}")
         return None
 
 def update_trailing_stop_with_pl_ratio(new_stop_loss_price, pl_ratio):
@@ -206,10 +285,10 @@ def update_trailing_stop_with_pl_ratio(new_stop_loss_price, pl_ratio):
         # 새 익절 주문
         new_tp_order = exchange.create_order(
             symbol=SYMBOL,
-            type='limit',
+            type='take_profit_market',
             side=stop_side,
             amount=position['amount'],
-            price=new_take_profit,
+            stopPrice=new_take_profit,
             params={
                 'reduceOnly': True,
                 'postOnly': False
@@ -294,6 +373,14 @@ def webhook():
             pl_ratio = float(data.get('pl_ratio', 3.0))  # 기본값 3:1
             position_type = data.get('position_type', 'normal')
             
+            # 중요: stop_loss 확인
+            if not stop_loss_price or stop_loss_price == 0:
+                logging.error("❌ 손절가가 없습니다! TradingView 설정을 확인하세요.")
+                return jsonify({
+                    'status': 'error',
+                    'message': 'stop_loss price is missing'
+                }), 400
+            
             # 잔고 확인
             balance = get_account_balance()
             if balance is None:
@@ -318,24 +405,29 @@ def webhook():
             btc_amount = position_size / entry_price
             
             logging.info(f"""
-            주문 정보:
+            ===== 주문 요청 정보 =====
             - Action: {action}
             - Type: {position_type}
             - Amount: {btc_amount:.6f} BTC (${position_size:.2f})
             - Entry: ${entry_price:.2f}
-            - Stop Loss: ${stop_loss_price:.2f} (BlackFlag Trail)
+            - Stop Loss: ${stop_loss_price:.2f} ✅
             - P/L Ratio: {pl_ratio}:1
+            =======================
             """)
             
             # 기존 포지션 청산
             close_all_positions()
             
-            # 새 주문 실행
+            # 새 주문 실행 (stop_loss 포함)
             orders = place_order_with_calculated_stops(
                 action, btc_amount, entry_price, stop_loss_price, pl_ratio
             )
             
             if orders:
+                # 주문 후 상태 확인
+                time.sleep(1)  # API 제한 고려
+                check_position_status()
+                
                 response = {
                     'status': 'success',
                     'action': action,
@@ -354,7 +446,14 @@ def webhook():
                     },
                     'timestamp': datetime.now().isoformat()
                 }
-                logging.info(f"주문 성공: {json.dumps(response, indent=2)}")
+                
+                # SL/TP 주문 확인
+                if not orders['sl_order']:
+                    logging.warning("⚠️ 손절 주문이 생성되지 않았습니다!")
+                if not orders['tp_order']:
+                    logging.warning("⚠️ 익절 주문이 생성되지 않았습니다!")
+                
+                logging.info(f"주문 응답: {json.dumps(response, indent=2)}")
                 return jsonify(response), 200
             else:
                 return jsonify({'error': '주문 실행 실패'}), 500
@@ -488,6 +587,29 @@ def status():
         'current_positions': len(current_positions),
         'timestamp': datetime.now().isoformat()
     }), 200
+
+# 진단 엔드포인트 추가
+@app.route('/check', methods=['GET'])
+def check_orders():
+    """현재 주문 상태 확인"""
+    try:
+        position = check_position_status()
+        orders = check_open_orders()
+        
+        return jsonify({
+            'has_position': position is not None,
+            'open_orders_count': len(orders),
+            'orders': [
+                {
+                    'type': o['type'],
+                    'side': o['side'],
+                    'price': o.get('stopPrice', o.get('price'))
+                } for o in orders
+            ],
+            'timestamp': datetime.now().isoformat()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
