@@ -34,6 +34,81 @@ SYMBOL = 'BTC/USDT'
 # 포지션 추적
 current_positions = {}
 
+def sync_positions_with_exchange():
+    """거래소의 실제 포지션과 봇의 추적 정보를 동기화"""
+    try:
+        # 현재 거래소 포지션 조회
+        positions = exchange.fetch_positions([SYMBOL])
+        
+        for position in positions:
+            if position['contracts'] > 0:
+                # 활성 포지션 발견
+                logging.info(f"활성 포지션 발견: {position['side']} {position['contracts']} BTC @ ${position.get('entryPrice', 'N/A')}")
+                
+                # current_positions에 없으면 추가
+                if SYMBOL not in current_positions:
+                    logging.info("수동 진입 포지션을 봇에 등록합니다.")
+                    
+                    # 열린 주문 확인하여 SL/TP 찾기
+                    open_orders = exchange.fetch_open_orders(SYMBOL)
+                    sl_order_id = None
+                    tp_order_id = None
+                    stop_loss_price = None
+                    take_profit_price = None
+                    
+                    for order in open_orders:
+                        if order['type'] == 'stop_market' and order['reduceOnly']:
+                            sl_order_id = order['id']
+                            stop_loss_price = order['stopPrice']
+                            logging.info(f"손절 주문 발견: ${stop_loss_price}")
+                        elif order['type'] in ['limit', 'take_profit_market'] and order['reduceOnly']:
+                            tp_order_id = order['id']
+                            take_profit_price = order.get('price', order.get('stopPrice'))
+                            logging.info(f"익절 주문 발견: ${take_profit_price}")
+                    
+                    # 손익비 계산 (SL/TP가 있는 경우)
+                    pl_ratio = 3.0  # 기본값
+                    entry_price = position.get('entryPrice') or position['markPrice']
+                    if stop_loss_price and take_profit_price and entry_price:
+                        sl_distance = abs(entry_price - stop_loss_price)
+                        tp_distance = abs(take_profit_price - entry_price)
+                        if sl_distance > 0:
+                            pl_ratio = tp_distance / sl_distance
+                    
+                    # current_positions에 등록
+                    current_positions[SYMBOL] = {
+                        'side': 'buy' if position['side'] == 'long' else 'sell',
+                        'amount': position['contracts'],
+                        'entry_price': entry_price,
+                        'stop_loss': stop_loss_price or 0,
+                        'take_profit': take_profit_price or 0,
+                        'pl_ratio': pl_ratio,
+                        'sl_order_id': sl_order_id,
+                        'tp_order_id': tp_order_id,
+                        'timestamp': datetime.now().isoformat(),
+                        'manual_entry': True  # 수동 진입 표시
+                    }
+                    
+                    logging.info(f"포지션 등록 완료: {current_positions[SYMBOL]}")
+                    return True
+                    
+        # 포지션이 없는데 current_positions에 있는 경우 정리
+        if not any(p['contracts'] > 0 for p in positions) and SYMBOL in current_positions:
+            logging.info("포지션이 종료되었습니다. 추적 정보를 제거합니다.")
+            del current_positions[SYMBOL]
+            
+        return True
+        
+    except Exception as e:
+        logging.error(f"포지션 동기화 실패: {str(e)}")
+        return False
+
+def initialize_bot():
+    """봇 초기화 - 기존 포지션 확인"""
+    logging.info("봇 초기화 중...")
+    sync_positions_with_exchange()
+    logging.info("봇 초기화 완료")
+
 def calculate_tp_from_pl_ratio(entry_price, stop_loss_price, pl_ratio, side):
     """
     손익비를 기반으로 TP 계산
@@ -205,6 +280,9 @@ def check_open_orders():
 def check_position_status():
     """현재 포지션과 주문 상태 확인"""
     try:
+        # 먼저 동기화 실행
+        sync_positions_with_exchange()
+        
         # 포지션 확인
         positions = exchange.fetch_positions([SYMBOL])
         active_position = None
@@ -218,9 +296,13 @@ def check_position_status():
             logging.info(f"=== 활성 포지션 ===")
             logging.info(f"방향: {active_position['side']}")
             logging.info(f"수량: {active_position['contracts']}")
-            logging.info(f"진입가: ${active_position['average']}")
+            logging.info(f"진입가: ${active_position.get('entryPrice', 'N/A')}")
             logging.info(f"현재가: ${active_position['markPrice']}")
-            logging.info(f"미실현 손익: ${active_position['unrealizedPnl']}")
+            logging.info(f"미실현 손익: ${active_position.get('unrealizedPnl', 0)}")
+            
+            # current_positions 정보도 출력
+            if SYMBOL in current_positions:
+                logging.info(f"봇 추적 정보: {current_positions[SYMBOL]}")
         
         # 열린 주문 확인
         check_open_orders()
@@ -324,6 +406,9 @@ def update_trailing_stop_with_pl_ratio(new_stop_loss_price, pl_ratio):
 def webhook():
     """TradingView 웹훅 수신"""
     try:
+        # 웹훅 처리 전 동기화
+        sync_positions_with_exchange()
+        
         # 웹훅 데이터 파싱
         data = request.get_json()
         logging.info(f"웹훅 수신: {json.dumps(data, indent=2)}")
@@ -537,10 +622,44 @@ def close_all_positions():
     except Exception as e:
         logging.error(f"포지션 종료 실패: {str(e)}")
 
+@app.route('/sync', methods=['POST'])
+def sync_positions():
+    """수동으로 포지션 동기화 실행"""
+    try:
+        success = sync_positions_with_exchange()
+        
+        if success:
+            # 동기화 후 상태 반환
+            positions = exchange.fetch_positions([SYMBOL])
+            open_orders = exchange.fetch_open_orders(SYMBOL)
+            
+            return jsonify({
+                'status': 'success',
+                'message': '포지션 동기화 완료',
+                'current_positions': current_positions,
+                'exchange_positions': positions,
+                'open_orders': open_orders,
+                'timestamp': datetime.now().isoformat()
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': '동기화 실패'
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
 @app.route('/positions', methods=['GET'])
 def get_positions():
     """현재 포지션 상태 조회"""
     try:
+        # 먼저 동기화
+        sync_positions_with_exchange()
+        
         positions = exchange.fetch_positions([SYMBOL])
         open_orders = exchange.fetch_open_orders(SYMBOL)
         
@@ -563,8 +682,8 @@ def get_positions():
                 'unrealized_pnl': unrealized_pnl,
                 'pnl_percent': pnl_percent,
                 'current_price': current_price,
-                'distance_to_sl': abs(current_price - pos['stop_loss']),
-                'distance_to_tp': abs(pos['take_profit'] - current_price)
+                'distance_to_sl': abs(current_price - pos['stop_loss']) if pos['stop_loss'] else None,
+                'distance_to_tp': abs(pos['take_profit'] - current_price) if pos['take_profit'] else None
             }
         
         return jsonify({
@@ -580,24 +699,36 @@ def get_positions():
 @app.route('/status', methods=['GET'])
 def status():
     """봇 상태 확인"""
+    # 동기화 실행
+    sync_positions_with_exchange()
+    
     return jsonify({
         'status': 'running',
         'symbol': SYMBOL,
         'position_size_percent': POSITION_SIZE_PERCENT,
         'current_positions': len(current_positions),
+        'tracked_positions': current_positions,
         'timestamp': datetime.now().isoformat()
     }), 200
 
-# 진단 엔드포인트 추가
+# 진단 엔드포인트 수정
 @app.route('/check', methods=['GET'])
 def check_orders():
     """현재 주문 상태 확인"""
     try:
+        # 먼저 동기화
+        sync_positions_with_exchange()
+        
         position = check_position_status()
         orders = check_open_orders()
         
+        # current_positions 정보 포함
+        has_tracked_position = SYMBOL in current_positions
+        
         return jsonify({
             'has_position': position is not None,
+            'has_tracked_position': has_tracked_position,
+            'tracked_position': current_positions.get(SYMBOL, None),
             'open_orders_count': len(orders),
             'orders': [
                 {
@@ -612,4 +743,8 @@ def check_orders():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
+    # 서버 시작 시 초기화
+    initialize_bot()
+    
+    # Flask 앱 실행
     app.run(host='0.0.0.0', port=5000, debug=True)
