@@ -7,6 +7,7 @@ import os
 from dotenv import load_dotenv
 import threading
 import time
+import requests
 
 # 환경 변수 로드
 load_dotenv()
@@ -25,6 +26,10 @@ exchange = ccxt.binance({
     }
 })
 
+# 텔레그램 설정
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+TELEGRAM_CHAT_IDS = os.getenv('TELEGRAM_CHAT_IDS', '').split(',')
+
 # 거래 설정
 POSITION_SIZE_PERCENT = 90#float(os.getenv('POSITION_SIZE_PERCENT', 10))
 MIN_POSITION_SIZE = 10#float(os.getenv('MIN_POSITION_SIZE', 10))
@@ -33,6 +38,112 @@ SYMBOL = 'BTC/USDT'
 
 # 포지션 추적
 current_positions = {}
+
+def send_telegram_notification(message, priority='normal'):
+    """텔레그램으로 알림 전송"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
+        logging.warning("텔레그램 설정이 없습니다. .env 파일을 확인하세요.")
+        return
+    
+    for chat_id in TELEGRAM_CHAT_IDS:
+        if not chat_id.strip():
+            continue
+            
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            
+            # 우선순위에 따라 메시지 설정
+            if priority == 'high':
+                message = f"🚨 <b>중요 알림</b> 🚨\n\n{message}"
+            elif priority == 'error':
+                message = f"❌ <b>오류 발생</b> ❌\n\n{message}"
+            
+            payload = {
+                'chat_id': chat_id.strip(),
+                'text': message,
+                'parse_mode': 'HTML',
+                'disable_web_page_preview': True
+            }
+            
+            response = requests.post(url, data=payload, timeout=5)
+            
+            if response.status_code == 200:
+                logging.info(f"✅ 텔레그램 알림 전송 성공: {chat_id}")
+            else:
+                logging.error(f"❌ 텔레그램 전송 실패: {response.text}")
+                
+        except Exception as e:
+            logging.error(f"텔레그램 전송 오류: {e}")
+
+def format_position_entry_message(action, amount, entry_price, stop_loss, take_profit, pl_ratio, position_size, balance):
+    """포지션 진입 메시지 포맷"""
+    direction_emoji = "🚀" if action == "buy" else "📉"
+    direction_text = "LONG" if action == "buy" else "SHORT"
+    
+    # 리스크/리워드 계산
+    risk_amount = abs(entry_price - stop_loss) * amount
+    reward_amount = abs(take_profit - entry_price) * amount
+    
+    message = f"""
+{direction_emoji} <b>새 포지션 진입</b>
+
+📊 <b>방향:</b> {direction_text}
+💰 <b>수량:</b> {amount:.6f} BTC (${position_size:.2f})
+💵 <b>진입가:</b> ${entry_price:,.2f}
+🛑 <b>손절가:</b> ${stop_loss:,.2f}
+🎯 <b>익절가:</b> ${take_profit:,.2f}
+📈 <b>손익비:</b> {pl_ratio}:1
+
+💸 <b>최대 손실:</b> ${risk_amount:.2f}
+💰 <b>예상 수익:</b> ${reward_amount:.2f}
+💳 <b>현재 잔고:</b> ${balance:,.2f}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    """.strip()
+    
+    return message
+
+def format_trail_update_message(new_sl, new_tp, pl_ratio, current_price=None):
+    """트레일링 스톱 업데이트 메시지 포맷"""
+    message = f"""
+🔄 <b>트레일링 스톱 업데이트</b>
+
+🛑 <b>새 손절가:</b> ${new_sl:,.2f}
+🎯 <b>새 익절가:</b> ${new_tp:,.2f}
+📈 <b>손익비:</b> {pl_ratio}:1 (유지)
+    """
+    
+    if current_price:
+        message += f"\n📊 <b>현재가:</b> ${current_price:,.2f}"
+    
+    message += f"\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    
+    return message.strip()
+
+def format_position_close_message(reason="수동 종료"):
+    """포지션 종료 메시지 포맷"""
+    message = f"""
+❌ <b>포지션 종료</b>
+
+📋 <b>종료 사유:</b> {reason}
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    """.strip()
+    
+    return message
+
+def format_error_message(error_type, error_msg):
+    """오류 메시지 포맷"""
+    message = f"""
+⚠️ <b>시스템 오류</b>
+
+🔍 <b>오류 유형:</b> {error_type}
+📝 <b>오류 내용:</b> {error_msg}
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+<i>관리자에게 문의하세요.</i>
+    """.strip()
+    
+    return message
 
 def sync_positions_with_exchange():
     """거래소의 실제 포지션과 봇의 추적 정보를 동기화"""
@@ -48,6 +159,20 @@ def sync_positions_with_exchange():
                 # current_positions에 없으면 추가
                 if SYMBOL not in current_positions:
                     logging.info("수동 진입 포지션을 봇에 등록합니다.")
+                    
+                    # 텔레그램 알림: 수동 포지션 감지
+                    sync_message = f"""
+🔍 <b>수동 포지션 감지</b>
+
+📊 <b>방향:</b> {position['side'].upper()}
+💰 <b>수량:</b> {position['contracts']} BTC
+💵 <b>진입가:</b> ${position.get('entryPrice', 'N/A')}
+
+<i>봇에 자동 등록되었습니다.</i>
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    """.strip()
+                    
+                    send_telegram_notification(sync_message, 'normal')
                     
                     # 열린 주문 확인하여 SL/TP 찾기
                     open_orders = exchange.fetch_open_orders(SYMBOL)
@@ -95,17 +220,41 @@ def sync_positions_with_exchange():
         # 포지션이 없는데 current_positions에 있는 경우 정리
         if not any(p['contracts'] > 0 for p in positions) and SYMBOL in current_positions:
             logging.info("포지션이 종료되었습니다. 추적 정보를 제거합니다.")
+            
+            # 포지션 종료 알림
+            close_message = format_position_close_message("자동 감지됨")
+            send_telegram_notification(close_message, 'normal')
+            
             del current_positions[SYMBOL]
             
         return True
         
     except Exception as e:
         logging.error(f"포지션 동기화 실패: {str(e)}")
+        
+        # 오류 알림
+        error_message = format_error_message("포지션 동기화", str(e))
+        send_telegram_notification(error_message, 'error')
+        
         return False
 
 def initialize_bot():
     """봇 초기화 - 기존 포지션 확인"""
     logging.info("봇 초기화 중...")
+    
+    # 봇 시작 알림
+    start_message = f"""
+🤖 <b>트레이딩 봇 시작</b>
+
+📊 <b>심볼:</b> {SYMBOL}
+⚙️ <b>포지션 크기:</b> {POSITION_SIZE_PERCENT}%
+📱 <b>알림:</b> 활성화
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    """.strip()
+    
+    send_telegram_notification(start_message, 'normal')
+    
     sync_positions_with_exchange()
     logging.info("봇 초기화 완료")
 
@@ -247,12 +396,17 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
                 'main_order': main_order,
                 'sl_order': sl_order,
                 'tp_order': tp_order,
-                'calculated_tp': take_profit_price
+                'calculated_tp': take_profit_price,
+                'actual_entry': actual_entry
             }
             
     except Exception as e:
         logging.error(f"주문 실행 실패: {str(e)}")
         logging.error(f"상세 오류: {type(e).__name__}")
+        
+        # 주문 실패 알림
+        error_message = format_error_message("주문 실행", str(e))
+        send_telegram_notification(error_message, 'error')
         
         # Binance 오류 메시지 상세 출력
         if hasattr(e, 'response'):
@@ -400,6 +554,11 @@ def update_trailing_stop_with_pl_ratio(new_stop_loss_price, pl_ratio):
         
     except Exception as e:
         logging.error(f"트레일링 스톱 업데이트 실패: {str(e)}")
+        
+        # 트레일링 스톱 업데이트 실패 알림
+        error_message = format_error_message("트레일링 스톱 업데이트", str(e))
+        send_telegram_notification(error_message, 'error')
+        
         return None
 
 @app.route('/webhook', methods=['POST'])
@@ -427,6 +586,19 @@ def webhook():
             result = update_trailing_stop_with_pl_ratio(new_stop_loss, pl_ratio)
             
             if result:
+                # 트레일링 스톱 업데이트 알림
+                current_price = None
+                try:
+                    ticker = exchange.fetch_ticker(SYMBOL)
+                    current_price = ticker['last']
+                except:
+                    pass
+                
+                trail_message = format_trail_update_message(
+                    result['new_sl'], result['new_tp'], pl_ratio, current_price
+                )
+                send_telegram_notification(trail_message, 'normal')
+                
                 return jsonify({
                     'status': 'success',
                     'action': 'trail_updated',
@@ -445,6 +617,11 @@ def webhook():
         # 포지션 종료
         elif action == 'close_position':
             close_all_positions()
+            
+            # 포지션 종료 알림
+            close_message = format_position_close_message("TradingView 신호")
+            send_telegram_notification(close_message, 'high')
+            
             return jsonify({
                 'status': 'success',
                 'action': 'position_closed',
@@ -460,31 +637,54 @@ def webhook():
             
             # 중요: stop_loss 확인
             if not stop_loss_price or stop_loss_price == 0:
-                logging.error("❌ 손절가가 없습니다! TradingView 설정을 확인하세요.")
+                error_msg = "손절가가 없습니다! TradingView 설정을 확인하세요."
+                logging.error(f"❌ {error_msg}")
+                
+                # 오류 알림
+                error_message = format_error_message("손절가 누락", error_msg)
+                send_telegram_notification(error_message, 'error')
+                
                 return jsonify({
                     'status': 'error',
-                    'message': 'stop_loss price is missing'
+                    'message': error_msg
                 }), 400
             
             # 잔고 확인
             balance = get_account_balance()
             if balance is None:
-                return jsonify({'error': '잔고 조회 실패'}), 500
+                error_msg = "잔고 조회 실패"
+                error_message = format_error_message("잔고 조회", error_msg)
+                send_telegram_notification(error_message, 'error')
+                return jsonify({'error': error_msg}), 500
             
             logging.info(f"현재 USDT 잔고: ${balance:.2f}")
             
             # 리스크 체크
             if not check_risk_before_entry(balance):
+                risk_msg = "리스크 한도 초과"
+                risk_message = f"""
+⚠️ <b>리스크 한도 초과</b>
+
+현재 일일 손실이 한도를 초과하여 주문이 거부되었습니다.
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                """.strip()
+                
+                send_telegram_notification(risk_message, 'high')
+                
                 return jsonify({
                     'status': 'rejected',
-                    'reason': '리스크 한도 초과',
+                    'reason': risk_msg,
                     'timestamp': datetime.now().isoformat()
                 }), 200
             
             # 포지션 크기 계산
             position_size = calculate_position_size(balance)
             if position_size is None:
-                return jsonify({'error': '포지션 크기 계산 실패'}), 500
+                error_msg = "포지션 크기 계산 실패"
+                error_message = format_error_message("포지션 크기 계산", error_msg)
+                send_telegram_notification(error_message, 'error')
+                return jsonify({'error': error_msg}), 500
             
             # BTC 수량 계산
             btc_amount = position_size / entry_price
@@ -513,13 +713,21 @@ def webhook():
                 time.sleep(1)  # API 제한 고려
                 check_position_status()
                 
+                # 📱 포지션 진입 알림 전송
+                entry_message = format_position_entry_message(
+                    action, btc_amount, orders['actual_entry'], 
+                    stop_loss_price, orders['calculated_tp'], 
+                    pl_ratio, position_size, balance
+                )
+                send_telegram_notification(entry_message, 'high')
+                
                 response = {
                     'status': 'success',
                     'action': action,
                     'position_type': position_type,
                     'amount': btc_amount,
                     'value': position_size,
-                    'entry_price': entry_price,
+                    'entry_price': orders['actual_entry'],
                     'stop_loss': stop_loss_price,
                     'take_profit': orders['calculated_tp'],
                     'pl_ratio': pl_ratio,
@@ -535,19 +743,33 @@ def webhook():
                 # SL/TP 주문 확인
                 if not orders['sl_order']:
                     logging.warning("⚠️ 손절 주문이 생성되지 않았습니다!")
+                    warning_msg = "⚠️ 손절 주문 생성 실패"
+                    send_telegram_notification(warning_msg, 'error')
+                    
                 if not orders['tp_order']:
                     logging.warning("⚠️ 익절 주문이 생성되지 않았습니다!")
+                    warning_msg = "⚠️ 익절 주문 생성 실패"
+                    send_telegram_notification(warning_msg, 'error')
                 
                 logging.info(f"주문 응답: {json.dumps(response, indent=2)}")
                 return jsonify(response), 200
             else:
-                return jsonify({'error': '주문 실행 실패'}), 500
+                error_msg = "주문 실행 실패"
+                return jsonify({'error': error_msg}), 500
         
         else:
-            return jsonify({'error': '알 수 없는 액션'}), 400
+            error_msg = f"알 수 없는 액션: {action}"
+            error_message = format_error_message("알 수 없는 액션", error_msg)
+            send_telegram_notification(error_message, 'error')
+            return jsonify({'error': error_msg}), 400
             
     except Exception as e:
         logging.error(f"웹훅 처리 오류: {str(e)}")
+        
+        # 웹훅 처리 오류 알림
+        error_message = format_error_message("웹훅 처리", str(e))
+        send_telegram_notification(error_message, 'error')
+        
         return jsonify({'error': str(e)}), 500
 
 def get_account_balance():
@@ -708,6 +930,7 @@ def status():
         'position_size_percent': POSITION_SIZE_PERCENT,
         'current_positions': len(current_positions),
         'tracked_positions': current_positions,
+        'telegram_configured': bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS),
         'timestamp': datetime.now().isoformat()
     }), 200
 
@@ -741,6 +964,36 @@ def check_orders():
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+# 텔레그램 테스트 엔드포인트 추가
+@app.route('/test-telegram', methods=['POST'])
+def test_telegram():
+    """텔레그램 알림 테스트"""
+    try:
+        test_message = f"""
+🧪 <b>텔레그램 알림 테스트</b>
+
+✅ 설정이 정상적으로 작동합니다!
+🤖 봇이 준비되었습니다.
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """.strip()
+        
+        send_telegram_notification(test_message, 'normal')
+        
+        return jsonify({
+            'status': 'success',
+            'message': '텔레그램 알림 테스트 완료',
+            'telegram_configured': bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS),
+            'chat_ids_count': len([id for id in TELEGRAM_CHAT_IDS if id.strip()]),
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 if __name__ == '__main__':
     # 서버 시작 시 초기화
