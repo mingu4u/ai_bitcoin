@@ -333,16 +333,15 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
             
             logging.info(f"손절 주문 설정: {stop_side} {amount} BTC @ stop ${stop_loss_price:.2f}")
             
-            # Binance Futures의 경우 Stop Market 주문 사용
+            # Binance Futures Stop Market 주문 - params 안에 stopPrice 넣기
             sl_order = exchange.create_order(
                 symbol=SYMBOL,
-                type='stop_market',  # 'stop' 대신 'stop_market' 사용
+                type='stop_market',
                 side=stop_side,
                 amount=amount,
-                stopPrice=stop_loss_price,
                 params={
                     'stopPrice': stop_loss_price,
-                    'workingType': 'MARK_PRICE',  # Mark Price 기준
+                    'workingType': 'MARK_PRICE',
                     'reduceOnly': True,
                     'postOnly': False
                 }
@@ -351,14 +350,14 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
             logging.info(f"손절 주문 생성 완료: Order ID = {sl_order['id'] if sl_order else 'None'}")
             
             # 3. 익절 주문 설정
-            logging.info(f"익절 주문 설정: {stop_side} {amount} BTC @ limit ${take_profit_price:.2f}")
+            logging.info(f"익절 주문 설정: {stop_side} {amount} BTC @ take_profit ${take_profit_price:.2f}")
             
+            # Binance Futures Take Profit Market 주문 - params 안에 stopPrice 넣기
             tp_order = exchange.create_order(
                 symbol=SYMBOL,
-                type='take_profit_market',  # 'limit' 대신 'take_profit_market' 사용
+                type='take_profit_market',
                 side=stop_side,
                 amount=amount,
-                stopPrice=take_profit_price,
                 params={
                     'stopPrice': take_profit_price,
                     'workingType': 'MARK_PRICE',
@@ -508,24 +507,26 @@ def update_trailing_stop_with_pl_ratio(new_stop_loss_price, pl_ratio):
         # 새로운 손절/익절 주문 생성
         stop_side = 'sell' if position['side'] == 'buy' else 'buy'
         
-        # 새 손절 주문
+        # 새 손절 주문 - params 안에 stopPrice 넣기
         new_sl_order = exchange.create_order(
             symbol=SYMBOL,
             type='stop_market',
             side=stop_side,
             amount=position['amount'],
-            stopPrice=new_stop_loss_price,
-            params={'reduceOnly': True}
+            params={
+                'stopPrice': new_stop_loss_price,
+                'reduceOnly': True
+            }
         )
         
-        # 새 익절 주문
+        # 새 익절 주문 - params 안에 stopPrice 넣기
         new_tp_order = exchange.create_order(
             symbol=SYMBOL,
             type='take_profit_market',
             side=stop_side,
             amount=position['amount'],
-            stopPrice=new_take_profit,
             params={
+                'stopPrice': new_take_profit,
                 'reduceOnly': True,
                 'postOnly': False
             }
@@ -565,14 +566,30 @@ def update_trailing_stop_with_pl_ratio(new_stop_loss_price, pl_ratio):
 def webhook():
     """TradingView 웹훅 수신"""
     try:
+        # Content-Type 확인 및 처리
+        content_type = request.headers.get('Content-Type', '')
+        
+        # TradingView는 text/plain으로 보내므로 수동으로 JSON 파싱
+        if 'application/json' in content_type:
+            data = request.get_json()
+        else:
+            # text/plain 또는 기타 형식으로 온 경우
+            raw_data = request.get_data(as_text=True)
+            logging.info(f"Raw webhook data: {raw_data}")
+            
+            try:
+                # JSON 문자열로 파싱 시도
+                data = json.loads(raw_data)
+            except json.JSONDecodeError:
+                logging.error(f"JSON 파싱 실패: {raw_data}")
+                return jsonify({'error': 'Invalid JSON format'}), 400
+        
         # 웹훅 처리 전 동기화
         sync_positions_with_exchange()
         
-        # 웹훅 데이터 파싱
-        data = request.get_json()
         logging.info(f"웹훅 수신: {json.dumps(data, indent=2)}")
         
-        # JSON 문자열인 경우 파싱
+        # JSON 문자열인 경우 파싱 (중복 체크)
         if isinstance(data, str):
             data = json.loads(data)
         
