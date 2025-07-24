@@ -84,11 +84,17 @@ def format_position_entry_message(action, amount, entry_price, stop_loss, take_p
     risk_amount = abs(entry_price - stop_loss) * amount
     reward_amount = abs(take_profit - entry_price) * amount
     
+    # 증거금 계산 (레버리지 10배 가정)
+    margin_used = position_size / 10
+    margin_percent = (margin_used / balance) * 100
+    
     message = f"""
 {direction_emoji} <b>새 포지션 진입</b>
 
 📊 <b>방향:</b> {direction_text}
-💰 <b>수량:</b> {amount:.6f} BTC (${position_size:.2f})
+💰 <b>수량:</b> {amount:.6f} BTC
+💵 <b>포지션 크기:</b> ${position_size:.2f}
+🏦 <b>사용 증거금:</b> ${margin_used:.2f} ({margin_percent:.1f}%)
 💵 <b>진입가:</b> ${entry_price:,.2f}
 🛑 <b>손절가:</b> ${stop_loss:,.2f}
 🎯 <b>익절가:</b> ${take_profit:,.2f}
@@ -298,6 +304,30 @@ def calculate_tp_from_pl_ratio(entry_price, stop_loss_price, pl_ratio, side):
 def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price, pl_ratio):
     """손익비 기반으로 계산된 TP와 함께 주문 실행"""
     try:
+        # Binance의 심볼 정보 가져오기 (최소 주문 단위 확인)
+        markets = exchange.load_markets()
+        market = markets[SYMBOL]
+        
+        # 수량 정밀도 적용
+        amount_precision = market['precision']['amount']
+        min_amount = market['limits']['amount']['min']
+        
+        # 수량을 정밀도에 맞게 조정
+        adjusted_amount = exchange.amount_to_precision(SYMBOL, amount)
+        
+        logging.info(f"""
+        수량 조정:
+        - 원본 수량: {amount} BTC
+        - 최소 수량: {min_amount} BTC
+        - 정밀도: {amount_precision}
+        - 조정된 수량: {adjusted_amount} BTC
+        """)
+        
+        # 최소 수량 체크
+        if float(adjusted_amount) < min_amount:
+            logging.warning(f"조정된 수량 {adjusted_amount}이 최소 수량 {min_amount}보다 작습니다.")
+            adjusted_amount = min_amount
+        
         # 손익비 기반 TP 계산
         take_profit_price = calculate_tp_from_pl_ratio(
             entry_price, stop_loss_price, pl_ratio, side
@@ -307,12 +337,12 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
         exchange.set_leverage(10, SYMBOL)
         
         # 1. 메인 주문 실행
-        logging.info(f"메인 주문 실행: {side} {amount} BTC @ market")
+        logging.info(f"메인 주문 실행: {side} {adjusted_amount} BTC @ market")
         main_order = exchange.create_order(
             symbol=SYMBOL,
             type='market',
             side=side,
-            amount=amount
+            amount=adjusted_amount
         )
         
         if main_order:
@@ -331,14 +361,14 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
             # 2. 손절 주문 설정
             stop_side = 'sell' if side == 'buy' else 'buy'
             
-            logging.info(f"손절 주문 설정: {stop_side} {amount} BTC @ stop ${stop_loss_price:.2f}")
+            logging.info(f"손절 주문 설정: {stop_side} {adjusted_amount} BTC @ stop ${stop_loss_price:.2f}")
             
             # Binance Futures Stop Market 주문 - params 안에 stopPrice 넣기
             sl_order = exchange.create_order(
                 symbol=SYMBOL,
                 type='stop_market',
                 side=stop_side,
-                amount=amount,
+                amount=adjusted_amount,
                 params={
                     'stopPrice': stop_loss_price,
                     'workingType': 'MARK_PRICE',
@@ -350,14 +380,14 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
             logging.info(f"손절 주문 생성 완료: Order ID = {sl_order['id'] if sl_order else 'None'}")
             
             # 3. 익절 주문 설정
-            logging.info(f"익절 주문 설정: {stop_side} {amount} BTC @ take_profit ${take_profit_price:.2f}")
+            logging.info(f"익절 주문 설정: {stop_side} {adjusted_amount} BTC @ take_profit ${take_profit_price:.2f}")
             
             # Binance Futures Take Profit Market 주문 - params 안에 stopPrice 넣기
             tp_order = exchange.create_order(
                 symbol=SYMBOL,
                 type='take_profit_market',
                 side=stop_side,
-                amount=amount,
+                amount=adjusted_amount,
                 params={
                     'stopPrice': take_profit_price,
                     'workingType': 'MARK_PRICE',
@@ -371,7 +401,7 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
             # 4. 포지션 정보 저장
             current_positions[SYMBOL] = {
                 'side': side,
-                'amount': amount,
+                'amount': float(adjusted_amount),
                 'entry_price': actual_entry,
                 'stop_loss': stop_loss_price,
                 'take_profit': take_profit_price,
@@ -384,7 +414,7 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
             # 5. 주문 확인
             logging.info("=== 주문 완료 요약 ===")
             logging.info(f"포지션: {side.upper()}")
-            logging.info(f"수량: {amount} BTC")
+            logging.info(f"수량: {adjusted_amount} BTC")
             logging.info(f"진입가: ${actual_entry:.2f}")
             logging.info(f"손절가: ${stop_loss_price:.2f} (리스크: ${abs(actual_entry - stop_loss_price):.2f})")
             logging.info(f"익절가: ${take_profit_price:.2f} (수익: ${abs(take_profit_price - actual_entry):.2f})")
@@ -396,7 +426,8 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
                 'sl_order': sl_order,
                 'tp_order': tp_order,
                 'calculated_tp': take_profit_price,
-                'actual_entry': actual_entry
+                'actual_entry': actual_entry,
+                'adjusted_amount': adjusted_amount
             }
             
     except Exception as e:
@@ -731,8 +762,9 @@ def webhook():
                 check_position_status()
                 
                 # 📱 포지션 진입 알림 전송
+                actual_amount = float(orders.get('adjusted_amount', btc_amount))
                 entry_message = format_position_entry_message(
-                    action, btc_amount, orders['actual_entry'], 
+                    action, actual_amount, orders['actual_entry'], 
                     stop_loss_price, orders['calculated_tp'], 
                     pl_ratio, position_size, balance
                 )
@@ -742,7 +774,8 @@ def webhook():
                     'status': 'success',
                     'action': action,
                     'position_type': position_type,
-                    'amount': btc_amount,
+                    'amount': actual_amount,
+                    'requested_amount': btc_amount,
                     'value': position_size,
                     'entry_price': orders['actual_entry'],
                     'stop_loss': stop_loss_price,
@@ -800,12 +833,45 @@ def get_account_balance():
         return None
 
 def calculate_position_size(balance):
-    """잔고 기반 포지션 크기 계산"""
+    """잔고 기반 포지션 크기 계산 (증거금 기준)"""
     if balance is None:
         return None
     
-    position_size = balance * POSITION_SIZE_PERCENT / 100
+    # 증거금 = 잔고의 X%
+    margin = balance * POSITION_SIZE_PERCENT / 100
+    
+    # 현재 레버리지 확인
+    try:
+        # Binance에서 현재 레버리지 가져오기
+        positions = exchange.fetch_positions([SYMBOL])
+        current_leverage = 10  # 기본값
+        
+        for pos in positions:
+            if pos['symbol'] == SYMBOL:
+                current_leverage = pos.get('leverage', 10)
+                break
+                
+        # 레버리지가 설정되어 있지 않으면 기본값 사용
+        if current_leverage is None or current_leverage == 0:
+            current_leverage = 10
+            
+    except:
+        current_leverage = 10  # 오류 시 기본값
+    
+    # 포지션 크기 = 증거금 × 레버리지
+    position_size = margin * current_leverage
+    
+    # 최소/최대 제한 적용
     position_size = max(MIN_POSITION_SIZE, min(position_size, MAX_POSITION_SIZE))
+    
+    logging.info(f"""
+    포지션 크기 계산:
+    - 잔고: ${balance:.2f}
+    - 증거금 비율: {POSITION_SIZE_PERCENT}%
+    - 증거금: ${margin:.2f}
+    - 레버리지: {current_leverage}x
+    - 포지션 크기: ${position_size:.2f}
+    """)
     
     return position_size
 
