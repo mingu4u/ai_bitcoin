@@ -84,9 +84,9 @@ def format_position_entry_message(action, amount, entry_price, stop_loss, take_p
     risk_amount = abs(entry_price - stop_loss) * amount
     reward_amount = abs(take_profit - entry_price) * amount
     
-    # 증거금 계산 (레버리지 10배 가정)
-    margin_used = position_size / 10
-    margin_percent = (margin_used / balance) * 100
+    # 증거금 계산 (레버리지 20배 가정)
+    margin_used = position_size / 20
+    margin_percent = (margin_used / balance) * 200
     
     message = f"""
 {direction_emoji} <b>새 포지션 진입</b>
@@ -334,7 +334,7 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
         )
         
         # 레버리지 설정
-        exchange.set_leverage(10, SYMBOL)
+        exchange.set_leverage(20, SYMBOL)
         
         # 1. 메인 주문 실행
         logging.info(f"메인 주문 실행: {side} {adjusted_amount} BTC @ market")
@@ -408,7 +408,8 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
                 'pl_ratio': pl_ratio,
                 'sl_order_id': sl_order['id'] if sl_order else None,
                 'tp_order_id': tp_order['id'] if tp_order else None,
-                'timestamp': datetime.now().isoformat()
+                'timestamp': datetime.now().isoformat(),
+                'manual_entry': False  # 자동 진입 표시
             }
             
             # 5. 주문 확인
@@ -697,6 +698,67 @@ def webhook():
                     'message': error_msg
                 }), 400
             
+            # ===== 핵심 수정 부분: 기존 포지션 체크 =====
+            # 현재 포지션이 있는지 확인
+            if SYMBOL in current_positions:
+                existing_position = current_positions[SYMBOL]
+                
+                # 수동 진입 포지션이 아니고, 봇이 자동으로 진입한 포지션인 경우만 체크
+                if not existing_position.get('manual_entry', False):
+                    # 같은 방향의 포지션이 이미 있는 경우
+                    if existing_position['side'] == action:
+                        logging.info(f"⚠️ 이미 {action.upper()} 포지션이 존재합니다. 추가 진입을 스킵합니다.")
+                        
+                        # 알림 전송
+                        skip_message = f"""
+⚠️ <b>포지션 중복 방지</b>
+
+이미 {action.upper()} 포지션이 존재합니다.
+추가 진입을 스킵합니다.
+
+📊 <b>현재 포지션:</b>
+- 방향: {existing_position['side'].upper()}
+- 수량: {existing_position['amount']:.6f} BTC
+- 진입가: ${existing_position['entry_price']:,.2f}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                        """.strip()
+                        
+                        send_telegram_notification(skip_message, 'normal')
+                        
+                        return jsonify({
+                            'status': 'skipped',
+                            'reason': '같은 방향 포지션 이미 존재',
+                            'existing_position': {
+                                'side': existing_position['side'],
+                                'amount': existing_position['amount'],
+                                'entry_price': existing_position['entry_price']
+                            },
+                            'timestamp': datetime.now().isoformat()
+                        }), 200
+                    
+                    # 반대 방향의 포지션이 있는 경우 - 기존 포지션 청산 후 진입
+                    else:
+                        logging.info(f"⚠️ 반대 방향 포지션 존재. 기존 {existing_position['side'].upper()} 포지션을 청산하고 {action.upper()}로 전환합니다.")
+                        
+                        # 반대 포지션 전환 알림
+                        reverse_message = f"""
+🔄 <b>포지션 전환</b>
+
+기존 {existing_position['side'].upper()} 포지션을 청산하고
+새로운 {action.upper()} 포지션으로 전환합니다.
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                        """.strip()
+                        
+                        send_telegram_notification(reverse_message, 'high')
+                        
+                        # 기존 포지션 청산
+                        close_all_positions()
+                else:
+                    # 수동 진입 포지션은 건드리지 않음
+                    logging.info("수동 진입 포지션이 존재하지만, 자동 매매 신호를 처리합니다.")
+            
             # 잔고 확인
             balance = get_account_balance()
             if balance is None:
@@ -747,9 +809,6 @@ def webhook():
             - P/L Ratio: {pl_ratio}:1
             =======================
             """)
-            
-            # 기존 포지션 청산
-            close_all_positions()
             
             # 새 주문 실행 (stop_loss 포함)
             orders = place_order_with_calculated_stops(
@@ -844,19 +903,19 @@ def calculate_position_size(balance):
     try:
         # Binance에서 현재 레버리지 가져오기
         positions = exchange.fetch_positions([SYMBOL])
-        current_leverage = 10  # 기본값
+        current_leverage = 20  # 기본값
         
         for pos in positions:
             if pos['symbol'] == SYMBOL:
-                current_leverage = pos.get('leverage', 10)
+                current_leverage = pos.get('leverage', 20)
                 break
                 
         # 레버리지가 설정되어 있지 않으면 기본값 사용
         if current_leverage is None or current_leverage == 0:
-            current_leverage = 10
+            current_leverage = 20
             
     except:
-        current_leverage = 10  # 오류 시 기본값
+        current_leverage = 20  # 오류 시 기본값
     
     # 포지션 크기 = 증거금 × 레버리지
     position_size = margin * current_leverage
