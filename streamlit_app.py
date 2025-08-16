@@ -8,6 +8,7 @@ import requests
 import json
 from datetime import datetime, timedelta
 import time
+import asyncio
 
 # Middle Server 설정
 MIDDLE_SERVER_URL = "http://localhost:5000"
@@ -22,10 +23,50 @@ def check_middle_server_health():
     except:
         return False, None
 
+def get_all_positions():
+    """모든 심볼의 포지션 정보 가져오기"""
+    try:
+        response = requests.get(f"{MIDDLE_SERVER_URL}/all-positions", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except:
+        return None
+
+def get_account_balance():
+    """계정 전체 잔고 정보 가져오기"""
+    try:
+        response = requests.get(f"{MIDDLE_SERVER_URL}/balance", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except:
+        return None
+
 def get_current_positions():
     """현재 포지션 정보 가져오기"""
     try:
         response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except:
+        return None
+
+def get_symbol_price(symbol):
+    """특정 심볼의 현재 가격 가져오기"""
+    try:
+        response = requests.get(f"{MIDDLE_SERVER_URL}/price/{symbol}", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+        return None
+    except:
+        return None
+
+def get_portfolio_value():
+    """포트폴리오 전체 가치 계산"""
+    try:
+        response = requests.get(f"{MIDDLE_SERVER_URL}/portfolio-value", timeout=5)
         if response.status_code == 200:
             return response.json()
         return None
@@ -62,12 +103,15 @@ def test_telegram():
     except:
         return False, None
 
-def close_position_manually():
+def close_position_manually(symbol=None):
     """수동으로 포지션 종료"""
     try:
         data = {
             "action": "close_position"
         }
+        if symbol:
+            data["symbol"] = symbol
+            
         response = requests.post(
             f"{MIDDLE_SERVER_URL}/webhook",
             json=data,
@@ -128,7 +172,7 @@ def calculate_performance_metrics(trades_df):
     
     trades_df = trades_df.sort_values('timestamp')
     
-    # 총 수익률
+    # 이 수익률
     total_return = ((trades_df['total_assets'].iloc[-1] - trades_df['total_assets'].iloc[0]) 
                    / trades_df['total_assets'].iloc[0]) * 100
     
@@ -158,12 +202,139 @@ def calculate_performance_metrics(trades_df):
         'risk_adjusted_return': risk_adjusted_return
     }
 
+def display_portfolio_overview():
+    """포트폴리오 전체 개요 표시"""
+    st.subheader("💰 Portfolio Overview")
+    
+    # 포트폴리오 전체 가치 가져오기
+    portfolio_data = get_portfolio_value()
+    balance_data = get_account_balance()
+    
+    if portfolio_data and balance_data:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            total_value = portfolio_data.get('total_portfolio_value', 0)
+            st.metric("Total Portfolio Value", f"${total_value:,.2f}")
+        
+        with col2:
+            total_pnl = portfolio_data.get('total_unrealized_pnl', 0)
+            pnl_color = "normal" if total_pnl >= 0 else "inverse"
+            st.metric("Unrealized PnL", f"${total_pnl:,.2f}", delta=total_pnl, delta_color=pnl_color)
+        
+        with col3:
+            usdt_balance = balance_data.get('USDT', {}).get('free', 0)
+            st.metric("Available USDT", f"${float(usdt_balance):,.2f}")
+        
+        with col4:
+            active_positions = len([pos for pos in portfolio_data.get('positions', []) if float(pos.get('size', 0)) != 0])
+            st.metric("Active Positions", active_positions)
+        
+        # 주요 코인 보유량 표시
+        if balance_data:
+            st.subheader("🪙 Major Holdings")
+            holdings_data = []
+            
+            for symbol, balance_info in balance_data.items():
+                free_balance = float(balance_info.get('free', 0))
+                locked_balance = float(balance_info.get('locked', 0))
+                total_balance = free_balance + locked_balance
+                
+                if total_balance > 0 and symbol != 'USDT':
+                    # 현재 가격 가져오기
+                    price_data = get_symbol_price(f"{symbol}USDT")
+                    current_price = float(price_data.get('price', 0)) if price_data else 0
+                    value_usdt = total_balance * current_price
+                    
+                    holdings_data.append({
+                        'Symbol': symbol,
+                        'Free': free_balance,
+                        'Locked': locked_balance,
+                        'Total': total_balance,
+                        'Price (USDT)': current_price,
+                        'Value (USDT)': value_usdt
+                    })
+            
+            if holdings_data:
+                holdings_df = pd.DataFrame(holdings_data)
+                holdings_df = holdings_df.sort_values('Value (USDT)', ascending=False)
+                st.dataframe(holdings_df, use_container_width=True)
+
+def display_realtime_positions():
+    """실시간 포지션 정보 표시"""
+    st.subheader("📊 Active Positions")
+    
+    # 모든 포지션 정보 가져오기
+    all_positions = get_all_positions()
+    
+    if all_positions and all_positions.get('positions'):
+        positions_data = []
+        
+        for position in all_positions['positions']:
+            if float(position.get('positionAmt', 0)) != 0:  # 활성 포지션만
+                symbol = position.get('symbol', '')
+                side = 'LONG' if float(position.get('positionAmt', 0)) > 0 else 'SHORT'
+                size = abs(float(position.get('positionAmt', 0)))
+                entry_price = float(position.get('entryPrice', 0))
+                mark_price = float(position.get('markPrice', 0))
+                pnl = float(position.get('unRealizedProfit', 0))
+                pnl_percent = (pnl / (size * entry_price)) * 100 if entry_price > 0 else 0
+                
+                positions_data.append({
+                    'Symbol': symbol,
+                    'Side': side,
+                    'Size': size,
+                    'Entry Price': entry_price,
+                    'Mark Price': mark_price,
+                    'PnL (USDT)': pnl,
+                    'PnL (%)': pnl_percent
+                })
+        
+        if positions_data:
+            positions_df = pd.DataFrame(positions_data)
+            
+            # 각 포지션을 카드 형태로 표시
+            for idx, row in positions_df.iterrows():
+                col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                
+                with col1:
+                    side_color = "🟢" if row['Side'] == 'LONG' else "🔴"
+                    st.write(f"{side_color} **{row['Symbol']}** ({row['Side']})")
+                    st.write(f"Size: {row['Size']:.6f}")
+                
+                with col2:
+                    st.write(f"Entry: ${row['Entry Price']:,.4f}")
+                    st.write(f"Mark: ${row['Mark Price']:,.4f}")
+                
+                with col3:
+                    pnl_color = "green" if row['PnL (USDT)'] >= 0 else "red"
+                    st.markdown(f"<span style='color:{pnl_color}'>PnL: ${row['PnL (USDT)']:,.2f}</span>", 
+                              unsafe_allow_html=True)
+                    st.markdown(f"<span style='color:{pnl_color}'>({row['PnL (%)']:+.2f}%)</span>", 
+                              unsafe_allow_html=True)
+                
+                with col4:
+                    if st.button(f"Close {row['Symbol']}", key=f"close_{row['Symbol']}_{idx}"):
+                        success, result = close_position_manually(row['Symbol'])
+                        if success:
+                            st.success(f"Position {row['Symbol']} closed!")
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to close {row['Symbol']}")
+                
+                st.write("---")
+        else:
+            st.info("No active positions")
+    else:
+        st.warning("Unable to fetch position data")
+
 def display_realtime_section():
     """실시간 거래 정보 섹션"""
     st.header('🔴 Real-time Trading Status')
     
     # Health Check 상태 표시
-    col1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2 = st.columns([1, 3])
     
     with col1:
         health_status, server_data = check_middle_server_health()
@@ -181,111 +352,44 @@ def display_realtime_section():
                     st.success("📱 Telegram: Connected")
                 else:
                     st.warning("📱 Telegram: Not configured")
+                    
+                # 컨트롤 버튼들
+                st.subheader("⚙️ Controls")
+                
+                if st.button("🔄 Sync Positions", use_container_width=True):
+                    success, data = sync_positions()
+                    if success:
+                        st.success("Synced successfully!")
+                    else:
+                        st.error("Sync failed")
+                
+                if st.button("📱 Test Telegram", use_container_width=True):
+                    success, data = test_telegram()
+                    if success:
+                        st.success("Telegram test sent!")
+                    else:
+                        st.error("Telegram test failed")
         else:
             st.error("❌ Server Offline")
             st.info("Please check if middle_server.py is running on port 5000")
     
     with col2:
         if health_status:
-            # 현재 포지션 정보
-            positions_data = get_current_positions()
-            if positions_data:
-                st.subheader("📊 Current Position")
-                
-                # 추적 중인 포지션 정보
-                if positions_data.get('tracked_positions'):
-                    for symbol, pos_info in positions_data['tracked_positions'].items():
-                        st.write(f"**{symbol}**")
-                        
-                        # 포지션 정보 표시
-                        pos_col1, pos_col2 = st.columns(2)
-                        with pos_col1:
-                            st.write(f"• Side: **{pos_info.get('side', 'N/A').upper()}**")
-                            st.write(f"• Amount: {pos_info.get('amount', 0):.6f} BTC")
-                            st.write(f"• Entry: ${pos_info.get('entry_price', 0):,.2f}")
-                            if pos_info.get('manual_entry'):
-                                st.info("📝 Manual Entry")
-                        
-                        with pos_col2:
-                            st.write(f"• Stop Loss: ${pos_info.get('stop_loss', 0):,.2f}")
-                            st.write(f"• Take Profit: ${pos_info.get('take_profit', 0):,.2f}")
-                            st.write(f"• P/L Ratio: {pos_info.get('pl_ratio', 0):.1f}:1")
-                        
-                        # PnL 정보
-                        if positions_data.get('position_info'):
-                            pnl_info = positions_data['position_info']
-                            st.write("---")
-                            pnl_col1, pnl_col2, pnl_col3 = st.columns(3)
-                            
-                            with pnl_col1:
-                                pnl = pnl_info.get('unrealized_pnl', 0)
-                                pnl_color = "green" if pnl >= 0 else "red"
-                                st.markdown(f"**PnL:** <span style='color:{pnl_color}'>${pnl:,.2f}</span>", 
-                                          unsafe_allow_html=True)
-                            
-                            with pnl_col2:
-                                pnl_pct = pnl_info.get('pnl_percent', 0)
-                                pnl_pct_color = "green" if pnl_pct >= 0 else "red"
-                                st.markdown(f"**PnL %:** <span style='color:{pnl_pct_color}'>{pnl_pct:.2f}%</span>", 
-                                          unsafe_allow_html=True)
-                            
-                            with pnl_col3:
-                                st.write(f"**Current Price:** ${pnl_info.get('current_price', 0):,.2f}")
-                else:
-                    st.info("No active positions")
+            # 포트폴리오 개요
+            display_portfolio_overview()
     
-    with col3:
-        if health_status:
-            st.subheader("⚙️ Controls")
-            
-            # 동기화 버튼
-            if st.button("🔄 Sync Positions", use_container_width=True):
-                success, data = sync_positions()
-                if success:
-                    st.success("Synced successfully!")
-                else:
-                    st.error("Sync failed")
-            
-            # 텔레그램 테스트
-            if st.button("📱 Test Telegram", use_container_width=True):
-                success, data = test_telegram()
-                if success:
-                    st.success("Telegram test sent!")
-                else:
-                    st.error("Telegram test failed")
-            
-            # 포지션 종료 버튼 (위험한 작업이므로 확인 필요)
-            st.write("---")
-            st.warning("⚠️ Danger Zone")
-            
-            # 체크박스로 확인
-            confirm_close = st.checkbox("I want to close position")
-            
-            if confirm_close:
-                if st.button("🛑 CLOSE POSITION", use_container_width=True, type="primary"):
-                    success, data = close_position_manually()
-                    if success:
-                        st.success("Position closed!")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error("Failed to close position")
-    
-    # 열린 주문 정보
+    # 실시간 포지션 정보
     if health_status:
-        st.write("---")
+        display_realtime_positions()
+        
+        # 열린 주문 정보
+        st.subheader("📋 Open Orders")
         orders_data = get_open_orders()
         if orders_data and orders_data.get('orders'):
-            st.subheader("📋 Open Orders")
-            
             orders_df = pd.DataFrame(orders_data['orders'])
             st.dataframe(orders_df, use_container_width=True)
-        
-        # 자동 새로고침 옵션
-        auto_refresh = st.checkbox("Auto refresh (5 seconds)", value=False)
-        if auto_refresh:
-            time.sleep(5)
-            st.rerun()
+        else:
+            st.info("No open orders")
 
 def display_historical_section(df):
     """기존 히스토리 섹션"""
@@ -435,13 +539,24 @@ def display_charts_section(df):
 
 def main():
     st.set_page_config(
-        page_title="Trading Bot Dashboard",
+        page_title="Multi-Coin Trading Bot Dashboard",
         page_icon="🤖",
         layout="wide",
         initial_sidebar_state="expanded"
     )
     
-    st.title("🤖 Ming9's Bitcoin Trading Bot Dashboard")
+    st.title("🤖 Ming9's Multi-Coin Trading Bot Dashboard")
+    
+    # 자동 새로고침 설정
+    auto_refresh = st.sidebar.checkbox("🔄 Auto Refresh (10 seconds)", value=False)
+    
+    if auto_refresh:
+        refresh_placeholder = st.sidebar.empty()
+        for seconds in range(10, 0, -1):
+            refresh_placeholder.write(f"⏰ Refreshing in {seconds} seconds...")
+            time.sleep(1)
+        refresh_placeholder.write("🔄 Refreshing now...")
+        st.rerun()
     
     # 탭 생성
     tab1, tab2, tab3 = st.tabs(["🔴 Live Trading", "📈 Historical Data", "📊 Analysis"])
@@ -556,12 +671,19 @@ def main():
             st.rerun()
         
         if health_status:
-            if st.button("📊 Check Positions", use_container_width=True):
-                positions = get_current_positions()
+            if st.button("📊 Check All Positions", use_container_width=True):
+                positions = get_all_positions()
                 if positions:
-                    st.json(positions.get('tracked_positions', {}))
+                    st.json(positions.get('positions', {}))
                 else:
                     st.error("Failed to get positions")
+            
+            if st.button("💰 Check Portfolio Value", use_container_width=True):
+                portfolio = get_portfolio_value()
+                if portfolio:
+                    st.json(portfolio)
+                else:
+                    st.error("Failed to get portfolio value")
 
 if __name__ == "__main__":
     main()
