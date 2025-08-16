@@ -24,9 +24,9 @@ def check_middle_server_health():
         return False, None
 
 def get_all_positions():
-    """모든 심볼의 포지션 정보 가져오기"""
+    """모든 심볼의 포지션 정보 가져오기 (기존 엔드포인트 사용)"""
     try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/all-positions", timeout=5)
+        response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
         if response.status_code == 200:
             return response.json()
         return None
@@ -34,9 +34,10 @@ def get_all_positions():
         return None
 
 def get_account_balance():
-    """계정 전체 잔고 정보 가져오기"""
+    """계정 전체 잔고 정보 가져오기 (기존 엔드포인트 사용)"""
     try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/balance", timeout=5)
+        # 기존 positions 엔드포인트에서 잔고 정보도 함께 제공된다고 가정
+        response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
         if response.status_code == 200:
             return response.json()
         return None
@@ -54,21 +55,36 @@ def get_current_positions():
         return None
 
 def get_symbol_price(symbol):
-    """특정 심볼의 현재 가격 가져오기"""
+    """특정 심볼의 현재 가격 가져오기 (기존 엔드포인트 사용)"""
     try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/price/{symbol}", timeout=5)
+        # 기존 positions 엔드포인트에서 가격 정보도 포함되어 있다고 가정
+        response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            # position_info에서 현재 가격 정보를 찾아서 반환
+            if 'position_info' in data and 'current_price' in data['position_info']:
+                return {'price': data['position_info']['current_price']}
         return None
     except:
         return None
 
 def get_portfolio_value():
-    """포트폴리오 전체 가치 계산"""
+    """포트폴리오 전체 가치 계산 (기존 데이터 활용)"""
     try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/portfolio-value", timeout=5)
+        response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            # 기존 데이터에서 포트폴리오 정보 추출
+            portfolio_data = {
+                'total_portfolio_value': 0,
+                'total_unrealized_pnl': 0,
+                'positions': []
+            }
+            
+            if 'position_info' in data:
+                portfolio_data['total_unrealized_pnl'] = data['position_info'].get('unrealized_pnl', 0)
+            
+            return portfolio_data
         return None
     except:
         return None
@@ -203,131 +219,108 @@ def calculate_performance_metrics(trades_df):
     }
 
 def display_portfolio_overview():
-    """포트폴리오 전체 개요 표시"""
+    """포트폴리오 전체 개요 표시 (기존 데이터 활용)"""
     st.subheader("💰 Portfolio Overview")
     
-    # 포트폴리오 전체 가치 가져오기
-    portfolio_data = get_portfolio_value()
-    balance_data = get_account_balance()
+    # 기존 positions 엔드포인트에서 데이터 가져오기
+    positions_data = get_current_positions()
     
-    if portfolio_data and balance_data:
+    if positions_data:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            total_value = portfolio_data.get('total_portfolio_value', 0)
-            st.metric("Total Portfolio Value", f"${total_value:,.2f}")
+            # position_info에서 총 자산 정보 추출
+            if 'position_info' in positions_data:
+                current_price = positions_data['position_info'].get('current_price', 0)
+                st.metric("Current BTC Price", f"${current_price:,.2f}")
+            else:
+                st.metric("Current BTC Price", "N/A")
         
         with col2:
-            total_pnl = portfolio_data.get('total_unrealized_pnl', 0)
-            pnl_color = "normal" if total_pnl >= 0 else "inverse"
-            st.metric("Unrealized PnL", f"${total_pnl:,.2f}", delta=total_pnl, delta_color=pnl_color)
+            if 'position_info' in positions_data:
+                total_pnl = positions_data['position_info'].get('unrealized_pnl', 0)
+                pnl_color = "normal" if total_pnl >= 0 else "inverse"
+                st.metric("Unrealized PnL", f"${total_pnl:,.2f}", delta=total_pnl, delta_color=pnl_color)
+            else:
+                st.metric("Unrealized PnL", "$0.00")
         
         with col3:
-            usdt_balance = balance_data.get('USDT', {}).get('free', 0)
-            st.metric("Available USDT", f"${float(usdt_balance):,.2f}")
-        
-        with col4:
-            active_positions = len([pos for pos in portfolio_data.get('positions', []) if float(pos.get('size', 0)) != 0])
+            # tracked_positions에서 활성 포지션 수 계산
+            active_positions = 0
+            if 'tracked_positions' in positions_data:
+                active_positions = len(positions_data['tracked_positions'])
             st.metric("Active Positions", active_positions)
         
-        # 주요 코인 보유량 표시
-        if balance_data:
-            st.subheader("🪙 Major Holdings")
-            holdings_data = []
-            
-            for symbol, balance_info in balance_data.items():
-                free_balance = float(balance_info.get('free', 0))
-                locked_balance = float(balance_info.get('locked', 0))
-                total_balance = free_balance + locked_balance
-                
-                if total_balance > 0 and symbol != 'USDT':
-                    # 현재 가격 가져오기
-                    price_data = get_symbol_price(f"{symbol}USDT")
-                    current_price = float(price_data.get('price', 0)) if price_data else 0
-                    value_usdt = total_balance * current_price
-                    
-                    holdings_data.append({
-                        'Symbol': symbol,
-                        'Free': free_balance,
-                        'Locked': locked_balance,
-                        'Total': total_balance,
-                        'Price (USDT)': current_price,
-                        'Value (USDT)': value_usdt
-                    })
-            
-            if holdings_data:
-                holdings_df = pd.DataFrame(holdings_data)
-                holdings_df = holdings_df.sort_values('Value (USDT)', ascending=False)
-                st.dataframe(holdings_df, use_container_width=True)
+        with col4:
+            if 'position_info' in positions_data:
+                pnl_pct = positions_data['position_info'].get('pnl_percent', 0)
+                st.metric("PnL %", f"{pnl_pct:.2f}%")
+            else:
+                st.metric("PnL %", "0.00%")
 
 def display_realtime_positions():
-    """실시간 포지션 정보 표시"""
+    """실시간 포지션 정보 표시 (기존 데이터 구조 활용)"""
     st.subheader("📊 Active Positions")
     
-    # 모든 포지션 정보 가져오기
-    all_positions = get_all_positions()
+    # 기존 positions 엔드포인트 사용
+    positions_data = get_current_positions()
     
-    if all_positions and all_positions.get('positions'):
-        positions_data = []
-        
-        for position in all_positions['positions']:
-            if float(position.get('positionAmt', 0)) != 0:  # 활성 포지션만
-                symbol = position.get('symbol', '')
-                side = 'LONG' if float(position.get('positionAmt', 0)) > 0 else 'SHORT'
-                size = abs(float(position.get('positionAmt', 0)))
-                entry_price = float(position.get('entryPrice', 0))
-                mark_price = float(position.get('markPrice', 0))
-                pnl = float(position.get('unRealizedProfit', 0))
-                pnl_percent = (pnl / (size * entry_price)) * 100 if entry_price > 0 else 0
-                
-                positions_data.append({
-                    'Symbol': symbol,
-                    'Side': side,
-                    'Size': size,
-                    'Entry Price': entry_price,
-                    'Mark Price': mark_price,
-                    'PnL (USDT)': pnl,
-                    'PnL (%)': pnl_percent
-                })
-        
-        if positions_data:
-            positions_df = pd.DataFrame(positions_data)
+    if positions_data and positions_data.get('tracked_positions'):
+        for symbol, pos_info in positions_data['tracked_positions'].items():
+            col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
             
-            # 각 포지션을 카드 형태로 표시
-            for idx, row in positions_df.iterrows():
-                col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+            with col1:
+                side = pos_info.get('side', 'N/A').upper()
+                side_color = "🟢" if side == 'LONG' else "🔴" if side == 'SHORT' else "⚪"
+                st.write(f"{side_color} **{symbol}** ({side})")
+                st.write(f"Amount: {pos_info.get('amount', 0):.6f}")
+            
+            with col2:
+                st.write(f"Entry: ${pos_info.get('entry_price', 0):,.2f}")
+                st.write(f"Stop Loss: ${pos_info.get('stop_loss', 0):,.2f}")
+            
+            with col3:
+                st.write(f"Take Profit: ${pos_info.get('take_profit', 0):,.2f}")
+                st.write(f"P/L Ratio: {pos_info.get('pl_ratio', 0):.1f}:1")
                 
-                with col1:
-                    side_color = "🟢" if row['Side'] == 'LONG' else "🔴"
-                    st.write(f"{side_color} **{row['Symbol']}** ({row['Side']})")
-                    st.write(f"Size: {row['Size']:.6f}")
-                
-                with col2:
-                    st.write(f"Entry: ${row['Entry Price']:,.4f}")
-                    st.write(f"Mark: ${row['Mark Price']:,.4f}")
-                
-                with col3:
-                    pnl_color = "green" if row['PnL (USDT)'] >= 0 else "red"
-                    st.markdown(f"<span style='color:{pnl_color}'>PnL: ${row['PnL (USDT)']:,.2f}</span>", 
-                              unsafe_allow_html=True)
-                    st.markdown(f"<span style='color:{pnl_color}'>({row['PnL (%)']:+.2f}%)</span>", 
-                              unsafe_allow_html=True)
-                
-                with col4:
-                    if st.button(f"Close {row['Symbol']}", key=f"close_{row['Symbol']}_{idx}"):
-                        success, result = close_position_manually(row['Symbol'])
-                        if success:
-                            st.success(f"Position {row['Symbol']} closed!")
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error(f"Failed to close {row['Symbol']}")
-                
+                # Manual entry 표시
+                if pos_info.get('manual_entry'):
+                    st.info("🔧 Manual Entry")
+            
+            with col4:
+                if st.button(f"Close", key=f"close_{symbol}"):
+                    success, result = close_position_manually(symbol)
+                    if success:
+                        st.success(f"Position {symbol} closed!")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(f"Failed to close {symbol}")
+            
+            # PnL 정보 (position_info에서 가져오기)
+            if positions_data.get('position_info'):
+                pnl_info = positions_data['position_info']
                 st.write("---")
-        else:
-            st.info("No active positions")
+                pnl_col1, pnl_col2, pnl_col3 = st.columns(3)
+                
+                with pnl_col1:
+                    pnl = pnl_info.get('unrealized_pnl', 0)
+                    pnl_color = "green" if pnl >= 0 else "red"
+                    st.markdown(f"**PnL:** <span style='color:{pnl_color}'>${pnl:,.2f}</span>", 
+                              unsafe_allow_html=True)
+                
+                with pnl_col2:
+                    pnl_pct = pnl_info.get('pnl_percent', 0)
+                    pnl_pct_color = "green" if pnl_pct >= 0 else "red"
+                    st.markdown(f"**PnL %:** <span style='color:{pnl_pct_color}'>{pnl_pct:.2f}%</span>", 
+                              unsafe_allow_html=True)
+                
+                with pnl_col3:
+                    st.write(f"**Current Price:** ${pnl_info.get('current_price', 0):,.2f}")
+            
+            st.write("---")
     else:
-        st.warning("Unable to fetch position data")
+        st.info("No active positions")
 
 def display_realtime_section():
     """실시간 거래 정보 섹션"""
@@ -671,19 +664,19 @@ def main():
             st.rerun()
         
         if health_status:
-            if st.button("📊 Check All Positions", use_container_width=True):
-                positions = get_all_positions()
+            if st.button("📊 Check Positions", use_container_width=True):
+                positions = get_current_positions()
                 if positions:
-                    st.json(positions.get('positions', {}))
+                    st.json(positions.get('tracked_positions', {}))
                 else:
                     st.error("Failed to get positions")
             
-            if st.button("💰 Check Portfolio Value", use_container_width=True):
-                portfolio = get_portfolio_value()
-                if portfolio:
-                    st.json(portfolio)
+            if st.button("💰 Check Balance Info", use_container_width=True):
+                positions = get_current_positions()
+                if positions and 'position_info' in positions:
+                    st.json(positions['position_info'])
                 else:
-                    st.error("Failed to get portfolio value")
+                    st.error("Failed to get balance info")
 
 if __name__ == "__main__":
     main()
