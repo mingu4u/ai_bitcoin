@@ -1,17 +1,22 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import math
 import requests
 import json
 from datetime import datetime, timedelta
 import time
-import asyncio
 
 # Middle Server 설정
 MIDDLE_SERVER_URL = "http://localhost:5000"
+
+# 페이지 설정
+st.set_page_config(
+    page_title="Multi-Symbol Trading Bot Dashboard",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 def check_middle_server_health():
     """Middle Server 상태 확인"""
@@ -24,7 +29,7 @@ def check_middle_server_health():
         return False, None
 
 def get_all_positions():
-    """모든 심볼의 포지션 정보 가져오기 (기존 엔드포인트 사용)"""
+    """모든 심볼의 포지션 정보 가져오기"""
     try:
         response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
         if response.status_code == 200:
@@ -33,71 +38,30 @@ def get_all_positions():
     except:
         return None
 
-def get_account_balance():
-    """계정 전체 잔고 정보 가져오기 (기존 엔드포인트 사용)"""
+def get_symbol_config():
+    """심볼 설정 가져오기"""
     try:
-        # 기존 positions 엔드포인트에서 잔고 정보도 함께 제공된다고 가정
-        response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
+        response = requests.get(f"{MIDDLE_SERVER_URL}/config", timeout=5)
         if response.status_code == 200:
             return response.json()
         return None
     except:
         return None
 
-def get_current_positions():
-    """현재 포지션 정보 가져오기"""
+def update_symbol_config(config):
+    """심볼 설정 업데이트"""
     try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
+        response = requests.post(
+            f"{MIDDLE_SERVER_URL}/config",
+            json=config,
+            headers={'Content-Type': 'application/json'},
+            timeout=5
+        )
         if response.status_code == 200:
-            return response.json()
-        return None
+            return True, response.json()
+        return False, None
     except:
-        return None
-
-def get_symbol_price(symbol):
-    """특정 심볼의 현재 가격 가져오기 (기존 엔드포인트 사용)"""
-    try:
-        # 기존 positions 엔드포인트에서 가격 정보도 포함되어 있다고 가정
-        response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            # position_info에서 현재 가격 정보를 찾아서 반환
-            if 'position_info' in data and 'current_price' in data['position_info']:
-                return {'price': data['position_info']['current_price']}
-        return None
-    except:
-        return None
-
-def get_portfolio_value():
-    """포트폴리오 전체 가치 계산 (기존 데이터 활용)"""
-    try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
-        if response.status_code == 200:
-            data = response.json()
-            # 기존 데이터에서 포트폴리오 정보 추출
-            portfolio_data = {
-                'total_portfolio_value': 0,
-                'total_unrealized_pnl': 0,
-                'positions': []
-            }
-            
-            if 'position_info' in data:
-                portfolio_data['total_unrealized_pnl'] = data['position_info'].get('unrealized_pnl', 0)
-            
-            return portfolio_data
-        return None
-    except:
-        return None
-
-def get_open_orders():
-    """열린 주문 정보 가져오기"""
-    try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/check", timeout=5)
-        if response.status_code == 200:
-            return response.json()
-        return None
-    except:
-        return None
+        return False, None
 
 def sync_positions():
     """포지션 동기화 실행"""
@@ -119,15 +83,13 @@ def test_telegram():
     except:
         return False, None
 
-def close_position_manually(symbol=None):
+def close_position_manually(symbol):
     """수동으로 포지션 종료"""
     try:
         data = {
-            "action": "close_position"
+            "action": "close_position",
+            "symbol": symbol
         }
-        if symbol:
-            data["symbol"] = symbol
-            
         response = requests.post(
             f"{MIDDLE_SERVER_URL}/webhook",
             json=data,
@@ -140,405 +102,355 @@ def close_position_manually(symbol=None):
     except:
         return False, None
 
-def get_connection():
-    return sqlite3.connect('bitcoin_trades.db')
-
-def load_historical_data():
-    """기존 거래 히스토리 데이터 로드"""
-    try:
-        conn = get_connection()
-        query = """SELECT timestamp, trade_type, order_id, decision, percentage, reason, 
-                  btc_balance, usdt_balance, total_assets, btc_avg_buy_price, 
-                  btc_current_price, reflection, tp_order_id, sl_order_id,
-                  blackflag_signal, blackflag_candles_ago, utbot_signal, 
-                  utbot_candles_ago, volume_osc_current, stop_loss_price, 
-                  cloud_gap_valid, position_type
-                  FROM trades"""
-        df = pd.read_sql_query(query, conn)
-        conn.close()
-        
-        # 불리언 컬럼 변환
-        if 'cloud_gap_valid' in df.columns:
-            df['cloud_gap_valid'] = df['cloud_gap_valid'].astype(bool)
-        
-        # position_type 기본값 처리
-        if 'position_type' in df.columns:
-            df['position_type'] = df['position_type'].fillna('normal')
-        
-        return df
-    except sqlite3.Error as e:
-        st.error(f"Database error: {e}")
-        return pd.DataFrame()
-
-def paginate_dataframe(df, page_size=30):
-    if df.empty:
-        return 1
-    return math.ceil(len(df) / page_size)
-
-def calculate_performance_metrics(trades_df):
-    if trades_df.empty:
-        return {
-            'total_trades': 0,
-            'total_return': 0,
-            'win_rate': 0,
-            'avg_profit_per_trade': 0,
-            'max_drawdown': 0,
-            'risk_adjusted_return': 0
-        }
+def display_symbol_config():
+    """심볼 설정 관리 UI"""
+    st.header("⚙️ Symbol Configuration")
     
-    trades_df = trades_df.sort_values('timestamp')
+    config = get_symbol_config()
+    if not config:
+        st.error("Failed to load configuration")
+        return
     
-    # 이 수익률
-    total_return = ((trades_df['total_assets'].iloc[-1] - trades_df['total_assets'].iloc[0]) 
-                   / trades_df['total_assets'].iloc[0]) * 100
+    # 기존 심볼 설정
+    st.subheader("📊 Existing Symbols")
     
-    # 승률 계산
-    trades_df['pnl'] = trades_df['total_assets'].diff()
-    wins = (trades_df['pnl'] > 0).sum()
-    win_rate = (wins / len(trades_df[trades_df['pnl'].notna()])) * 100
-    
-    # 평균 수익/거래
-    avg_profit_per_trade = trades_df['pnl'].mean() / trades_df['total_assets'].shift(1) * 100
-    
-    # 최대 낙폭
-    cummax = trades_df['total_assets'].cummax()
-    drawdowns = (trades_df['total_assets'] - cummax) / cummax * 100
-    max_drawdown = abs(drawdowns.min())
-    
-    # 리스크 조정 수익률 (Daily Sharpe Ratio)
-    daily_returns = trades_df['total_assets'].pct_change()
-    risk_adjusted_return = (daily_returns.mean() / daily_returns.std()) if daily_returns.std() != 0 else 0
-    
-    return {
-        'total_trades': len(trades_df),
-        'total_return': total_return,
-        'win_rate': win_rate,
-        'avg_profit_per_trade': avg_profit_per_trade,
-        'max_drawdown': max_drawdown,
-        'risk_adjusted_return': risk_adjusted_return
-    }
-
-def display_portfolio_overview():
-    """포트폴리오 전체 개요 표시 (기존 데이터 활용)"""
-    st.subheader("💰 Portfolio Overview")
-    
-    # 기존 positions 엔드포인트에서 데이터 가져오기
-    positions_data = get_current_positions()
-    
-    if positions_data:
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            # position_info에서 총 자산 정보 추출
-            if 'position_info' in positions_data:
-                current_price = positions_data['position_info'].get('current_price', 0)
-                st.metric("Current BTC Price", f"${current_price:,.2f}")
-            else:
-                st.metric("Current BTC Price", "N/A")
-        
-        with col2:
-            if 'position_info' in positions_data:
-                total_pnl = positions_data['position_info'].get('unrealized_pnl', 0)
-                pnl_color = "normal" if total_pnl >= 0 else "inverse"
-                st.metric("Unrealized PnL", f"${total_pnl:,.2f}", delta=total_pnl, delta_color=pnl_color)
-            else:
-                st.metric("Unrealized PnL", "$0.00")
-        
-        with col3:
-            # tracked_positions에서 활성 포지션 수 계산
-            active_positions = 0
-            if 'tracked_positions' in positions_data:
-                active_positions = len(positions_data['tracked_positions'])
-            st.metric("Active Positions", active_positions)
-        
-        with col4:
-            if 'position_info' in positions_data:
-                pnl_pct = positions_data['position_info'].get('pnl_percent', 0)
-                st.metric("PnL %", f"{pnl_pct:.2f}%")
-            else:
-                st.metric("PnL %", "0.00%")
-
-def display_realtime_positions():
-    """실시간 포지션 정보 표시 (기존 데이터 구조 활용)"""
-    st.subheader("📊 Active Positions")
-    
-    # 기존 positions 엔드포인트 사용
-    positions_data = get_current_positions()
-    
-    if positions_data and positions_data.get('tracked_positions'):
-        for symbol, pos_info in positions_data['tracked_positions'].items():
-            col1, col2, col3, col4 = st.columns([2, 2, 2, 1])
+    for symbol, settings in config.items():
+        with st.expander(f"{symbol} Settings"):
+            col1, col2, col3 = st.columns(3)
             
             with col1:
-                side = pos_info.get('side', 'N/A').upper()
-                side_color = "🟢" if side == 'LONG' else "🔴" if side == 'SHORT' else "⚪"
-                st.write(f"{side_color} **{symbol}** ({side})")
-                st.write(f"Amount: {pos_info.get('amount', 0):.6f}")
+                leverage = st.number_input(
+                    "Leverage",
+                    min_value=1,
+                    max_value=125,
+                    value=settings.get('leverage', 10),
+                    key=f"leverage_{symbol}"
+                )
+                enabled = st.checkbox(
+                    "Enabled",
+                    value=settings.get('enabled', True),
+                    key=f"enabled_{symbol}"
+                )
             
             with col2:
-                st.write(f"Entry: ${pos_info.get('entry_price', 0):,.2f}")
-                st.write(f"Stop Loss: ${pos_info.get('stop_loss', 0):,.2f}")
+                position_size = st.number_input(
+                    "Position Size %",
+                    min_value=1.0,
+                    max_value=100.0,
+                    value=float(settings.get('position_size_percent', 10)),
+                    step=1.0,
+                    key=f"pos_size_{symbol}"
+                )
+                min_size = st.number_input(
+                    "Min Position Size ($)",
+                    min_value=1.0,
+                    value=float(settings.get('min_position_size', 10)),
+                    key=f"min_size_{symbol}"
+                )
             
             with col3:
-                st.write(f"Take Profit: ${pos_info.get('take_profit', 0):,.2f}")
-                st.write(f"P/L Ratio: {pos_info.get('pl_ratio', 0):.1f}:1")
+                max_size = st.number_input(
+                    "Max Position Size ($)",
+                    min_value=1.0,
+                    value=float(settings.get('max_position_size', 100000)),
+                    key=f"max_size_{symbol}"
+                )
                 
-                # Manual entry 표시
-                if pos_info.get('manual_entry'):
-                    st.info("🔧 Manual Entry")
-            
-            with col4:
-                if st.button(f"Close", key=f"close_{symbol}"):
-                    success, result = close_position_manually(symbol)
+                if st.button(f"Update {symbol}", key=f"update_{symbol}"):
+                    new_config = {
+                        symbol: {
+                            'leverage': leverage,
+                            'position_size_percent': position_size,
+                            'min_position_size': min_size,
+                            'max_position_size': max_size,
+                            'enabled': enabled
+                        }
+                    }
+                    success, result = update_symbol_config(new_config)
                     if success:
-                        st.success(f"Position {symbol} closed!")
+                        st.success(f"✅ {symbol} configuration updated!")
                         time.sleep(1)
                         st.rerun()
                     else:
-                        st.error(f"Failed to close {symbol}")
+                        st.error(f"Failed to update {symbol}")
+    
+    # 새 심볼 추가
+    st.subheader("➕ Add New Symbol")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        new_symbol = st.text_input("Symbol (e.g., ETH/USDT)")
+    
+    with col2:
+        new_leverage = st.number_input("Leverage", min_value=1, max_value=125, value=10)
+    
+    with col3:
+        new_pos_size = st.number_input("Position Size %", min_value=1.0, max_value=100.0, value=10.0)
+    
+    with col4:
+        if st.button("Add Symbol", disabled=not new_symbol):
+            if new_symbol:
+                new_config = {
+                    new_symbol: {
+                        'leverage': new_leverage,
+                        'position_size_percent': new_pos_size,
+                        'min_position_size': 10,
+                        'max_position_size': 100000,
+                        'enabled': True
+                    }
+                }
+                success, result = update_symbol_config(new_config)
+                if success:
+                    st.success(f"✅ {new_symbol} added successfully!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Failed to add {new_symbol}")
+
+def display_portfolio_overview():
+    """포트폴리오 전체 개요 표시"""
+    st.subheader("💰 Portfolio Overview")
+    
+    positions_data = get_all_positions()
+    
+    if not positions_data:
+        st.warning("No position data available")
+        return
+    
+    # 전체 통계 계산
+    total_pnl = 0
+    active_positions = 0
+    total_margin_used = 0
+    
+    for symbol, data in positions_data.get('positions', {}).items():
+        if data.get('tracked_position'):
+            active_positions += 1
+            if data.get('position_info'):
+                total_pnl += data['position_info'].get('unrealized_pnl', 0)
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Active Positions", active_positions)
+    
+    with col2:
+        pnl_color = "normal" if total_pnl >= 0 else "inverse"
+        st.metric("Total Unrealized PnL", f"${total_pnl:,.2f}", delta=total_pnl, delta_color=pnl_color)
+    
+    with col3:
+        st.metric("Active Symbols", len([s for s in positions_data.get('positions', {}) if positions_data['positions'][s].get('tracked_position')]))
+    
+    with col4:
+        st.metric("Last Update", datetime.now().strftime('%H:%M:%S'))
+
+def display_symbol_positions(symbol, position_data):
+    """특정 심볼의 포지션 정보 표시"""
+    if not position_data.get('tracked_position'):
+        return
+    
+    pos_info = position_data['tracked_position']
+    market_info = position_data.get('position_info', {})
+    
+    with st.container():
+        col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 2, 1])
+        
+        with col1:
+            side = pos_info.get('side', 'N/A').upper()
+            side_emoji = "🟢" if side == 'BUY' else "🔴"
+            st.write(f"{side_emoji} **{symbol}**")
+            st.write(f"Side: {side}")
+            st.write(f"Amount: {pos_info.get('amount', 0):.6f}")
+        
+        with col2:
+            st.write(f"Entry: ${pos_info.get('entry_price', 0):,.2f}")
+            st.write(f"Current: ${market_info.get('current_price', 0):,.2f}")
+        
+        with col3:
+            st.write(f"SL: ${pos_info.get('stop_loss', 0):,.2f}")
+            st.write(f"TP: ${pos_info.get('take_profit', 0):,.2f}")
+            st.write(f"P/L Ratio: {pos_info.get('pl_ratio', 0):.1f}:1")
+        
+        with col4:
+            pnl = market_info.get('unrealized_pnl', 0)
+            pnl_pct = market_info.get('pnl_percent', 0)
             
-            # PnL 정보 (position_info에서 가져오기)
-            if positions_data.get('position_info'):
-                pnl_info = positions_data['position_info']
-                st.write("---")
-                pnl_col1, pnl_col2, pnl_col3 = st.columns(3)
-                
-                with pnl_col1:
-                    pnl = pnl_info.get('unrealized_pnl', 0)
-                    pnl_color = "green" if pnl >= 0 else "red"
-                    st.markdown(f"**PnL:** <span style='color:{pnl_color}'>${pnl:,.2f}</span>", 
-                              unsafe_allow_html=True)
-                
-                with pnl_col2:
-                    pnl_pct = pnl_info.get('pnl_percent', 0)
-                    pnl_pct_color = "green" if pnl_pct >= 0 else "red"
-                    st.markdown(f"**PnL %:** <span style='color:{pnl_pct_color}'>{pnl_pct:.2f}%</span>", 
-                              unsafe_allow_html=True)
-                
-                with pnl_col3:
-                    st.write(f"**Current Price:** ${pnl_info.get('current_price', 0):,.2f}")
+            pnl_color = "green" if pnl >= 0 else "red"
+            st.markdown(f"**PnL:** <span style='color:{pnl_color}'>${pnl:,.2f}</span>", unsafe_allow_html=True)
+            st.markdown(f"**PnL %:** <span style='color:{pnl_color}'>{pnl_pct:.2f}%</span>", unsafe_allow_html=True)
             
-            st.write("---")
-    else:
+            if pos_info.get('manual_entry'):
+                st.info("🔧 Manual")
+        
+        with col5:
+            if st.button("Close", key=f"close_{symbol}"):
+                success, result = close_position_manually(symbol)
+                if success:
+                    st.success(f"✅ {symbol} closed!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"Failed to close {symbol}")
+
+def display_realtime_positions():
+    """실시간 포지션 정보 표시"""
+    st.subheader("📊 Active Positions by Symbol")
+    
+    positions_data = get_all_positions()
+    
+    if not positions_data or not positions_data.get('positions'):
         st.info("No active positions")
+        return
+    
+    # 활성 포지션이 있는 심볼만 필터링
+    active_symbols = []
+    for symbol, data in positions_data['positions'].items():
+        if data.get('tracked_position'):
+            active_symbols.append((symbol, data))
+    
+    if not active_symbols:
+        st.info("No active positions")
+        return
+    
+    # 각 심볼별로 포지션 표시
+    for symbol, position_data in active_symbols:
+        display_symbol_positions(symbol, position_data)
+        st.divider()
+
+def display_open_orders():
+    """열린 주문 표시"""
+    st.subheader("📋 Open Orders")
+    
+    positions_data = get_all_positions()
+    
+    if not positions_data:
+        st.info("No data available")
+        return
+    
+    all_orders = []
+    
+    for symbol, data in positions_data.get('positions', {}).items():
+        if data.get('open_orders'):
+            for order in data['open_orders']:
+                order['symbol'] = symbol
+                all_orders.append({
+                    'Symbol': symbol,
+                    'Type': order.get('type', 'N/A'),
+                    'Side': order.get('side', 'N/A'),
+                    'Amount': order.get('amount', 0),
+                    'Price': order.get('price') or order.get('stopPrice', 0),
+                    'Status': order.get('status', 'N/A')
+                })
+    
+    if all_orders:
+        df = pd.DataFrame(all_orders)
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No open orders")
 
 def display_realtime_section():
     """실시간 거래 정보 섹션"""
-    st.header('🔴 Real-time Trading Status')
+    st.header('🔴 Real-time Multi-Symbol Trading')
     
     # Health Check 상태 표시
-    col1, col2 = st.columns([1, 3])
+    health_status, server_data = check_middle_server_health()
     
-    with col1:
-        health_status, server_data = check_middle_server_health()
-        if health_status:
-            st.success("✅ Server Online")
-            
-            # 서버 상태 정보 표시
-            if server_data:
-                st.metric("Symbol", server_data.get('symbol', 'N/A'))
-                st.metric("Position Size %", f"{server_data.get('position_size_percent', 0)}%")
-                st.metric("Active Positions", server_data.get('current_positions', 0))
-                
-                # 텔레그램 상태
-                if server_data.get('telegram_configured'):
-                    st.success("📱 Telegram: Connected")
-                else:
-                    st.warning("📱 Telegram: Not configured")
-                    
-                # 컨트롤 버튼들
-                st.subheader("⚙️ Controls")
-                
-                if st.button("🔄 Sync Positions", use_container_width=True):
-                    success, data = sync_positions()
-                    if success:
-                        st.success("Synced successfully!")
-                    else:
-                        st.error("Sync failed")
-                
-                if st.button("📱 Test Telegram", use_container_width=True):
-                    success, data = test_telegram()
-                    if success:
-                        st.success("Telegram test sent!")
-                    else:
-                        st.error("Telegram test failed")
-        else:
-            st.error("❌ Server Offline")
-            st.info("Please check if middle_server.py is running on port 5000")
-    
-    with col2:
-        if health_status:
-            # 포트폴리오 개요
-            display_portfolio_overview()
-    
-    # 실시간 포지션 정보
-    if health_status:
-        display_realtime_positions()
-        
-        # 열린 주문 정보
-        st.subheader("📋 Open Orders")
-        orders_data = get_open_orders()
-        if orders_data and orders_data.get('orders'):
-            orders_df = pd.DataFrame(orders_data['orders'])
-            st.dataframe(orders_df, use_container_width=True)
-        else:
-            st.info("No open orders")
-
-def display_historical_section(df):
-    """기존 히스토리 섹션"""
-    st.header('📈 Historical Trading Data')
-    
-    if df.empty:
-        st.warning("No historical trading data available.")
+    if not health_status:
+        st.error("❌ Server Offline")
+        st.info("Please check if middle_server.py is running on port 5000")
         return
     
-    # 시간 역순 정렬
-    df = df.sort_values('timestamp', ascending=False).reset_index(drop=True)
-    
-    # 거래 유형 선택 필터
-    trade_type = st.selectbox('Select Trade Type', ['ALL', 'AI', 'MANUAL'])
-    
-    filtered_df = df[df['trade_type'] == trade_type] if trade_type != 'ALL' else df
-    
-    # 기본 통계
-    st.subheader('Basic Statistics')
-    if not filtered_df.empty:
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.metric("Total Trades", len(filtered_df))
-        with col2:
-            st.metric("First Trade", filtered_df['timestamp'].min())
-        with col3:
-            st.metric("Last Trade", filtered_df['timestamp'].max())
-        
-        # 최근 거래 신호 상태
-        latest_trade = df.iloc[0]
-        
-        with st.expander("Latest Trading Signals Status"):
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("BlackFlag FTS")
-                if 'blackflag_signal' in latest_trade and pd.notna(latest_trade['blackflag_signal']):
-                    st.write(f"Signal: {latest_trade['blackflag_signal']}")
-                    if 'blackflag_candles_ago' in latest_trade and pd.notna(latest_trade['blackflag_candles_ago']):
-                        st.write(f"Candles Ago: {latest_trade['blackflag_candles_ago']}")
-                    if 'cloud_gap_valid' in latest_trade and pd.notna(latest_trade['cloud_gap_valid']):
-                        st.write(f"Cloud Gap: {latest_trade['cloud_gap_valid']}")
-                
-                st.subheader("UT Bot Alert")
-                if 'utbot_signal' in latest_trade and pd.notna(latest_trade['utbot_signal']):
-                    st.write(f"Signal: {latest_trade['utbot_signal']}")
-                    if 'utbot_candles_ago' in latest_trade and pd.notna(latest_trade['utbot_candles_ago']):
-                        st.write(f"Candles Ago: {latest_trade['utbot_candles_ago']}")
-            
-            with col2:
-                st.subheader("Volume Oscillator")
-                if 'volume_osc_current' in latest_trade and pd.notna(latest_trade['volume_osc_current']):
-                    st.write(f"Current Value: {latest_trade['volume_osc_current']:.2f}")
-                
-                st.subheader("Stop Loss Price")
-                if 'stop_loss_price' in latest_trade and pd.notna(latest_trade['stop_loss_price']):
-                    st.write(f"Price: {latest_trade['stop_loss_price']:.2f} USDT")
-    
-    # 거래 내역 표시
-    st.subheader('Trade History')
-    if not filtered_df.empty:
-        page_size = 30
-        n_pages = paginate_dataframe(filtered_df, page_size)
-        
-        page_number = st.selectbox('Page', range(1, n_pages + 1), 
-                                 format_func=lambda x: f'Page {x} of {n_pages}')
-        
-        start_idx = (page_number - 1) * page_size
-        end_idx = min(start_idx + page_size, len(filtered_df))
-        
-        # 표시할 컬럼 선택
-        display_columns = ['timestamp', 'trade_type', 'decision', 'percentage', 'reason', 
-                         'btc_balance', 'usdt_balance', 'total_assets', 'btc_current_price',
-                         'blackflag_signal', 'blackflag_candles_ago', 'utbot_signal', 
-                         'utbot_candles_ago', 'volume_osc_current', 'stop_loss_price', 
-                         'cloud_gap_valid', 'position_type']
-        
-        display_df = filtered_df.iloc[start_idx:end_idx][display_columns].copy()
-        
-        # 컬럼 이름 축약
-        display_df = display_df.rename(columns={
-            'blackflag_signal': 'BF_Signal',
-            'blackflag_candles_ago': 'BF_Age',
-            'utbot_signal': 'UTBot_Signal',
-            'utbot_candles_ago': 'UTBot_Age',
-            'volume_osc_current': 'Vol_Osc',
-            'stop_loss_price': 'SL_Price',
-            'cloud_gap_valid': 'Cloud_Gap',
-            'position_type': 'Pos_Type'
-        })
-        
-        st.dataframe(display_df, height=500, use_container_width=True)
-
-def display_charts_section(df):
-    """차트 및 분석 섹션"""
-    st.header('📊 Performance Analysis')
-    
-    if df.empty:
-        st.info("No data available for analysis")
-        return
-    
-    # 거래 결정 분포
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns([1, 1, 1])
     
     with col1:
-        if 'decision' in df.columns:
-            st.subheader('Trade Decision Distribution')
-            decision_counts = df['decision'].value_counts()
-            if not decision_counts.empty:
-                fig = px.pie(
-                    values=decision_counts.values, 
-                    names=decision_counts.index,
-                    title='Trade Decisions',
-                    color=decision_counts.index,
-                    color_discrete_map={
-                        'buy': '#FF0000',
-                        'sell': '#000080',
-                        'hold': '#87CEEB'
-                    }
-                )
-                st.plotly_chart(fig, use_container_width=True)
+        st.success("✅ Server Online")
+        
+        if server_data:
+            symbols = server_data.get('symbols', [])
+            st.metric("Active Symbols", len(symbols))
+            
+            # 텔레그램 상태
+            if server_data.get('telegram_configured'):
+                st.success("📱 Telegram: Connected")
+            else:
+                st.warning("📱 Telegram: Not configured")
     
     with col2:
-        if 'total_assets' in df.columns:
-            st.subheader('Total Assets Over Time')
-            fig = px.line(df, x='timestamp', y='total_assets', 
-                        title='Portfolio Value')
-            st.plotly_chart(fig, use_container_width=True)
-    
-    # BTC 가격과 잔고 변화
-    col3, col4 = st.columns(2)
+        if st.button("🔄 Sync All Positions", use_container_width=True):
+            success, data = sync_positions()
+            if success:
+                st.success("Synced successfully!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("Sync failed")
     
     with col3:
-        if 'btc_balance' in df.columns:
-            st.subheader('BTC Balance Over Time')
-            fig = px.line(df, x='timestamp', y='btc_balance', 
-                        title='BTC Holdings')
-            st.plotly_chart(fig, use_container_width=True)
+        if st.button("📱 Test Telegram", use_container_width=True):
+            success, data = test_telegram()
+            if success:
+                st.success("Telegram test sent!")
+            else:
+                st.error("Telegram test failed")
     
-    with col4:
-        if 'btc_current_price' in df.columns:
-            st.subheader('BTC Price Movement')
-            fig = px.line(df, x='timestamp', y='btc_current_price', 
-                        title='BTC/USDT Price')
+    # 포트폴리오 개요
+    display_portfolio_overview()
+    
+    # 실시간 포지션 정보
+    display_realtime_positions()
+    
+    # 열린 주문 정보
+    display_open_orders()
+
+def display_performance_by_symbol():
+    """심볼별 성과 분석"""
+    st.header("📈 Performance by Symbol")
+    
+    positions_data = get_all_positions()
+    
+    if not positions_data:
+        st.info("No data available")
+        return
+    
+    performance_data = []
+    
+    for symbol, data in positions_data.get('positions', {}).items():
+        if data.get('position_info'):
+            info = data['position_info']
+            performance_data.append({
+                'Symbol': symbol,
+                'PnL ($)': info.get('unrealized_pnl', 0),
+                'PnL (%)': info.get('pnl_percent', 0),
+                'Current Price': info.get('current_price', 0)
+            })
+    
+    if performance_data:
+        df = pd.DataFrame(performance_data)
+        
+        # PnL 차트
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig = px.bar(df, x='Symbol', y='PnL ($)', 
+                        title='Unrealized PnL by Symbol',
+                        color='PnL ($)',
+                        color_continuous_scale=['red', 'yellow', 'green'])
             st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            fig = px.bar(df, x='Symbol', y='PnL (%)', 
+                        title='PnL % by Symbol',
+                        color='PnL (%)',
+                        color_continuous_scale=['red', 'yellow', 'green'])
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # 테이블
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("No active positions to analyze")
 
 def main():
-    st.set_page_config(
-        page_title="Multi-Coin Trading Bot Dashboard",
-        page_icon="🤖",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    st.title("🤖 Ming9's Multi-Coin Trading Bot Dashboard")
+    st.title("🤖 Multi-Symbol Trading Bot Dashboard")
     
     # 자동 새로고침 설정
     auto_refresh = st.sidebar.checkbox("🔄 Auto Refresh (10 seconds)", value=False)
@@ -552,88 +464,70 @@ def main():
         st.rerun()
     
     # 탭 생성
-    tab1, tab2, tab3 = st.tabs(["🔴 Live Trading", "📈 Historical Data", "📊 Analysis"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🔴 Live Trading", 
+        "⚙️ Symbol Config", 
+        "📊 Performance Analysis",
+        "📚 Strategy Info"
+    ])
     
     with tab1:
         display_realtime_section()
     
     with tab2:
-        # 히스토리 데이터 로드
-        df = load_historical_data()
-        display_historical_section(df)
+        display_symbol_config()
     
     with tab3:
-        # 분석 차트
-        df = load_historical_data()
-        display_charts_section(df)
+        display_performance_by_symbol()
+    
+    with tab4:
+        st.header("📚 Stochastic Fast Strategy Information")
         
-        # AI vs Manual 비교 (데이터가 있을 경우)
-        if not df.empty and 'trade_type' in df.columns:
-            st.header('🤖 AI vs Manual Trading Comparison')
-            
-            ai_trades = df[df['trade_type'] == 'AI']
-            manual_trades = df[df['trade_type'] == 'MANUAL']
-            
-            if not ai_trades.empty or not manual_trades.empty:
-                ai_metrics = calculate_performance_metrics(ai_trades)
-                manual_metrics = calculate_performance_metrics(manual_trades)
-                
-                comparison_data = pd.DataFrame({
-                    'Metric': [
-                        'Total Trades',
-                        'Total Return (%)',
-                        'Win Rate (%)',
-                        'Avg Profit/Trade (%)',
-                        'Max Drawdown (%)',
-                        'Risk-Adjusted Return'
-                    ],
-                    'AI Trading': [
-                        ai_metrics['total_trades'],
-                        round(ai_metrics['total_return'], 2),
-                        round(ai_metrics['win_rate'], 2),
-                        round(ai_metrics['avg_profit_per_trade'], 2),
-                        round(ai_metrics['max_drawdown'], 2),
-                        round(ai_metrics['risk_adjusted_return'], 2)
-                    ],
-                    'Manual Trading': [
-                        manual_metrics['total_trades'],
-                        round(manual_metrics['total_return'], 2),
-                        round(manual_metrics['win_rate'], 2),
-                        round(manual_metrics['avg_profit_per_trade'], 2),
-                        round(manual_metrics['max_drawdown'], 2),
-                        round(manual_metrics['risk_adjusted_return'], 2)
-                    ]
-                })
-                
-                st.dataframe(comparison_data, use_container_width=True)
-                
-                # 성과 비교 차트
-                fig = go.Figure()
-                
-                x = comparison_data['Metric'][1:4]  # 주요 지표만 선택
-                
-                fig.add_trace(go.Bar(
-                    name='AI Trading',
-                    x=x,
-                    y=comparison_data['AI Trading'][1:4],
-                    marker_color='lightblue'
-                ))
-                
-                fig.add_trace(go.Bar(
-                    name='Manual Trading',
-                    x=x,
-                    y=comparison_data['Manual Trading'][1:4],
-                    marker_color='lightgreen'
-                ))
-                
-                fig.update_layout(
-                    title='Trading Performance Comparison',
-                    barmode='group',
-                    xaxis_title='Metrics',
-                    yaxis_title='Value (%)'
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
+        st.markdown("""
+        ### 전략 개요
+        
+        **Stochastic Fast 교차 매매전략**은 %K와 %D 라인의 교차를 이용한 모멘텀 기반 전략입니다.
+        
+        #### 매매 신호
+        - **매수 (Long)**: %K가 %D를 상향 돌파 (골든 크로스)
+        - **매도 (Short)**: %K가 %D를 하향 돌파 (데드 크로스)
+        - **포지션 종료**: 반대 신호 발생 시
+        
+        #### 강화 신호
+        - **강매수**: 과매도 구간(20 이하)에서 상향 돌파
+        - **강매도**: 과매수 구간(80 이상)에서 하향 돌파
+        
+        #### 리스크 관리
+        - 손절매 (Stop Loss) 자동 설정
+        - 익절매 (Take Profit) 자동 설정
+        - 손익비 (P/L Ratio) 관리
+        
+        #### 지원 심볼
+        - BTC/USDT (레버리지 20x)
+        - SAHARA/USDT (레버리지 3x)
+        - 추가 심볼 설정 가능
+        
+        ### Alert 메시지 포맷
+        
+        ```json
+        {
+            "action": "buy/sell/close_position",
+            "symbol": "SAHARAUSDT",
+            "entry_price": 50000,
+            "stop_loss": 49000,
+            "take_profit": 52000,
+            "pl_ratio": 3.0,
+            "position_type": "strong_long/long/strong_short/short"
+        }
+        ```
+        
+        ### 사용 방법
+        
+        1. TradingView에서 Stochastic Fast 전략 스크립트 적용
+        2. Alert 설정 (Webhook URL: http://your-server:5000/webhook)
+        3. Symbol Config 탭에서 심볼별 레버리지 및 포지션 크기 설정
+        4. Live Trading 탭에서 실시간 모니터링
+        """)
     
     # 사이드바에 간단한 정보 표시
     with st.sidebar:
@@ -643,16 +537,26 @@ def main():
         health_status, server_data = check_middle_server_health()
         
         if health_status:
-            st.success("✅ Middle Server: Online")
+            st.success("✅ Server: Online")
             
             if server_data:
-                st.write(f"**Symbol:** {server_data.get('symbol', 'N/A')}")
-                st.write(f"**Positions:** {server_data.get('current_positions', 0)}")
+                st.write("**Active Symbols:**")
+                for symbol in server_data.get('symbols', []):
+                    config = server_data.get('symbol_config', {}).get(symbol, {})
+                    if config.get('enabled', True):
+                        st.write(f"• {symbol} ({config.get('leverage', 'N/A')}x)")
                 
-                # 마지막 업데이트 시간
-                st.write(f"**Last Check:** {datetime.now().strftime('%H:%M:%S')}")
+                st.write("---")
+                
+                # 현재 포지션 수
+                current_positions = server_data.get('current_positions', {})
+                st.write(f"**Active Positions:** {len(current_positions)}")
+                
+                for symbol, pos in current_positions.items():
+                    side = pos.get('side', 'N/A').upper()
+                    st.write(f"• {symbol}: {side}")
         else:
-            st.error("❌ Middle Server: Offline")
+            st.error("❌ Server: Offline")
             st.info("Start middle_server.py first")
         
         st.write("---")
@@ -664,19 +568,30 @@ def main():
             st.rerun()
         
         if health_status:
-            if st.button("📊 Check Positions", use_container_width=True):
-                positions = get_current_positions()
+            if st.button("📊 Check All Positions", use_container_width=True):
+                positions = get_all_positions()
                 if positions:
-                    st.json(positions.get('tracked_positions', {}))
+                    st.json(positions.get('positions', {}))
                 else:
                     st.error("Failed to get positions")
-            
-            if st.button("💰 Check Balance Info", use_container_width=True):
-                positions = get_current_positions()
-                if positions and 'position_info' in positions:
-                    st.json(positions['position_info'])
-                else:
-                    st.error("Failed to get balance info")
+        
+        st.write("---")
+        
+        # 설명
+        st.markdown("""
+        ### 📖 Dashboard Guide
+        
+        **Live Trading**: 실시간 포지션 모니터링
+        
+        **Symbol Config**: 심볼별 설정 관리
+        - 레버리지 조정
+        - 포지션 크기 설정
+        - 심볼 활성화/비활성화
+        
+        **Performance**: 심볼별 성과 분석
+        
+        **Strategy Info**: 전략 설명 및 사용법
+        """)
 
 if __name__ == "__main__":
     main()

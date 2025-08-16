@@ -30,14 +30,45 @@ exchange = ccxt.binance({
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_IDS = os.getenv('TELEGRAM_CHAT_IDS', '').split(',')
 
-# 거래 설정
-POSITION_SIZE_PERCENT = 90#float(os.getenv('POSITION_SIZE_PERCENT', 10))
-MIN_POSITION_SIZE = 10#float(os.getenv('MIN_POSITION_SIZE', 10))
-MAX_POSITION_SIZE = 100000000000000#float(os.getenv('MAX_POSITION_SIZE', 1000))
-SYMBOL = 'BTC/USDT'
+# ============ 다중 종목 설정 ============
+SYMBOL_CONFIG = {
+    'BTC/USDT': {
+        'leverage': 20,
+        'position_size_percent': 50,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'SAHARA/USDT': {
+        'leverage': 3,
+        'position_size_percent': 25,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    }
+}
 
-# 포지션 추적
+# 기본 설정 (환경변수로 오버라이드 가능)
+DEFAULT_POSITION_SIZE_PERCENT = float(os.getenv('POSITION_SIZE_PERCENT', 10))
+DEFAULT_MIN_POSITION_SIZE = float(os.getenv('MIN_POSITION_SIZE', 10))
+DEFAULT_MAX_POSITION_SIZE = float(os.getenv('MAX_POSITION_SIZE', 100000))
+
+# 포지션 추적 (다중 종목)
 current_positions = {}
+
+def get_symbol_config(symbol):
+    """종목별 설정 가져오기"""
+    if symbol in SYMBOL_CONFIG:
+        return SYMBOL_CONFIG[symbol]
+    else:
+        # 기본 설정 반환
+        return {
+            'leverage': 10,
+            'position_size_percent': DEFAULT_POSITION_SIZE_PERCENT,
+            'min_position_size': DEFAULT_MIN_POSITION_SIZE,
+            'max_position_size': DEFAULT_MAX_POSITION_SIZE,
+            'enabled': True
+        }
 
 def send_telegram_notification(message, priority='normal'):
     """텔레그램으로 알림 전송"""
@@ -75,7 +106,7 @@ def send_telegram_notification(message, priority='normal'):
         except Exception as e:
             logging.error(f"텔레그램 전송 오류: {e}")
 
-def format_position_entry_message(action, amount, entry_price, stop_loss, take_profit, pl_ratio, position_size, balance):
+def format_position_entry_message(symbol, action, amount, entry_price, stop_loss, take_profit, pl_ratio, position_size, balance):
     """포지션 진입 메시지 포맷"""
     direction_emoji = "🚀" if action == "buy" else "📉"
     direction_text = "LONG" if action == "buy" else "SHORT"
@@ -84,21 +115,24 @@ def format_position_entry_message(action, amount, entry_price, stop_loss, take_p
     risk_amount = abs(entry_price - stop_loss) * amount
     reward_amount = abs(take_profit - entry_price) * amount
     
-    # 증거금 계산 (레버리지 20배 가정)
-    margin_used = position_size / 20
-    margin_percent = (margin_used / balance) * 200
+    # 증거금 계산
+    config = get_symbol_config(symbol)
+    leverage = config['leverage']
+    margin_used = position_size / leverage
+    margin_percent = (margin_used / balance) * 100
     
     message = f"""
-{direction_emoji} <b>새 포지션 진입</b>
+{direction_emoji} <b>새 포지션 진입 - {symbol}</b>
 
 📊 <b>방향:</b> {direction_text}
-💰 <b>수량:</b> {amount:.6f} BTC
+💰 <b>수량:</b> {amount:.6f}
 💵 <b>포지션 크기:</b> ${position_size:.2f}
 🏦 <b>사용 증거금:</b> ${margin_used:.2f} ({margin_percent:.1f}%)
 💵 <b>진입가:</b> ${entry_price:,.2f}
 🛑 <b>손절가:</b> ${stop_loss:,.2f}
 🎯 <b>익절가:</b> ${take_profit:,.2f}
 📈 <b>손익비:</b> {pl_ratio}:1
+⚙️ <b>레버리지:</b> {leverage}x
 
 💸 <b>최대 손실:</b> ${risk_amount:.2f}
 💰 <b>예상 수익:</b> ${reward_amount:.2f}
@@ -109,44 +143,18 @@ def format_position_entry_message(action, amount, entry_price, stop_loss, take_p
     
     return message
 
-def format_trail_update_message(new_sl, new_tp, pl_ratio, current_price=None):
-    """트레일링 스톱 업데이트 메시지 포맷"""
-    message = f"""
-🔄 <b>트레일링 스톱 업데이트</b>
-
-🛑 <b>새 손절가:</b> ${new_sl:,.2f}
-🎯 <b>새 익절가:</b> ${new_tp:,.2f}
-📈 <b>손익비:</b> {pl_ratio}:1 (유지)
-    """
-    
-    if current_price:
-        message += f"\n📊 <b>현재가:</b> ${current_price:,.2f}"
-    
-    message += f"\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    
-    return message.strip()
-
-def format_position_close_message(reason="수동 종료"):
+def format_position_close_message(symbol, reason="수동 종료", pnl=None):
     """포지션 종료 메시지 포맷"""
-    message = f"""
-❌ <b>포지션 종료</b>
-
-📋 <b>종료 사유:</b> {reason}
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-    """.strip()
+    pnl_text = ""
+    if pnl is not None:
+        pnl_emoji = "💰" if pnl >= 0 else "💸"
+        pnl_text = f"\n{pnl_emoji} <b>손익:</b> ${pnl:.2f}"
     
-    return message
-
-def format_error_message(error_type, error_msg):
-    """오류 메시지 포맷"""
     message = f"""
-⚠️ <b>시스템 오류</b>
+❌ <b>포지션 종료 - {symbol}</b>
 
-🔍 <b>오류 유형:</b> {error_type}
-📝 <b>오류 내용:</b> {error_msg}
+📋 <b>종료 사유:</b> {reason}{pnl_text}
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-<i>관리자에게 문의하세요.</i>
     """.strip()
     
     return message
@@ -154,252 +162,209 @@ def format_error_message(error_type, error_msg):
 def sync_positions_with_exchange():
     """거래소의 실제 포지션과 봇의 추적 정보를 동기화"""
     try:
-        # 현재 거래소 포지션 조회
-        positions = exchange.fetch_positions([SYMBOL])
-        
-        for position in positions:
-            if position['contracts'] > 0:
-                # 활성 포지션 발견
-                logging.info(f"활성 포지션 발견: {position['side']} {position['contracts']} BTC @ ${position.get('entryPrice', 'N/A')}")
+        # 모든 활성화된 심볼에 대해 체크
+        for symbol, config in SYMBOL_CONFIG.items():
+            if not config.get('enabled', True):
+                continue
                 
-                # current_positions에 없으면 추가
-                if SYMBOL not in current_positions:
-                    logging.info("수동 진입 포지션을 봇에 등록합니다.")
+            # 현재 거래소 포지션 조회
+            positions = exchange.fetch_positions([symbol])
+            
+            for position in positions:
+                if position['contracts'] > 0:
+                    # 활성 포지션 발견
+                    logging.info(f"활성 포지션 발견 ({symbol}): {position['side']} {position['contracts']} @ ${position.get('entryPrice', 'N/A')}")
                     
-                    # 텔레그램 알림: 수동 포지션 감지
-                    sync_message = f"""
-🔍 <b>수동 포지션 감지</b>
+                    # current_positions에 없으면 추가
+                    if symbol not in current_positions:
+                        logging.info(f"수동 진입 포지션을 봇에 등록합니다: {symbol}")
+                        
+                        # 텔레그램 알림
+                        sync_message = f"""
+🔍 <b>수동 포지션 감지 - {symbol}</b>
 
 📊 <b>방향:</b> {position['side'].upper()}
-💰 <b>수량:</b> {position['contracts']} BTC
+💰 <b>수량:</b> {position['contracts']}
 💵 <b>진입가:</b> ${position.get('entryPrice', 'N/A')}
 
 <i>봇에 자동 등록되었습니다.</i>
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                    """.strip()
-                    
-                    send_telegram_notification(sync_message, 'normal')
-                    
-                    # 열린 주문 확인하여 SL/TP 찾기
-                    open_orders = exchange.fetch_open_orders(SYMBOL)
-                    sl_order_id = None
-                    tp_order_id = None
-                    stop_loss_price = None
-                    take_profit_price = None
-                    
-                    for order in open_orders:
-                        if order['type'] == 'stop_market' and order['reduceOnly']:
-                            sl_order_id = order['id']
-                            stop_loss_price = order['stopPrice']
-                            logging.info(f"손절 주문 발견: ${stop_loss_price}")
-                        elif order['type'] in ['limit', 'take_profit_market'] and order['reduceOnly']:
-                            tp_order_id = order['id']
-                            take_profit_price = order.get('price', order.get('stopPrice'))
-                            logging.info(f"익절 주문 발견: ${take_profit_price}")
-                    
-                    # 손익비 계산 (SL/TP가 있는 경우)
-                    pl_ratio = 3.0  # 기본값
-                    entry_price = position.get('entryPrice') or position['markPrice']
-                    if stop_loss_price and take_profit_price and entry_price:
-                        sl_distance = abs(entry_price - stop_loss_price)
-                        tp_distance = abs(take_profit_price - entry_price)
-                        if sl_distance > 0:
-                            pl_ratio = tp_distance / sl_distance
-                    
-                    # current_positions에 등록
-                    current_positions[SYMBOL] = {
-                        'side': 'buy' if position['side'] == 'long' else 'sell',
-                        'amount': position['contracts'],
-                        'entry_price': entry_price,
-                        'stop_loss': stop_loss_price or 0,
-                        'take_profit': take_profit_price or 0,
-                        'pl_ratio': pl_ratio,
-                        'sl_order_id': sl_order_id,
-                        'tp_order_id': tp_order_id,
-                        'timestamp': datetime.now().isoformat(),
-                        'manual_entry': True  # 수동 진입 표시
-                    }
-                    
-                    logging.info(f"포지션 등록 완료: {current_positions[SYMBOL]}")
-                    return True
-                    
-        # 포지션이 없는데 current_positions에 있는 경우 정리
-        if not any(p['contracts'] > 0 for p in positions) and SYMBOL in current_positions:
-            logging.info("포지션이 종료되었습니다. 추적 정보를 제거합니다.")
+                        """.strip()
+                        
+                        send_telegram_notification(sync_message, 'normal')
+                        
+                        # 열린 주문 확인하여 SL/TP 찾기
+                        open_orders = exchange.fetch_open_orders(symbol)
+                        sl_order_id = None
+                        tp_order_id = None
+                        stop_loss_price = None
+                        take_profit_price = None
+                        
+                        for order in open_orders:
+                            if order['type'] == 'stop_market' and order['reduceOnly']:
+                                sl_order_id = order['id']
+                                stop_loss_price = order['stopPrice']
+                            elif order['type'] in ['limit', 'take_profit_market'] and order['reduceOnly']:
+                                tp_order_id = order['id']
+                                take_profit_price = order.get('price', order.get('stopPrice'))
+                        
+                        # 손익비 계산
+                        pl_ratio = 3.0  # 기본값
+                        entry_price = position.get('entryPrice') or position['markPrice']
+                        if stop_loss_price and take_profit_price and entry_price:
+                            sl_distance = abs(entry_price - stop_loss_price)
+                            tp_distance = abs(take_profit_price - entry_price)
+                            if sl_distance > 0:
+                                pl_ratio = tp_distance / sl_distance
+                        
+                        # current_positions에 등록
+                        current_positions[symbol] = {
+                            'side': 'buy' if position['side'] == 'long' else 'sell',
+                            'amount': position['contracts'],
+                            'entry_price': entry_price,
+                            'stop_loss': stop_loss_price or 0,
+                            'take_profit': take_profit_price or 0,
+                            'pl_ratio': pl_ratio,
+                            'sl_order_id': sl_order_id,
+                            'tp_order_id': tp_order_id,
+                            'timestamp': datetime.now().isoformat(),
+                            'manual_entry': True
+                        }
             
-            # 포지션 종료 알림
-            close_message = format_position_close_message("자동 감지됨")
-            send_telegram_notification(close_message, 'normal')
-            
-            del current_positions[SYMBOL]
-            
+            # 포지션이 없는데 current_positions에 있는 경우 정리
+            if not any(p['contracts'] > 0 for p in positions) and symbol in current_positions:
+                logging.info(f"포지션이 종료되었습니다: {symbol}")
+                close_message = format_position_close_message(symbol, "자동 감지됨")
+                send_telegram_notification(close_message, 'normal')
+                del current_positions[symbol]
+        
         return True
         
     except Exception as e:
         logging.error(f"포지션 동기화 실패: {str(e)}")
-        
-        # 오류 알림
-        error_message = format_error_message("포지션 동기화", str(e))
-        send_telegram_notification(error_message, 'error')
-        
         return False
 
 def initialize_bot():
     """봇 초기화 - 기존 포지션 확인"""
     logging.info("봇 초기화 중...")
     
+    # 활성화된 심볼 목록
+    enabled_symbols = [s for s, c in SYMBOL_CONFIG.items() if c.get('enabled', True)]
+    
     # 봇 시작 알림
     start_message = f"""
 🤖 <b>트레이딩 봇 시작</b>
 
-📊 <b>심볼:</b> {SYMBOL}
-⚙️ <b>포지션 크기:</b> {POSITION_SIZE_PERCENT}%
-📱 <b>알림:</b> 활성화
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-    """.strip()
+📊 <b>활성 심볼:</b> {', '.join(enabled_symbols)}
+⚙️ <b>설정:</b>
+"""
+    
+    for symbol, config in SYMBOL_CONFIG.items():
+        if config.get('enabled', True):
+            start_message += f"\n• {symbol}: {config['leverage']}x, {config['position_size_percent']}%"
+    
+    start_message += f"\n📱 <b>알림:</b> 활성화\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     
     send_telegram_notification(start_message, 'normal')
     
     sync_positions_with_exchange()
     logging.info("봇 초기화 완료")
 
-def calculate_tp_from_pl_ratio(entry_price, stop_loss_price, pl_ratio, side):
-    """
-    손익비를 기반으로 TP 계산
+def calculate_position_size(symbol, balance):
+    """잔고 기반 포지션 크기 계산"""
+    if balance is None:
+        return None
     
-    Args:
-        entry_price: 진입가
-        stop_loss_price: 손절가 (BlackFlag trail)
-        pl_ratio: 손익비 (예: 3.0은 3:1)
-        side: 'buy' 또는 'sell'
+    config = get_symbol_config(symbol)
     
-    Returns:
-        take_profit_price: 계산된 익절가
-    """
-    # 손절 거리 계산
-    sl_distance = abs(entry_price - stop_loss_price)
+    # 증거금 = 잔고의 X%
+    margin = balance * config['position_size_percent'] / 100
     
-    # 익절 거리 = 손절 거리 × 손익비
-    tp_distance = sl_distance * pl_ratio
+    # 레버리지 설정
+    leverage = config['leverage']
     
-    # 포지션 방향에 따라 TP 계산
-    if side == 'buy':
-        take_profit_price = entry_price + tp_distance
-    else:  # sell
-        take_profit_price = entry_price - tp_distance
+    # 포지션 크기 = 증거금 × 레버리지
+    position_size = margin * leverage
+    
+    # 최소/최대 제한 적용
+    position_size = max(config['min_position_size'], 
+                       min(position_size, config['max_position_size']))
     
     logging.info(f"""
-    TP 계산:
-    - Entry: ${entry_price:.2f}
-    - SL: ${stop_loss_price:.2f}
-    - SL Distance: ${sl_distance:.2f}
-    - P/L Ratio: {pl_ratio}:1
-    - TP Distance: ${tp_distance:.2f}
-    - TP: ${take_profit_price:.2f}
+    포지션 크기 계산 ({symbol}):
+    - 잔고: ${balance:.2f}
+    - 증거금 비율: {config['position_size_percent']}%
+    - 증거금: ${margin:.2f}
+    - 레버리지: {leverage}x
+    - 포지션 크기: ${position_size:.2f}
     """)
     
-    return take_profit_price
+    return position_size
 
-def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price, pl_ratio):
-    """손익비 기반으로 계산된 TP와 함께 주문 실행"""
+def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, take_profit_price, pl_ratio):
+    """손절/익절과 함께 주문 실행"""
     try:
-        # Binance의 심볼 정보 가져오기 (최소 주문 단위 확인)
+        config = get_symbol_config(symbol)
+        
+        # 심볼 정보 가져오기
         markets = exchange.load_markets()
-        market = markets[SYMBOL]
+        market = markets[symbol]
         
         # 수량 정밀도 적용
         amount_precision = market['precision']['amount']
         min_amount = market['limits']['amount']['min']
         
-        # 수량을 정밀도에 맞게 조정
-        adjusted_amount = exchange.amount_to_precision(SYMBOL, amount)
+        # 수량 조정
+        adjusted_amount = exchange.amount_to_precision(symbol, amount)
         
-        logging.info(f"""
-        수량 조정:
-        - 원본 수량: {amount} BTC
-        - 최소 수량: {min_amount} BTC
-        - 정밀도: {amount_precision}
-        - 조정된 수량: {adjusted_amount} BTC
-        """)
-        
-        # 최소 수량 체크
         if float(adjusted_amount) < min_amount:
-            logging.warning(f"조정된 수량 {adjusted_amount}이 최소 수량 {min_amount}보다 작습니다.")
             adjusted_amount = min_amount
         
-        # 손익비 기반 TP 계산
-        take_profit_price = calculate_tp_from_pl_ratio(
-            entry_price, stop_loss_price, pl_ratio, side
-        )
-        
         # 레버리지 설정
-        exchange.set_leverage(20, SYMBOL)
+        exchange.set_leverage(config['leverage'], symbol)
         
         # 1. 메인 주문 실행
-        logging.info(f"메인 주문 실행: {side} {adjusted_amount} BTC @ market")
+        logging.info(f"메인 주문 실행 ({symbol}): {side} {adjusted_amount} @ market")
         main_order = exchange.create_order(
-            symbol=SYMBOL,
+            symbol=symbol,
             type='market',
             side=side,
             amount=adjusted_amount
         )
         
         if main_order:
-            order_id = main_order['id']
             actual_entry = main_order.get('average', main_order.get('price', entry_price))
-            
-            logging.info(f"메인 주문 체결: Entry @ ${actual_entry:.2f}")
-            
-            # 실제 체결가로 TP 재계산
-            if abs(actual_entry - entry_price) > entry_price * 0.001:  # 0.1% 이상 차이
-                logging.info(f"체결가 차이 감지. TP 재계산: {entry_price} -> {actual_entry}")
-                take_profit_price = calculate_tp_from_pl_ratio(
-                    actual_entry, stop_loss_price, pl_ratio, side
-                )
             
             # 2. 손절 주문 설정
             stop_side = 'sell' if side == 'buy' else 'buy'
             
-            logging.info(f"손절 주문 설정: {stop_side} {adjusted_amount} BTC @ stop ${stop_loss_price:.2f}")
-            
-            # Binance Futures Stop Market 주문 - params 안에 stopPrice 넣기
             sl_order = exchange.create_order(
-                symbol=SYMBOL,
+                symbol=symbol,
                 type='stop_market',
                 side=stop_side,
                 amount=adjusted_amount,
                 params={
                     'stopPrice': stop_loss_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True,
-                    'postOnly': False
+                    'reduceOnly': True
                 }
             )
             
-            logging.info(f"손절 주문 생성 완료: Order ID = {sl_order['id'] if sl_order else 'None'}")
-            
             # 3. 익절 주문 설정
-            logging.info(f"익절 주문 설정: {stop_side} {adjusted_amount} BTC @ take_profit ${take_profit_price:.2f}")
-            
-            # Binance Futures Take Profit Market 주문 - params 안에 stopPrice 넣기
             tp_order = exchange.create_order(
-                symbol=SYMBOL,
+                symbol=symbol,
                 type='take_profit_market',
                 side=stop_side,
                 amount=adjusted_amount,
                 params={
                     'stopPrice': take_profit_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True,
-                    'postOnly': False
+                    'reduceOnly': True
                 }
             )
             
-            logging.info(f"익절 주문 생성 완료: Order ID = {tp_order['id'] if tp_order else 'None'}")
-            
             # 4. 포지션 정보 저장
-            current_positions[SYMBOL] = {
+            current_positions[symbol] = {
                 'side': side,
                 'amount': float(adjusted_amount),
                 'entry_price': actual_entry,
@@ -409,477 +374,56 @@ def place_order_with_calculated_stops(side, amount, entry_price, stop_loss_price
                 'sl_order_id': sl_order['id'] if sl_order else None,
                 'tp_order_id': tp_order['id'] if tp_order else None,
                 'timestamp': datetime.now().isoformat(),
-                'manual_entry': False  # 자동 진입 표시
+                'manual_entry': False
             }
             
-            # 5. 주문 확인
-            logging.info("=== 주문 완료 요약 ===")
-            logging.info(f"포지션: {side.upper()}")
-            logging.info(f"수량: {adjusted_amount} BTC")
-            logging.info(f"진입가: ${actual_entry:.2f}")
-            logging.info(f"손절가: ${stop_loss_price:.2f} (리스크: ${abs(actual_entry - stop_loss_price):.2f})")
-            logging.info(f"익절가: ${take_profit_price:.2f} (수익: ${abs(take_profit_price - actual_entry):.2f})")
-            logging.info(f"손익비: {pl_ratio}:1")
-            logging.info("====================")
+            logging.info(f"주문 완료 ({symbol}): Entry ${actual_entry:.2f}, SL ${stop_loss_price:.2f}, TP ${take_profit_price:.2f}")
             
             return {
                 'main_order': main_order,
                 'sl_order': sl_order,
                 'tp_order': tp_order,
-                'calculated_tp': take_profit_price,
                 'actual_entry': actual_entry,
                 'adjusted_amount': adjusted_amount
             }
             
     except Exception as e:
-        logging.error(f"주문 실행 실패: {str(e)}")
-        logging.error(f"상세 오류: {type(e).__name__}")
-        
-        # 주문 실패 알림
-        error_message = format_error_message("주문 실행", str(e))
-        send_telegram_notification(error_message, 'error')
-        
-        # Binance 오류 메시지 상세 출력
-        if hasattr(e, 'response'):
-            logging.error(f"Binance 응답: {e.response}")
-            
+        logging.error(f"주문 실행 실패 ({symbol}): {str(e)}")
         return None
 
-def check_open_orders():
-    """현재 열린 주문 확인"""
+def close_position(symbol):
+    """특정 심볼의 포지션 종료"""
     try:
-        open_orders = exchange.fetch_open_orders(SYMBOL)
+        positions = exchange.fetch_positions([symbol])
         
-        if open_orders:
-            logging.info(f"=== 열린 주문 {len(open_orders)}개 ===")
-            for order in open_orders:
-                logging.info(f"- {order['type']} {order['side']} @ ${order.get('stopPrice', order.get('price'))}")
-        else:
-            logging.info("열린 주문 없음")
-            
-        return open_orders
-    except Exception as e:
-        logging.error(f"주문 조회 실패: {str(e)}")
-        return []
-
-def check_position_status():
-    """현재 포지션과 주문 상태 확인"""
-    try:
-        # 먼저 동기화 실행
-        sync_positions_with_exchange()
-        
-        # 포지션 확인
-        positions = exchange.fetch_positions([SYMBOL])
-        active_position = None
-        
-        for pos in positions:
-            if pos['contracts'] > 0:
-                active_position = pos
-                break
-        
-        if active_position:
-            logging.info(f"=== 활성 포지션 ===")
-            logging.info(f"방향: {active_position['side']}")
-            logging.info(f"수량: {active_position['contracts']}")
-            logging.info(f"진입가: ${active_position.get('entryPrice', 'N/A')}")
-            logging.info(f"현재가: ${active_position['markPrice']}")
-            logging.info(f"미실현 손익: ${active_position.get('unrealizedPnl', 0)}")
-            
-            # current_positions 정보도 출력
-            if SYMBOL in current_positions:
-                logging.info(f"봇 추적 정보: {current_positions[SYMBOL]}")
-        
-        # 열린 주문 확인
-        check_open_orders()
-        
-        return active_position
-    except Exception as e:
-        logging.error(f"포지션 상태 확인 실패: {str(e)}")
-        return None
-
-def update_trailing_stop_with_pl_ratio(new_stop_loss_price, pl_ratio):
-    """트레일링 스톱 업데이트 시 손익비 유지하며 TP도 재계산"""
-    try:
-        if SYMBOL not in current_positions:
-            return None
-            
-        position = current_positions[SYMBOL]
-        
-        # 손절가가 유리한 방향으로만 이동
-        if position['side'] == 'buy':
-            if new_stop_loss_price <= position['stop_loss']:
-                logging.info("롱 포지션: 새 손절가가 기존보다 낮음. 업데이트 생략")
-                return None
-        else:  # sell
-            if new_stop_loss_price >= position['stop_loss']:
-                logging.info("숏 포지션: 새 손절가가 기존보다 높음. 업데이트 생략")
-                return None
-        
-        # 새로운 TP 계산 (손익비 유지)
-        new_take_profit = calculate_tp_from_pl_ratio(
-            position['entry_price'], 
-            new_stop_loss_price, 
-            pl_ratio,
-            position['side']
-        )
-        
-        # 기존 주문 취소
-        if position.get('sl_order_id'):
-            try:
-                exchange.cancel_order(position['sl_order_id'], SYMBOL)
-            except:
-                pass
+        for position in positions:
+            if position['contracts'] > 0:
+                # 포지션 청산
+                side = 'sell' if position['side'] == 'long' else 'buy'
+                amount = abs(position['contracts'])
                 
-        if position.get('tp_order_id'):
-            try:
-                exchange.cancel_order(position['tp_order_id'], SYMBOL)
-            except:
-                pass
-        
-        # 새로운 손절/익절 주문 생성
-        stop_side = 'sell' if position['side'] == 'buy' else 'buy'
-        
-        # 새 손절 주문 - params 안에 stopPrice 넣기
-        new_sl_order = exchange.create_order(
-            symbol=SYMBOL,
-            type='stop_market',
-            side=stop_side,
-            amount=position['amount'],
-            params={
-                'stopPrice': new_stop_loss_price,
-                'reduceOnly': True
-            }
-        )
-        
-        # 새 익절 주문 - params 안에 stopPrice 넣기
-        new_tp_order = exchange.create_order(
-            symbol=SYMBOL,
-            type='take_profit_market',
-            side=stop_side,
-            amount=position['amount'],
-            params={
-                'stopPrice': new_take_profit,
-                'reduceOnly': True,
-                'postOnly': False
-            }
-        )
-        
-        # 포지션 정보 업데이트
-        position['stop_loss'] = new_stop_loss_price
-        position['take_profit'] = new_take_profit
-        position['sl_order_id'] = new_sl_order['id'] if new_sl_order else None
-        position['tp_order_id'] = new_tp_order['id'] if new_tp_order else None
-        position['last_update'] = datetime.now().isoformat()
-        
-        logging.info(f"""
-        트레일링 스톱 업데이트 완료:
-        - 새 SL: ${new_stop_loss_price:.2f}
-        - 새 TP: ${new_take_profit:.2f}
-        - P/L Ratio: {pl_ratio}:1 (유지됨)
-        """)
-        
-        return {
-            'sl_order': new_sl_order,
-            'tp_order': new_tp_order,
-            'new_sl': new_stop_loss_price,
-            'new_tp': new_take_profit
-        }
-        
-    except Exception as e:
-        logging.error(f"트레일링 스톱 업데이트 실패: {str(e)}")
-        
-        # 트레일링 스톱 업데이트 실패 알림
-        error_message = format_error_message("트레일링 스톱 업데이트", str(e))
-        send_telegram_notification(error_message, 'error')
-        
-        return None
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """TradingView 웹훅 수신"""
-    try:
-        # Content-Type 확인 및 처리
-        content_type = request.headers.get('Content-Type', '')
-        
-        # TradingView는 text/plain으로 보내므로 수동으로 JSON 파싱
-        if 'application/json' in content_type:
-            data = request.get_json()
-        else:
-            # text/plain 또는 기타 형식으로 온 경우
-            raw_data = request.get_data(as_text=True)
-            logging.info(f"Raw webhook data: {raw_data}")
-            
-            try:
-                # JSON 문자열로 파싱 시도
-                data = json.loads(raw_data)
-            except json.JSONDecodeError:
-                logging.error(f"JSON 파싱 실패: {raw_data}")
-                return jsonify({'error': 'Invalid JSON format'}), 400
-        
-        # 웹훅 처리 전 동기화
-        sync_positions_with_exchange()
-        
-        logging.info(f"웹훅 수신: {json.dumps(data, indent=2)}")
-        
-        # JSON 문자열인 경우 파싱 (중복 체크)
-        if isinstance(data, str):
-            data = json.loads(data)
-        
-        action = data.get('action')
-        
-        # 트레일링 스톱 업데이트
-        if action == 'update_trail':
-            new_stop_loss = float(data.get('new_stop_loss'))
-            pl_ratio = float(data.get('pl_ratio', 3.0))  # 기본값 3:1
-            
-            result = update_trailing_stop_with_pl_ratio(new_stop_loss, pl_ratio)
-            
-            if result:
-                # 트레일링 스톱 업데이트 알림
-                current_price = None
-                try:
-                    ticker = exchange.fetch_ticker(SYMBOL)
-                    current_price = ticker['last']
-                except:
-                    pass
-                
-                trail_message = format_trail_update_message(
-                    result['new_sl'], result['new_tp'], pl_ratio, current_price
+                exchange.create_order(
+                    symbol=symbol,
+                    type='market',
+                    side=side,
+                    amount=amount,
+                    params={'reduceOnly': True}
                 )
-                send_telegram_notification(trail_message, 'normal')
-                
-                return jsonify({
-                    'status': 'success',
-                    'action': 'trail_updated',
-                    'new_stop_loss': result['new_sl'],
-                    'new_take_profit': result['new_tp'],
-                    'pl_ratio': pl_ratio,
-                    'timestamp': datetime.now().isoformat()
-                }), 200
-            else:
-                return jsonify({
-                    'status': 'skipped',
-                    'reason': '손절가가 불리한 방향',
-                    'timestamp': datetime.now().isoformat()
-                }), 200
         
-        # 포지션 종료
-        elif action == 'close_position':
-            close_all_positions()
-            
-            # 포지션 종료 알림
-            close_message = format_position_close_message("TradingView 신호")
-            send_telegram_notification(close_message, 'high')
-            
-            return jsonify({
-                'status': 'success',
-                'action': 'position_closed',
-                'timestamp': datetime.now().isoformat()
-            }), 200
+        # 열린 주문 모두 취소
+        open_orders = exchange.fetch_open_orders(symbol)
+        for order in open_orders:
+            exchange.cancel_order(order['id'], symbol)
         
-        # 신규 포지션
-        elif action in ['buy', 'sell']:
-            entry_price = float(data.get('entry_price'))
-            stop_loss_price = float(data.get('stop_loss'))
-            pl_ratio = float(data.get('pl_ratio', 3.0))  # 기본값 3:1
-            position_type = data.get('position_type', 'normal')
-            
-            # 중요: stop_loss 확인
-            if not stop_loss_price or stop_loss_price == 0:
-                error_msg = "손절가가 없습니다! TradingView 설정을 확인하세요."
-                logging.error(f"❌ {error_msg}")
-                
-                # 오류 알림
-                error_message = format_error_message("손절가 누락", error_msg)
-                send_telegram_notification(error_message, 'error')
-                
-                return jsonify({
-                    'status': 'error',
-                    'message': error_msg
-                }), 400
-            
-            # ===== 핵심 수정 부분: 기존 포지션 체크 =====
-            # 현재 포지션이 있는지 확인
-            if SYMBOL in current_positions:
-                existing_position = current_positions[SYMBOL]
-                
-                # 수동 진입 포지션이 아니고, 봇이 자동으로 진입한 포지션인 경우만 체크
-                if not existing_position.get('manual_entry', False):
-                    # 같은 방향의 포지션이 이미 있는 경우
-                    if existing_position['side'] == action:
-                        logging.info(f"⚠️ 이미 {action.upper()} 포지션이 존재합니다. 추가 진입을 스킵합니다.")
-                        
-                        # 알림 전송
-                        skip_message = f"""
-⚠️ <b>포지션 중복 방지</b>
-
-이미 {action.upper()} 포지션이 존재합니다.
-추가 진입을 스킵합니다.
-
-📊 <b>현재 포지션:</b>
-- 방향: {existing_position['side'].upper()}
-- 수량: {existing_position['amount']:.6f} BTC
-- 진입가: ${existing_position['entry_price']:,.2f}
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                        """.strip()
-                        
-                        send_telegram_notification(skip_message, 'normal')
-                        
-                        return jsonify({
-                            'status': 'skipped',
-                            'reason': '같은 방향 포지션 이미 존재',
-                            'existing_position': {
-                                'side': existing_position['side'],
-                                'amount': existing_position['amount'],
-                                'entry_price': existing_position['entry_price']
-                            },
-                            'timestamp': datetime.now().isoformat()
-                        }), 200
-                    
-                    # 반대 방향의 포지션이 있는 경우 - 기존 포지션 청산 후 진입
-                    else:
-                        logging.info(f"⚠️ 반대 방향 포지션 존재. 기존 {existing_position['side'].upper()} 포지션을 청산하고 {action.upper()}로 전환합니다.")
-                        
-                        # 반대 포지션 전환 알림
-                        reverse_message = f"""
-🔄 <b>포지션 전환</b>
-
-기존 {existing_position['side'].upper()} 포지션을 청산하고
-새로운 {action.upper()} 포지션으로 전환합니다.
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                        """.strip()
-                        
-                        send_telegram_notification(reverse_message, 'high')
-                        
-                        # 기존 포지션 청산
-                        close_all_positions()
-                else:
-                    # 수동 진입 포지션은 건드리지 않음
-                    logging.info("수동 진입 포지션이 존재하지만, 자동 매매 신호를 처리합니다.")
-            
-            # 잔고 확인
-            balance = get_account_balance()
-            if balance is None:
-                error_msg = "잔고 조회 실패"
-                error_message = format_error_message("잔고 조회", error_msg)
-                send_telegram_notification(error_message, 'error')
-                return jsonify({'error': error_msg}), 500
-            
-            logging.info(f"현재 USDT 잔고: ${balance:.2f}")
-            
-            # 리스크 체크
-            if not check_risk_before_entry(balance):
-                risk_msg = "리스크 한도 초과"
-                risk_message = f"""
-⚠️ <b>리스크 한도 초과</b>
-
-현재 일일 손실이 한도를 초과하여 주문이 거부되었습니다.
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                """.strip()
-                
-                send_telegram_notification(risk_message, 'high')
-                
-                return jsonify({
-                    'status': 'rejected',
-                    'reason': risk_msg,
-                    'timestamp': datetime.now().isoformat()
-                }), 200
-            
-            # 포지션 크기 계산
-            position_size = calculate_position_size(balance)
-            if position_size is None:
-                error_msg = "포지션 크기 계산 실패"
-                error_message = format_error_message("포지션 크기 계산", error_msg)
-                send_telegram_notification(error_message, 'error')
-                return jsonify({'error': error_msg}), 500
-            
-            # BTC 수량 계산
-            btc_amount = position_size / entry_price
-            
-            logging.info(f"""
-            ===== 주문 요청 정보 =====
-            - Action: {action}
-            - Type: {position_type}
-            - Amount: {btc_amount:.6f} BTC (${position_size:.2f})
-            - Entry: ${entry_price:.2f}
-            - Stop Loss: ${stop_loss_price:.2f} ✅
-            - P/L Ratio: {pl_ratio}:1
-            =======================
-            """)
-            
-            # 새 주문 실행 (stop_loss 포함)
-            orders = place_order_with_calculated_stops(
-                action, btc_amount, entry_price, stop_loss_price, pl_ratio
-            )
-            
-            if orders:
-                # 주문 후 상태 확인
-                time.sleep(1)  # API 제한 고려
-                check_position_status()
-                
-                # 📱 포지션 진입 알림 전송
-                actual_amount = float(orders.get('adjusted_amount', btc_amount))
-                entry_message = format_position_entry_message(
-                    action, actual_amount, orders['actual_entry'], 
-                    stop_loss_price, orders['calculated_tp'], 
-                    pl_ratio, position_size, balance
-                )
-                send_telegram_notification(entry_message, 'high')
-                
-                response = {
-                    'status': 'success',
-                    'action': action,
-                    'position_type': position_type,
-                    'amount': actual_amount,
-                    'requested_amount': btc_amount,
-                    'value': position_size,
-                    'entry_price': orders['actual_entry'],
-                    'stop_loss': stop_loss_price,
-                    'take_profit': orders['calculated_tp'],
-                    'pl_ratio': pl_ratio,
-                    'balance': balance,
-                    'order_ids': {
-                        'main': orders['main_order']['id'],
-                        'sl': orders['sl_order']['id'] if orders['sl_order'] else None,
-                        'tp': orders['tp_order']['id'] if orders['tp_order'] else None
-                    },
-                    'timestamp': datetime.now().isoformat()
-                }
-                
-                # SL/TP 주문 확인
-                if not orders['sl_order']:
-                    logging.warning("⚠️ 손절 주문이 생성되지 않았습니다!")
-                    warning_msg = "⚠️ 손절 주문 생성 실패"
-                    send_telegram_notification(warning_msg, 'error')
-                    
-                if not orders['tp_order']:
-                    logging.warning("⚠️ 익절 주문이 생성되지 않았습니다!")
-                    warning_msg = "⚠️ 익절 주문 생성 실패"
-                    send_telegram_notification(warning_msg, 'error')
-                
-                logging.info(f"주문 응답: {json.dumps(response, indent=2)}")
-                return jsonify(response), 200
-            else:
-                error_msg = "주문 실행 실패"
-                return jsonify({'error': error_msg}), 500
+        # 포지션 정보 초기화
+        if symbol in current_positions:
+            del current_positions[symbol]
         
-        else:
-            error_msg = f"알 수 없는 액션: {action}"
-            error_message = format_error_message("알 수 없는 액션", error_msg)
-            send_telegram_notification(error_message, 'error')
-            return jsonify({'error': error_msg}), 400
+        return True
             
     except Exception as e:
-        logging.error(f"웹훅 처리 오류: {str(e)}")
-        
-        # 웹훅 처리 오류 알림
-        error_message = format_error_message("웹훅 처리", str(e))
-        send_telegram_notification(error_message, 'error')
-        
-        return jsonify({'error': str(e)}), 500
+        logging.error(f"포지션 종료 실패 ({symbol}): {str(e)}")
+        return False
 
 def get_account_balance():
     """Binance 계정 잔고 조회"""
@@ -891,118 +435,328 @@ def get_account_balance():
         logging.error(f"잔고 조회 실패: {str(e)}")
         return None
 
-def calculate_position_size(balance):
-    """잔고 기반 포지션 크기 계산 (증거금 기준)"""
-    if balance is None:
-        return None
-    
-    # 증거금 = 잔고의 X%
-    margin = balance * POSITION_SIZE_PERCENT / 100
-    
-    # 현재 레버리지 확인
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """TradingView 웹훅 수신 - Stochastic 전략 지원"""
     try:
-        # Binance에서 현재 레버리지 가져오기
-        positions = exchange.fetch_positions([SYMBOL])
-        current_leverage = 20  # 기본값
+        # Content-Type 확인 및 처리
+        content_type = request.headers.get('Content-Type', '')
         
-        for pos in positions:
-            if pos['symbol'] == SYMBOL:
-                current_leverage = pos.get('leverage', 20)
-                break
-                
-        # 레버리지가 설정되어 있지 않으면 기본값 사용
-        if current_leverage is None or current_leverage == 0:
-            current_leverage = 20
+        if 'application/json' in content_type:
+            data = request.get_json()
+        else:
+            raw_data = request.get_data(as_text=True)
+            logging.info(f"Raw webhook data: {raw_data}")
             
-    except:
-        current_leverage = 20  # 오류 시 기본값
-    
-    # 포지션 크기 = 증거금 × 레버리지
-    position_size = margin * current_leverage
-    
-    # 최소/최대 제한 적용
-    position_size = max(MIN_POSITION_SIZE, min(position_size, MAX_POSITION_SIZE))
-    
-    logging.info(f"""
-    포지션 크기 계산:
-    - 잔고: ${balance:.2f}
-    - 증거금 비율: {POSITION_SIZE_PERCENT}%
-    - 증거금: ${margin:.2f}
-    - 레버리지: {current_leverage}x
-    - 포지션 크기: ${position_size:.2f}
-    """)
-    
-    return position_size
-
-def check_risk_before_entry(balance):
-    """포지션 진입 전 리스크 체크"""
-    try:
-        # 일일 손실 확인
-        today_pnl = calculate_daily_pnl()
-        max_daily_loss = balance * 0.05  # 5% 최대 손실
+            try:
+                data = json.loads(raw_data)
+            except json.JSONDecodeError:
+                logging.error(f"JSON 파싱 실패: {raw_data}")
+                return jsonify({'error': 'Invalid JSON format'}), 400
         
-        if today_pnl < -max_daily_loss:
-            logging.warning(f"일일 최대 손실 도달: ${today_pnl:.2f}")
-            return False
+        # 심볼 확인
+        symbol = data.get('symbol', 'BTC/USDT')
+        
+        # 심볼 매핑 (TradingView 심볼 -> Binance 심볼)
+        symbol_mapping = {
+            'BTCUSDT': 'BTC/USDT',
+            'SAHARAUSDT': 'SAHARA/USDT',
+            'ETHUSDT': 'ETH/USDT'
+        }
+        
+        if symbol in symbol_mapping:
+            symbol = symbol_mapping[symbol]
+        
+        # 심볼이 설정에 없으면 추가
+        if symbol not in SYMBOL_CONFIG:
+            logging.warning(f"새로운 심볼 감지: {symbol}. 기본 설정 사용")
+        
+        # 동기화
+        sync_positions_with_exchange()
+        
+        logging.info(f"웹훅 수신 ({symbol}): {json.dumps(data, indent=2)}")
+        
+        action = data.get('action')
+        
+        # Stochastic 업데이트 Alert
+        if action == 'stochastic_update':
+            k_value = float(data.get('k_value', 0))
+            d_value = float(data.get('d_value', 0))
+            pl_ratio = float(data.get('pl_ratio', 3.0))
             
-        return True
-    except:
-        return True
+            update_message = f"""
+📊 <b>Stochastic 업데이트 - {symbol}</b>
 
-def calculate_daily_pnl():
-    """일일 손익 계산 (간단한 버전)"""
-    # 실제 구현에서는 거래 내역을 조회하여 계산
-    return 0
+📈 <b>%K:</b> {k_value:.2f}
+📉 <b>%D:</b> {d_value:.2f}
+🎯 <b>손익비:</b> {pl_ratio}:1
 
-def close_all_positions():
-    """모든 포지션 종료"""
-    try:
-        # 현재 포지션 확인
-        positions = exchange.fetch_positions([SYMBOL])
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            """.strip()
+            
+            send_telegram_notification(update_message, 'normal')
+            
+            return jsonify({
+                'status': 'success',
+                'action': 'stochastic_update',
+                'symbol': symbol,
+                'timestamp': datetime.now().isoformat()
+            }), 200
         
-        for position in positions:
-            if position['contracts'] > 0:
-                # 포지션 청산
-                side = 'sell' if position['side'] == 'long' else 'buy'
-                amount = abs(position['contracts'])
+        # 포지션 종료
+        elif action == 'close_position':
+            exit_reason = data.get('exit_reason', 'stochastic_cross')
+            
+            # PnL 계산 (가능한 경우)
+            pnl = None
+            if symbol in current_positions:
+                try:
+                    ticker = exchange.fetch_ticker(symbol)
+                    current_price = ticker['last']
+                    pos = current_positions[symbol]
+                    
+                    if pos['side'] == 'buy':
+                        pnl = (current_price - pos['entry_price']) * pos['amount']
+                    else:
+                        pnl = (pos['entry_price'] - current_price) * pos['amount']
+                except:
+                    pass
+            
+            success = close_position(symbol)
+            
+            if success:
+                close_message = format_position_close_message(symbol, exit_reason, pnl)
+                send_telegram_notification(close_message, 'high')
                 
-                exchange.create_order(
-                    symbol=SYMBOL,
-                    type='market',
-                    side=side,
-                    amount=amount,
-                    params={'reduceOnly': True}
+                return jsonify({
+                    'status': 'success',
+                    'action': 'position_closed',
+                    'symbol': symbol,
+                    'timestamp': datetime.now().isoformat()
+                }), 200
+            else:
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Failed to close position'
+                }), 500
+        
+        # 신규 포지션 진입
+        elif action in ['buy', 'sell']:
+            entry_price = float(data.get('entry_price'))
+            stop_loss_price = float(data.get('stop_loss'))
+            take_profit_price = float(data.get('take_profit'))
+            pl_ratio = float(data.get('pl_ratio', 3.0))
+            position_type = data.get('position_type', 'normal')
+            
+            # 손절가 확인
+            if not stop_loss_price or stop_loss_price == 0:
+                error_msg = f"손절가가 없습니다! ({symbol})"
+                logging.error(error_msg)
+                return jsonify({'status': 'error', 'message': error_msg}), 400
+            
+            # 기존 포지션 체크
+            if symbol in current_positions:
+                existing_position = current_positions[symbol]
+                
+                if not existing_position.get('manual_entry', False):
+                    if existing_position['side'] == action:
+                        logging.info(f"이미 {action.upper()} 포지션이 존재합니다: {symbol}")
+                        
+                        skip_message = f"""
+⚠️ <b>포지션 중복 방지 - {symbol}</b>
+
+이미 {action.upper()} 포지션이 존재합니다.
+추가 진입을 스킵합니다.
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                        """.strip()
+                        
+                        send_telegram_notification(skip_message, 'normal')
+                        
+                        return jsonify({
+                            'status': 'skipped',
+                            'reason': '같은 방향 포지션 이미 존재',
+                            'symbol': symbol,
+                            'timestamp': datetime.now().isoformat()
+                        }), 200
+                    else:
+                        # 반대 방향 포지션 -> 청산 후 진입
+                        logging.info(f"반대 방향 포지션 전환: {symbol}")
+                        close_position(symbol)
+            
+            # 잔고 확인
+            balance = get_account_balance()
+            if balance is None:
+                return jsonify({'error': '잔고 조회 실패'}), 500
+            
+            # 포지션 크기 계산
+            position_size = calculate_position_size(symbol, balance)
+            if position_size is None:
+                return jsonify({'error': '포지션 크기 계산 실패'}), 500
+            
+            # 수량 계산
+            amount = position_size / entry_price
+            
+            logging.info(f"""
+            ===== 주문 요청 ({symbol}) =====
+            - Action: {action} ({position_type})
+            - Amount: {amount:.6f} (${position_size:.2f})
+            - Entry: ${entry_price:.2f}
+            - Stop Loss: ${stop_loss_price:.2f}
+            - Take Profit: ${take_profit_price:.2f}
+            - P/L Ratio: {pl_ratio}:1
+            =======================
+            """)
+            
+            # 주문 실행
+            orders = place_order_with_stops(
+                symbol, action, amount, entry_price, 
+                stop_loss_price, take_profit_price, pl_ratio
+            )
+            
+            if orders:
+                # 포지션 진입 알림
+                actual_amount = float(orders.get('adjusted_amount', amount))
+                entry_message = format_position_entry_message(
+                    symbol, action, actual_amount, orders['actual_entry'],
+                    stop_loss_price, take_profit_price,
+                    pl_ratio, position_size, balance
                 )
+                send_telegram_notification(entry_message, 'high')
+                
+                return jsonify({
+                    'status': 'success',
+                    'action': action,
+                    'symbol': symbol,
+                    'position_type': position_type,
+                    'amount': actual_amount,
+                    'entry_price': orders['actual_entry'],
+                    'stop_loss': stop_loss_price,
+                    'take_profit': take_profit_price,
+                    'pl_ratio': pl_ratio,
+                    'timestamp': datetime.now().isoformat()
+                }), 200
+            else:
+                return jsonify({'error': '주문 실행 실패'}), 500
         
-        # 열린 주문 모두 취소
-        open_orders = exchange.fetch_open_orders(SYMBOL)
-        for order in open_orders:
-            exchange.cancel_order(order['id'], SYMBOL)
-        
-        # 포지션 정보 초기화
-        if SYMBOL in current_positions:
-            del current_positions[SYMBOL]
+        else:
+            return jsonify({'error': f'알 수 없는 액션: {action}'}), 400
             
     except Exception as e:
-        logging.error(f"포지션 종료 실패: {str(e)}")
+        logging.error(f"웹훅 처리 오류: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/positions', methods=['GET'])
+def get_positions():
+    """모든 포지션 상태 조회"""
+    try:
+        sync_positions_with_exchange()
+        
+        all_positions = {}
+        
+        for symbol in SYMBOL_CONFIG.keys():
+            if not SYMBOL_CONFIG[symbol].get('enabled', True):
+                continue
+                
+            positions = exchange.fetch_positions([symbol])
+            open_orders = exchange.fetch_open_orders(symbol)
+            
+            # 현재가 조회
+            ticker = exchange.fetch_ticker(symbol)
+            current_price = ticker['last']
+            
+            # PnL 계산
+            position_info = {}
+            if symbol in current_positions:
+                pos = current_positions[symbol]
+                if pos['side'] == 'buy':
+                    unrealized_pnl = (current_price - pos['entry_price']) * pos['amount']
+                    pnl_percent = ((current_price - pos['entry_price']) / pos['entry_price']) * 100
+                else:
+                    unrealized_pnl = (pos['entry_price'] - current_price) * pos['amount']
+                    pnl_percent = ((pos['entry_price'] - current_price) / pos['entry_price']) * 100
+                
+                position_info = {
+                    'unrealized_pnl': unrealized_pnl,
+                    'pnl_percent': pnl_percent,
+                    'current_price': current_price
+                }
+            
+            all_positions[symbol] = {
+                'exchange_positions': positions,
+                'open_orders': open_orders,
+                'tracked_position': current_positions.get(symbol),
+                'position_info': position_info
+            }
+        
+        return jsonify({
+            'positions': all_positions,
+            'timestamp': datetime.now().isoformat()
+        }), 200
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/status', methods=['GET'])
+def status():
+    """봇 상태 확인"""
+    sync_positions_with_exchange()
+    
+    return jsonify({
+        'status': 'running',
+        'symbols': list(SYMBOL_CONFIG.keys()),
+        'symbol_config': SYMBOL_CONFIG,
+        'current_positions': current_positions,
+        'telegram_configured': bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS),
+        'timestamp': datetime.now().isoformat()
+    }), 200
+
+@app.route('/config', methods=['GET', 'POST'])
+def config():
+    """심볼 설정 조회/수정"""
+    global SYMBOL_CONFIG
+    
+    if request.method == 'GET':
+        return jsonify(SYMBOL_CONFIG), 200
+    
+    elif request.method == 'POST':
+        data = request.get_json()
+        
+        # 설정 업데이트
+        for symbol, config in data.items():
+            if symbol in SYMBOL_CONFIG:
+                SYMBOL_CONFIG[symbol].update(config)
+            else:
+                SYMBOL_CONFIG[symbol] = config
+        
+        # 알림 전송
+        config_message = f"""
+⚙️ <b>설정 변경</b>
+
+{json.dumps(SYMBOL_CONFIG, indent=2)}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """.strip()
+        
+        send_telegram_notification(config_message, 'normal')
+        
+        return jsonify({
+            'status': 'success',
+            'config': SYMBOL_CONFIG,
+            'timestamp': datetime.now().isoformat()
+        }), 200
 
 @app.route('/sync', methods=['POST'])
-def sync_positions():
-    """수동으로 포지션 동기화 실행"""
+def sync():
+    """수동 동기화"""
     try:
         success = sync_positions_with_exchange()
         
         if success:
-            # 동기화 후 상태 반환
-            positions = exchange.fetch_positions([SYMBOL])
-            open_orders = exchange.fetch_open_orders(SYMBOL)
-            
             return jsonify({
                 'status': 'success',
                 'message': '포지션 동기화 완료',
                 'current_positions': current_positions,
-                'exchange_positions': positions,
-                'open_orders': open_orders,
                 'timestamp': datetime.now().isoformat()
             }), 200
         else:
@@ -1017,97 +771,6 @@ def sync_positions():
             'message': str(e)
         }), 500
 
-@app.route('/positions', methods=['GET'])
-def get_positions():
-    """현재 포지션 상태 조회"""
-    try:
-        # 먼저 동기화
-        sync_positions_with_exchange()
-        
-        positions = exchange.fetch_positions([SYMBOL])
-        open_orders = exchange.fetch_open_orders(SYMBOL)
-        
-        # 현재가 조회
-        ticker = exchange.fetch_ticker(SYMBOL)
-        current_price = ticker['last']
-        
-        # PnL 계산
-        position_info = {}
-        if SYMBOL in current_positions:
-            pos = current_positions[SYMBOL]
-            if pos['side'] == 'buy':
-                unrealized_pnl = (current_price - pos['entry_price']) * pos['amount']
-                pnl_percent = ((current_price - pos['entry_price']) / pos['entry_price']) * 100
-            else:
-                unrealized_pnl = (pos['entry_price'] - current_price) * pos['amount']
-                pnl_percent = ((pos['entry_price'] - current_price) / pos['entry_price']) * 100
-            
-            position_info = {
-                'unrealized_pnl': unrealized_pnl,
-                'pnl_percent': pnl_percent,
-                'current_price': current_price,
-                'distance_to_sl': abs(current_price - pos['stop_loss']) if pos['stop_loss'] else None,
-                'distance_to_tp': abs(pos['take_profit'] - current_price) if pos['take_profit'] else None
-            }
-        
-        return jsonify({
-            'positions': positions,
-            'open_orders': open_orders,
-            'tracked_positions': current_positions,
-            'position_info': position_info,
-            'timestamp': datetime.now().isoformat()
-        }), 200
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/status', methods=['GET'])
-def status():
-    """봇 상태 확인"""
-    # 동기화 실행
-    sync_positions_with_exchange()
-    
-    return jsonify({
-        'status': 'running',
-        'symbol': SYMBOL,
-        'position_size_percent': POSITION_SIZE_PERCENT,
-        'current_positions': len(current_positions),
-        'tracked_positions': current_positions,
-        'telegram_configured': bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS),
-        'timestamp': datetime.now().isoformat()
-    }), 200
-
-# 진단 엔드포인트 수정
-@app.route('/check', methods=['GET'])
-def check_orders():
-    """현재 주문 상태 확인"""
-    try:
-        # 먼저 동기화
-        sync_positions_with_exchange()
-        
-        position = check_position_status()
-        orders = check_open_orders()
-        
-        # current_positions 정보 포함
-        has_tracked_position = SYMBOL in current_positions
-        
-        return jsonify({
-            'has_position': position is not None,
-            'has_tracked_position': has_tracked_position,
-            'tracked_position': current_positions.get(SYMBOL, None),
-            'open_orders_count': len(orders),
-            'orders': [
-                {
-                    'type': o['type'],
-                    'side': o['side'],
-                    'price': o.get('stopPrice', o.get('price'))
-                } for o in orders
-            ],
-            'timestamp': datetime.now().isoformat()
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-# 텔레그램 테스트 엔드포인트 추가
 @app.route('/test-telegram', methods=['POST'])
 def test_telegram():
     """텔레그램 알림 테스트"""
@@ -1116,7 +779,9 @@ def test_telegram():
 🧪 <b>텔레그램 알림 테스트</b>
 
 ✅ 설정이 정상적으로 작동합니다!
-🤖 봇이 준비되었습니다.
+🤖 Multi-Symbol 봇이 준비되었습니다.
+
+활성 심볼: {', '.join([s for s, c in SYMBOL_CONFIG.items() if c.get('enabled', True)])}
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """.strip()
@@ -1126,8 +791,6 @@ def test_telegram():
         return jsonify({
             'status': 'success',
             'message': '텔레그램 알림 테스트 완료',
-            'telegram_configured': bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS),
-            'chat_ids_count': len([id for id in TELEGRAM_CHAT_IDS if id.strip()]),
             'timestamp': datetime.now().isoformat()
         }), 200
         
