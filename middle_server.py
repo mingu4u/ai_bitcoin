@@ -45,6 +45,13 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
+    },
+    'ETH/USDT': {
+        'leverage': 5,
+        'position_size_percent': 35,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
     }
 }
 
@@ -437,7 +444,7 @@ def get_account_balance():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """TradingView 웹훅 수신 - Stochastic 전략 지원"""
+    """TradingView 웹훅 수신 - 투자심리도 전략 지원"""
     try:
         # Content-Type 확인 및 처리
         content_type = request.headers.get('Content-Type', '')
@@ -478,17 +485,15 @@ def webhook():
         
         action = data.get('action')
         
-        # Stochastic 업데이트 Alert
-        if action == 'stochastic_update':
-            k_value = float(data.get('k_value', 0))
-            d_value = float(data.get('d_value', 0))
+        # 투자심리도 업데이트 Alert
+        if action == 'psychological_update':
+            pl_value = float(data.get('pl_value', 0))
             pl_ratio = float(data.get('pl_ratio', 3.0))
             
             update_message = f"""
-📊 <b>Stochastic 업데이트 - {symbol}</b>
+📊 <b>투자심리도 업데이트 - {symbol}</b>
 
-📈 <b>%K:</b> {k_value:.2f}
-📉 <b>%D:</b> {d_value:.2f}
+📈 <b>투자심리도:</b> {pl_value:.2f}%
 🎯 <b>손익비:</b> {pl_ratio}:1
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -498,14 +503,14 @@ def webhook():
             
             return jsonify({
                 'status': 'success',
-                'action': 'stochastic_update',
+                'action': 'psychological_update',
                 'symbol': symbol,
                 'timestamp': datetime.now().isoformat()
             }), 200
         
         # 포지션 종료
         elif action == 'close_position':
-            exit_reason = data.get('exit_reason', 'stochastic_cross')
+            exit_reason = data.get('exit_reason', 'psychological_cross')
             
             # PnL 계산 (가능한 경우)
             pnl = None
