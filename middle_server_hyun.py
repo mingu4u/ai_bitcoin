@@ -457,7 +457,7 @@ def get_account_balance():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """TradingView 웹훅 수신 - 투자심리도 전략 지원"""
+    """TradingView 웹훅 수신 - Stochastic/투자심리도 전략 지원"""
     try:
         # Content-Type 확인 및 처리
         content_type = request.headers.get('Content-Type', '')
@@ -474,14 +474,16 @@ def webhook():
                 logging.error(f"JSON 파싱 실패: {raw_data}")
                 return jsonify({'error': 'Invalid JSON format'}), 400
         
-        # 심볼 확인
+        # 심볼 확인 및 매핑
         symbol = data.get('symbol', 'BTC/USDT')
         
         # 심볼 매핑 (TradingView 심볼 -> Binance 심볼)
         symbol_mapping = {
             'BTCUSDT': 'BTC/USDT',
+            'BTCUSDT.P': 'BTC/USDT',  # 영구선물 심볼 매핑 추가
             'SAHARAUSDT': 'SAHARA/USDT',
-            'ETHUSDT': 'ETH/USDT'
+            'ETHUSDT': 'ETH/USDT',
+            'ETHUSDT.P': 'ETH/USDT'   # ETH 영구선물 매핑 추가
         }
         
         if symbol in symbol_mapping:
@@ -498,32 +500,47 @@ def webhook():
         
         action = data.get('action')
         
-        # 투자심리도 업데이트 Alert
-        if action == 'psychological_update':
-            pl_value = float(data.get('pl_value', 0))
-            pl_ratio = float(data.get('pl_ratio', 3.0))
-            
-            update_message = f"""
+        # Stochastic/투자심리도 업데이트 Alert
+        if action in ['stochastic_update', 'psychological_update']:
+            if action == 'stochastic_update':
+                k_value = float(data.get('k_value', 0))
+                d_value = float(data.get('d_value', 0))
+                pl_ratio = float(data.get('pl_ratio', 3.0))
+                
+                update_message = f"""
+📊 <b>Stochastic 업데이트 - {symbol}</b>
+
+📈 <b>%K:</b> {k_value:.2f}
+📉 <b>%D:</b> {d_value:.2f}
+🎯 <b>손익비:</b> {pl_ratio}:1
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                """.strip()
+            else:  # psychological_update
+                pl_value = float(data.get('pl_value', 0))
+                pl_ratio = float(data.get('pl_ratio', 3.0))
+                
+                update_message = f"""
 📊 <b>투자심리도 업데이트 - {symbol}</b>
 
 📈 <b>투자심리도:</b> {pl_value:.2f}%
 🎯 <b>손익비:</b> {pl_ratio}:1
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """.strip()
+                """.strip()
             
             send_telegram_notification(update_message, 'normal')
             
             return jsonify({
                 'status': 'success',
-                'action': 'psychological_update',
+                'action': action,
                 'symbol': symbol,
                 'timestamp': datetime.now().isoformat()
             }), 200
         
         # 포지션 종료
         elif action == 'close_position':
-            exit_reason = data.get('exit_reason', 'psychological_cross')
+            exit_reason = data.get('exit_reason', 'signal_cross')
             
             # PnL 계산 (가능한 경우)
             pnl = None
@@ -562,9 +579,33 @@ def webhook():
         elif action in ['buy', 'sell']:
             entry_price = float(data.get('entry_price'))
             stop_loss_price = float(data.get('stop_loss'))
-            take_profit_price = float(data.get('take_profit'))
             pl_ratio = float(data.get('pl_ratio', 3.0))
             position_type = data.get('position_type', 'normal')
+            
+            # take_profit 처리 - 없으면 pl_ratio로 자동 계산
+            take_profit_data = data.get('take_profit')
+            
+            if take_profit_data is not None and take_profit_data != 'null' and take_profit_data != '':
+                try:
+                    take_profit_price = float(take_profit_data)
+                    logging.info(f"Take profit 전송됨: ${take_profit_price:.2f}")
+                except (ValueError, TypeError):
+                    # take_profit이 잘못된 형식인 경우 자동 계산
+                    sl_distance = abs(entry_price - stop_loss_price)
+                    if action == 'buy':
+                        take_profit_price = entry_price + (sl_distance * pl_ratio)
+                    else:  # sell
+                        take_profit_price = entry_price - (sl_distance * pl_ratio)
+                    logging.info(f"Take profit 형식 오류, 자동 계산: ${take_profit_price:.2f}")
+            else:
+                # take_profit이 없는 경우 pl_ratio로 자동 계산
+                sl_distance = abs(entry_price - stop_loss_price)
+                if action == 'buy':
+                    take_profit_price = entry_price + (sl_distance * pl_ratio)
+                else:  # sell
+                    take_profit_price = entry_price - (sl_distance * pl_ratio)
+                
+                logging.info(f"Take profit 자동 계산 ({symbol}): ${take_profit_price:.2f} (PL Ratio: {pl_ratio}:1)")
             
             # 손절가 확인
             if not stop_loss_price or stop_loss_price == 0:
@@ -621,7 +662,7 @@ def webhook():
             - Amount: {amount:.6f} (${position_size:.2f})
             - Entry: ${entry_price:.2f}
             - Stop Loss: ${stop_loss_price:.2f}
-            - Take Profit: ${take_profit_price:.2f}
+            - Take Profit: ${take_profit_price:.2f} (자동계산 여부: {take_profit_data is None})
             - P/L Ratio: {pl_ratio}:1
             =======================
             """)
@@ -651,6 +692,7 @@ def webhook():
                     'entry_price': orders['actual_entry'],
                     'stop_loss': stop_loss_price,
                     'take_profit': take_profit_price,
+                    'take_profit_auto_calculated': take_profit_data is None,
                     'pl_ratio': pl_ratio,
                     'timestamp': datetime.now().isoformat()
                 }), 200
@@ -662,6 +704,15 @@ def webhook():
             
     except Exception as e:
         logging.error(f"웹훅 처리 오류: {str(e)}")
+        error_message = f"""
+❌ <b>웹훅 처리 오류</b>
+
+<b>오류:</b> {str(e)}
+<b>데이터:</b> {json.dumps(data, indent=2) if 'data' in locals() else 'N/A'}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """.strip()
+        send_telegram_notification(error_message, 'error')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/positions', methods=['GET'])

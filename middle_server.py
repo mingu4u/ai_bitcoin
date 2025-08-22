@@ -12,14 +12,20 @@ import requests
 # 환경 변수 로드
 load_dotenv()
 
+# ============ 서버별 하드코딩 설정 ============
+# 포트 5000: 메인 서버 (텔레그램 활성화)
+# 포트 5001, 5002: 복제 서버 (텔레그램 비활성화)
+SERVER_PORT = 5000  # 여기서 포트 변경 (5000, 5001, 5002)
+ENABLE_TELEGRAM = True if SERVER_PORT == 5000 else False  # 5000번 포트만 텔레그램 활성화
+
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(levelname)s - %(message)s')
+                   format='%(asctime)s - [Port:{port}] - %(levelname)s - %(message)s'.format(port=SERVER_PORT))
 
 # Binance 설정
 exchange = ccxt.binance({
-    'apiKey': os.getenv('BINANCE_API_KEY'),
-    'secret': os.getenv('BINANCE_SECRET_KEY'),
+    'apiKey': os.getenv('BINANCE_API_KEY_HYUN'),
+    'secret': os.getenv('BINANCE_SECRET_KEY_HYUN'),
     'enableRateLimit': True,
     'options': {
         'defaultType': 'future'  # 선물 거래용
@@ -78,9 +84,14 @@ def get_symbol_config(symbol):
         }
 
 def send_telegram_notification(message, priority='normal'):
-    """텔레그램으로 알림 전송"""
+    """텔레그램으로 알림 전송 (비활성화 가능)"""
+    # 텔레그램이 비활성화되면 로그만 출력
+    if not ENABLE_TELEGRAM:
+        logging.info(f"[Port {SERVER_PORT} - Telegram Disabled] {message}")
+        return
+    
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_IDS:
-        logging.warning("텔레그램 설정이 없습니다. .env 파일을 확인하세요.")
+        logging.warning(f"[Port {SERVER_PORT}] 텔레그램 설정이 없습니다. .env 파일을 확인하세요.")
         return
     
     for chat_id in TELEGRAM_CHAT_IDS:
@@ -253,7 +264,7 @@ def sync_positions_with_exchange():
 
 def initialize_bot():
     """봇 초기화 - 기존 포지션 확인"""
-    logging.info("봇 초기화 중...")
+    logging.info(f"봇 초기화 중... (포트: {SERVER_PORT})")
     
     # 활성화된 심볼 목록
     enabled_symbols = [s for s, c in SYMBOL_CONFIG.items() if c.get('enabled', True)]
@@ -262,6 +273,7 @@ def initialize_bot():
     start_message = f"""
 🤖 <b>트레이딩 봇 시작</b>
 
+🌐 <b>서버 포트:</b> {SERVER_PORT}
 📊 <b>활성 심볼:</b> {', '.join(enabled_symbols)}
 ⚙️ <b>설정:</b>
 """
@@ -270,12 +282,13 @@ def initialize_bot():
         if config.get('enabled', True):
             start_message += f"\n• {symbol}: {config['leverage']}x, {config['position_size_percent']}%"
     
-    start_message += f"\n📱 <b>알림:</b> 활성화\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    telegram_status = "활성화" if ENABLE_TELEGRAM else "비활성화"
+    start_message += f"\n📱 <b>텔레그램:</b> {telegram_status}\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     
     send_telegram_notification(start_message, 'normal')
     
     sync_positions_with_exchange()
-    logging.info("봇 초기화 완료")
+    logging.info(f"봇 초기화 완료 (포트: {SERVER_PORT}, 텔레그램: {telegram_status})")
 
 def calculate_position_size(symbol, balance):
     """잔고 기반 포지션 크기 계산"""
@@ -444,7 +457,7 @@ def get_account_balance():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """TradingView 웹훅 수신 - 투자심리도 전략 지원"""
+    """TradingView 웹훅 수신 - Stochastic/투자심리도 전략 지원"""
     try:
         # Content-Type 확인 및 처리
         content_type = request.headers.get('Content-Type', '')
@@ -461,14 +474,16 @@ def webhook():
                 logging.error(f"JSON 파싱 실패: {raw_data}")
                 return jsonify({'error': 'Invalid JSON format'}), 400
         
-        # 심볼 확인
+        # 심볼 확인 및 매핑
         symbol = data.get('symbol', 'BTC/USDT')
         
         # 심볼 매핑 (TradingView 심볼 -> Binance 심볼)
         symbol_mapping = {
             'BTCUSDT': 'BTC/USDT',
+            'BTCUSDT.P': 'BTC/USDT',  # 영구선물 심볼 매핑 추가
             'SAHARAUSDT': 'SAHARA/USDT',
-            'ETHUSDT': 'ETH/USDT'
+            'ETHUSDT': 'ETH/USDT',
+            'ETHUSDT.P': 'ETH/USDT'   # ETH 영구선물 매핑 추가
         }
         
         if symbol in symbol_mapping:
@@ -485,32 +500,47 @@ def webhook():
         
         action = data.get('action')
         
-        # 투자심리도 업데이트 Alert
-        if action == 'psychological_update':
-            pl_value = float(data.get('pl_value', 0))
-            pl_ratio = float(data.get('pl_ratio', 3.0))
-            
-            update_message = f"""
+        # Stochastic/투자심리도 업데이트 Alert
+        if action in ['stochastic_update', 'psychological_update']:
+            if action == 'stochastic_update':
+                k_value = float(data.get('k_value', 0))
+                d_value = float(data.get('d_value', 0))
+                pl_ratio = float(data.get('pl_ratio', 3.0))
+                
+                update_message = f"""
+📊 <b>Stochastic 업데이트 - {symbol}</b>
+
+📈 <b>%K:</b> {k_value:.2f}
+📉 <b>%D:</b> {d_value:.2f}
+🎯 <b>손익비:</b> {pl_ratio}:1
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                """.strip()
+            else:  # psychological_update
+                pl_value = float(data.get('pl_value', 0))
+                pl_ratio = float(data.get('pl_ratio', 3.0))
+                
+                update_message = f"""
 📊 <b>투자심리도 업데이트 - {symbol}</b>
 
 📈 <b>투자심리도:</b> {pl_value:.2f}%
 🎯 <b>손익비:</b> {pl_ratio}:1
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """.strip()
+                """.strip()
             
             send_telegram_notification(update_message, 'normal')
             
             return jsonify({
                 'status': 'success',
-                'action': 'psychological_update',
+                'action': action,
                 'symbol': symbol,
                 'timestamp': datetime.now().isoformat()
             }), 200
         
         # 포지션 종료
         elif action == 'close_position':
-            exit_reason = data.get('exit_reason', 'psychological_cross')
+            exit_reason = data.get('exit_reason', 'signal_cross')
             
             # PnL 계산 (가능한 경우)
             pnl = None
@@ -549,9 +579,33 @@ def webhook():
         elif action in ['buy', 'sell']:
             entry_price = float(data.get('entry_price'))
             stop_loss_price = float(data.get('stop_loss'))
-            take_profit_price = float(data.get('take_profit'))
             pl_ratio = float(data.get('pl_ratio', 3.0))
             position_type = data.get('position_type', 'normal')
+            
+            # take_profit 처리 - 없으면 pl_ratio로 자동 계산
+            take_profit_data = data.get('take_profit')
+            
+            if take_profit_data is not None and take_profit_data != 'null' and take_profit_data != '':
+                try:
+                    take_profit_price = float(take_profit_data)
+                    logging.info(f"Take profit 전송됨: ${take_profit_price:.2f}")
+                except (ValueError, TypeError):
+                    # take_profit이 잘못된 형식인 경우 자동 계산
+                    sl_distance = abs(entry_price - stop_loss_price)
+                    if action == 'buy':
+                        take_profit_price = entry_price + (sl_distance * pl_ratio)
+                    else:  # sell
+                        take_profit_price = entry_price - (sl_distance * pl_ratio)
+                    logging.info(f"Take profit 형식 오류, 자동 계산: ${take_profit_price:.2f}")
+            else:
+                # take_profit이 없는 경우 pl_ratio로 자동 계산
+                sl_distance = abs(entry_price - stop_loss_price)
+                if action == 'buy':
+                    take_profit_price = entry_price + (sl_distance * pl_ratio)
+                else:  # sell
+                    take_profit_price = entry_price - (sl_distance * pl_ratio)
+                
+                logging.info(f"Take profit 자동 계산 ({symbol}): ${take_profit_price:.2f} (PL Ratio: {pl_ratio}:1)")
             
             # 손절가 확인
             if not stop_loss_price or stop_loss_price == 0:
@@ -608,7 +662,7 @@ def webhook():
             - Amount: {amount:.6f} (${position_size:.2f})
             - Entry: ${entry_price:.2f}
             - Stop Loss: ${stop_loss_price:.2f}
-            - Take Profit: ${take_profit_price:.2f}
+            - Take Profit: ${take_profit_price:.2f} (자동계산 여부: {take_profit_data is None})
             - P/L Ratio: {pl_ratio}:1
             =======================
             """)
@@ -638,6 +692,7 @@ def webhook():
                     'entry_price': orders['actual_entry'],
                     'stop_loss': stop_loss_price,
                     'take_profit': take_profit_price,
+                    'take_profit_auto_calculated': take_profit_data is None,
                     'pl_ratio': pl_ratio,
                     'timestamp': datetime.now().isoformat()
                 }), 200
@@ -649,6 +704,15 @@ def webhook():
             
     except Exception as e:
         logging.error(f"웹훅 처리 오류: {str(e)}")
+        error_message = f"""
+❌ <b>웹훅 처리 오류</b>
+
+<b>오류:</b> {str(e)}
+<b>데이터:</b> {json.dumps(data, indent=2) if 'data' in locals() else 'N/A'}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """.strip()
+        send_telegram_notification(error_message, 'error')
         return jsonify({'error': str(e)}), 500
 
 @app.route('/positions', methods=['GET'])
@@ -709,9 +773,11 @@ def status():
     
     return jsonify({
         'status': 'running',
+        'server_port': SERVER_PORT,
         'symbols': list(SYMBOL_CONFIG.keys()),
         'symbol_config': SYMBOL_CONFIG,
         'current_positions': current_positions,
+        'telegram_enabled': ENABLE_TELEGRAM,
         'telegram_configured': bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_IDS),
         'timestamp': datetime.now().isoformat()
     }), 200
@@ -780,6 +846,13 @@ def sync():
 def test_telegram():
     """텔레그램 알림 테스트"""
     try:
+        if not ENABLE_TELEGRAM:
+            return jsonify({
+                'status': 'disabled',
+                'message': '텔레그램이 비활성화되어 있습니다',
+                'timestamp': datetime.now().isoformat()
+            }), 200
+        
         test_message = f"""
 🧪 <b>텔레그램 알림 테스트</b>
 
@@ -809,5 +882,6 @@ if __name__ == '__main__':
     # 서버 시작 시 초기화
     initialize_bot()
     
-    # Flask 앱 실행
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Flask 앱 실행 (포트는 상단 SERVER_PORT에서 설정)
+    logging.info(f"서버 시작: 포트 {SERVER_PORT}, 텔레그램 {'활성화' if ENABLE_TELEGRAM else '비활성화'}")
+    app.run(host='0.0.0.0', port=SERVER_PORT, debug=True)
