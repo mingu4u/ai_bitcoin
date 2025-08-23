@@ -459,36 +459,114 @@ def get_account_balance():
 def webhook():
     """TradingView 웹훅 수신 - Stochastic/투자심리도 전략 지원"""
     try:
-        # Content-Type 확인 및 처리
+        # 요청 데이터 디버깅
         content_type = request.headers.get('Content-Type', '')
+        content_length = request.headers.get('Content-Length', 0)
         
-        if 'application/json' in content_type:
-            data = request.get_json()
+        logging.info(f"웹훅 요청 수신:")
+        logging.info(f"- Content-Type: {content_type}")
+        logging.info(f"- Content-Length: {content_length}")
+        logging.info(f"- Method: {request.method}")
+        
+        # 원시 데이터 먼저 확인
+        raw_data = request.get_data(as_text=True)
+        logging.info(f"- Raw Data: '{raw_data}'")
+        logging.info(f"- Raw Data Length: {len(raw_data)}")
+        
+        # 빈 데이터 체크
+        if not raw_data or raw_data.strip() == '':
+            error_msg = "Empty request body received"
+            logging.error(error_msg)
+            return jsonify({'error': error_msg, 'received_data': raw_data}), 400
+        
+        # JSON 파싱 시도
+        data = None
+        
+        # 방법 1: Content-Type이 JSON인 경우
+        if 'application/json' in content_type.lower():
+            try:
+                data = request.get_json()
+                if data is None:
+                    # get_json()이 None을 반환하는 경우
+                    logging.warning("request.get_json() returned None, trying manual parse")
+                    data = json.loads(raw_data)
+            except Exception as e:
+                logging.error(f"JSON parsing failed with get_json(): {str(e)}")
+                try:
+                    data = json.loads(raw_data)
+                except Exception as e2:
+                    logging.error(f"Manual JSON parsing also failed: {str(e2)}")
+                    return jsonify({
+                        'error': 'JSON parsing failed',
+                        'original_error': str(e),
+                        'manual_parse_error': str(e2),
+                        'raw_data': raw_data,
+                        'content_type': content_type
+                    }), 400
+        
+        # 방법 2: Content-Type이 JSON이 아닌 경우
         else:
-            raw_data = request.get_data(as_text=True)
-            logging.info(f"Raw webhook data: {raw_data}")
-            
             try:
                 data = json.loads(raw_data)
-            except json.JSONDecodeError:
-                logging.error(f"JSON 파싱 실패: {raw_data}")
-                return jsonify({'error': 'Invalid JSON format'}), 400
+            except json.JSONDecodeError as e:
+                # JSON이 아닌 경우 form-data나 plain text일 수 있음
+                logging.error(f"Non-JSON data received: {str(e)}")
+                
+                # form-data 시도
+                try:
+                    form_data = request.form.to_dict()
+                    if form_data:
+                        logging.info(f"Form data received: {form_data}")
+                        # form data를 JSON 형태로 변환 시도
+                        if 'json' in form_data:
+                            data = json.loads(form_data['json'])
+                        else:
+                            data = form_data
+                    else:
+                        return jsonify({
+                            'error': 'Invalid data format',
+                            'details': 'Neither JSON nor form data',
+                            'raw_data': raw_data,
+                            'content_type': content_type,
+                            'json_error': str(e)
+                        }), 400
+                except Exception as form_error:
+                    return jsonify({
+                        'error': 'All parsing methods failed',
+                        'json_error': str(e),
+                        'form_error': str(form_error),
+                        'raw_data': raw_data,
+                        'content_type': content_type
+                    }), 400
+        
+        # 데이터가 여전히 None인 경우
+        if data is None:
+            return jsonify({
+                'error': 'Failed to parse request data',
+                'raw_data': raw_data,
+                'content_type': content_type
+            }), 400
+        
+        # 파싱된 데이터 로깅
+        logging.info(f"성공적으로 파싱된 데이터: {json.dumps(data, indent=2)}")
         
         # 심볼 확인 및 매핑
         symbol = data.get('symbol', 'BTC/USDT')
+        original_symbol = symbol  # 원본 심볼 보존
         
         # 심볼 매핑 (TradingView 심볼 -> Binance 심볼)
         symbol_mapping = {
             'BTCUSDT': 'BTC/USDT',
-            'BTCUSDT.P': 'BTC/USDT',  # 영구선물 심볼 매핑 추가
+            'BTCUSDT.P': 'BTC/USDT',
             'SAHARAUSDT': 'SAHARA/USDT',
-            'SAHARAUSDT.P': 'SAHARA/USDT',
+            'SAHARAUSDT.P': 'SAHARA/USDT',  # SAHARA 영구선물 매핑
             'ETHUSDT': 'ETH/USDT',
-            'ETHUSDT.P': 'ETH/USDT'   # ETH 영구선물 매핑 추가
+            'ETHUSDT.P': 'ETH/USDT'
         }
         
         if symbol in symbol_mapping:
             symbol = symbol_mapping[symbol]
+            logging.info(f"심볼 매핑: {original_symbol} -> {symbol}")
         
         # 심볼이 설정에 없으면 추가
         if symbol not in SYMBOL_CONFIG:
@@ -497,7 +575,7 @@ def webhook():
         # 동기화
         sync_positions_with_exchange()
         
-        logging.info(f"웹훅 수신 ({symbol}): {json.dumps(data, indent=2)}")
+        logging.info(f"처리할 액션: {data.get('action')}, 심볼: {symbol}")
         
         action = data.get('action')
         
@@ -536,6 +614,7 @@ def webhook():
                 'status': 'success',
                 'action': action,
                 'symbol': symbol,
+                'original_symbol': original_symbol,
                 'timestamp': datetime.now().isoformat()
             }), 200
         
@@ -555,8 +634,8 @@ def webhook():
                         pnl = (current_price - pos['entry_price']) * pos['amount']
                     else:
                         pnl = (pos['entry_price'] - current_price) * pos['amount']
-                except:
-                    pass
+                except Exception as pnl_error:
+                    logging.warning(f"PnL 계산 실패: {str(pnl_error)}")
             
             success = close_position(symbol)
             
@@ -568,6 +647,7 @@ def webhook():
                     'status': 'success',
                     'action': 'position_closed',
                     'symbol': symbol,
+                    'original_symbol': original_symbol,
                     'timestamp': datetime.now().isoformat()
                 }), 200
             else:
@@ -578,41 +658,68 @@ def webhook():
         
         # 신규 포지션 진입
         elif action in ['buy', 'sell']:
-            entry_price = float(data.get('entry_price'))
-            stop_loss_price = float(data.get('stop_loss'))
-            pl_ratio = float(data.get('pl_ratio', 3.0))
-            position_type = data.get('position_type', 'normal')
+            # 필수 필드 검증
+            required_fields = ['entry_price', 'stop_loss']
+            missing_fields = [field for field in required_fields if field not in data or data[field] is None]
             
-            # take_profit 처리 - 없으면 pl_ratio로 자동 계산
-            take_profit_data = data.get('take_profit')
+            if missing_fields:
+                error_msg = f"필수 필드 누락: {', '.join(missing_fields)}"
+                logging.error(f"{error_msg}. 전체 데이터: {data}")
+                return jsonify({
+                    'status': 'error',
+                    'message': error_msg,
+                    'received_data': data
+                }), 400
             
-            if take_profit_data is not None and take_profit_data != 'null' and take_profit_data != '':
-                try:
-                    take_profit_price = float(take_profit_data)
-                    logging.info(f"Take profit 전송됨: ${take_profit_price:.2f}")
-                except (ValueError, TypeError):
-                    # take_profit이 잘못된 형식인 경우 자동 계산
+            try:
+                entry_price = float(data.get('entry_price'))
+                stop_loss_price = float(data.get('stop_loss'))
+                pl_ratio = float(data.get('pl_ratio', 3.0))
+                position_type = data.get('position_type', 'normal')
+                
+                # take_profit 처리 - 없으면 pl_ratio로 자동 계산
+                take_profit_data = data.get('take_profit')
+                
+                if take_profit_data is not None and take_profit_data != 'null' and take_profit_data != '':
+                    try:
+                        take_profit_price = float(take_profit_data)
+                        logging.info(f"Take profit 전송됨: ${take_profit_price:.2f}")
+                    except (ValueError, TypeError):
+                        # take_profit이 잘못된 형식인 경우 자동 계산
+                        sl_distance = abs(entry_price - stop_loss_price)
+                        if action == 'buy':
+                            take_profit_price = entry_price + (sl_distance * pl_ratio)
+                        else:  # sell
+                            take_profit_price = entry_price - (sl_distance * pl_ratio)
+                        logging.info(f"Take profit 형식 오류, 자동 계산: ${take_profit_price:.2f}")
+                else:
+                    # take_profit이 없는 경우 pl_ratio로 자동 계산
                     sl_distance = abs(entry_price - stop_loss_price)
                     if action == 'buy':
                         take_profit_price = entry_price + (sl_distance * pl_ratio)
                     else:  # sell
                         take_profit_price = entry_price - (sl_distance * pl_ratio)
-                    logging.info(f"Take profit 형식 오류, 자동 계산: ${take_profit_price:.2f}")
-            else:
-                # take_profit이 없는 경우 pl_ratio로 자동 계산
-                sl_distance = abs(entry_price - stop_loss_price)
-                if action == 'buy':
-                    take_profit_price = entry_price + (sl_distance * pl_ratio)
-                else:  # sell
-                    take_profit_price = entry_price - (sl_distance * pl_ratio)
+                    
+                    logging.info(f"Take profit 자동 계산 ({symbol}): ${take_profit_price:.2f} (PL Ratio: {pl_ratio}:1)")
                 
-                logging.info(f"Take profit 자동 계산 ({symbol}): ${take_profit_price:.2f} (PL Ratio: {pl_ratio}:1)")
+            except (ValueError, TypeError) as e:
+                error_msg = f"숫자 변환 오류: {str(e)}"
+                logging.error(f"{error_msg}. 데이터: {data}")
+                return jsonify({
+                    'status': 'error',
+                    'message': error_msg,
+                    'received_data': data
+                }), 400
             
             # 손절가 확인
             if not stop_loss_price or stop_loss_price == 0:
-                error_msg = f"손절가가 없습니다! ({symbol})"
+                error_msg = f"손절가가 없거나 0입니다! ({symbol})"
                 logging.error(error_msg)
-                return jsonify({'status': 'error', 'message': error_msg}), 400
+                return jsonify({
+                    'status': 'error',
+                    'message': error_msg,
+                    'received_data': data
+                }), 400
             
             # 기존 포지션 체크
             if symbol in current_positions:
@@ -637,6 +744,7 @@ def webhook():
                             'status': 'skipped',
                             'reason': '같은 방향 포지션 이미 존재',
                             'symbol': symbol,
+                            'original_symbol': original_symbol,
                             'timestamp': datetime.now().isoformat()
                         }), 200
                     else:
@@ -659,6 +767,7 @@ def webhook():
             
             logging.info(f"""
             ===== 주문 요청 ({symbol}) =====
+            - Original Symbol: {original_symbol}
             - Action: {action} ({position_type})
             - Amount: {amount:.6f} (${position_size:.2f})
             - Entry: ${entry_price:.2f}
@@ -688,6 +797,7 @@ def webhook():
                     'status': 'success',
                     'action': action,
                     'symbol': symbol,
+                    'original_symbol': original_symbol,
                     'position_type': position_type,
                     'amount': actual_amount,
                     'entry_price': orders['actual_entry'],
@@ -698,23 +808,51 @@ def webhook():
                     'timestamp': datetime.now().isoformat()
                 }), 200
             else:
-                return jsonify({'error': '주문 실행 실패'}), 500
+                return jsonify({
+                    'error': '주문 실행 실패',
+                    'symbol': symbol,
+                    'original_symbol': original_symbol
+                }), 500
         
         else:
-            return jsonify({'error': f'알 수 없는 액션: {action}'}), 400
+            return jsonify({
+                'error': f'알 수 없는 액션: {action}',
+                'received_data': data,
+                'symbol': symbol,
+                'original_symbol': original_symbol
+            }), 400
             
     except Exception as e:
         logging.error(f"웹훅 처리 오류: {str(e)}")
+        
+        # 에러 정보 수집
+        error_details = {
+            'error': str(e),
+            'error_type': type(e).__name__,
+            'content_type': request.headers.get('Content-Type', 'N/A'),
+            'content_length': request.headers.get('Content-Length', 'N/A'),
+            'raw_data': request.get_data(as_text=True) if hasattr(request, 'get_data') else 'N/A',
+            'form_data': dict(request.form) if hasattr(request, 'form') else 'N/A',
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # data 변수가 정의되어 있으면 포함
+        if 'data' in locals() and data is not None:
+            error_details['parsed_data'] = data
+        
         error_message = f"""
 ❌ <b>웹훅 처리 오류</b>
 
 <b>오류:</b> {str(e)}
-<b>데이터:</b> {json.dumps(data, indent=2) if 'data' in locals() else 'N/A'}
+<b>오류 타입:</b> {type(e).__name__}
+<b>Content-Type:</b> {request.headers.get('Content-Type', 'N/A')}
+<b>Raw 데이터:</b> {request.get_data(as_text=True)[:200]}...
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """.strip()
+        
         send_telegram_notification(error_message, 'error')
-        return jsonify({'error': str(e)}), 500
+        return jsonify(error_details), 500
 
 @app.route('/positions', methods=['GET'])
 def get_positions():
