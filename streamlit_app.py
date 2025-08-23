@@ -6,9 +6,14 @@ import requests
 import json
 from datetime import datetime, timedelta
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Middle Server 설정
-MIDDLE_SERVER_URL = "http://localhost:5000"
+# Middle Server 설정 - 다중 포트 지원
+MIDDLE_SERVER_PORTS = [5000, 5001, 5002]
+MIDDLE_SERVER_BASE_URL = "http://localhost"
+
+# 메인 서버는 5000번 포트
+MAIN_SERVER_URL = f"{MIDDLE_SERVER_BASE_URL}:5000"
 
 # 페이지 설정
 st.set_page_config(
@@ -21,17 +26,36 @@ st.set_page_config(
 def check_middle_server_health():
     """Middle Server 상태 확인"""
     try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/status", timeout=2)
+        response = requests.get(f"{MAIN_SERVER_URL}/status", timeout=2)
         if response.status_code == 200:
             return True, response.json()
         return False, None
     except:
         return False, None
 
+def check_all_servers_health():
+    """모든 서버 상태 확인"""
+    server_status = {}
+    
+    for port in MIDDLE_SERVER_PORTS:
+        try:
+            response = requests.get(f"{MIDDLE_SERVER_BASE_URL}:{port}/status", timeout=2)
+            if response.status_code == 200:
+                server_status[port] = {
+                    'status': 'online',
+                    'data': response.json()
+                }
+            else:
+                server_status[port] = {'status': 'error', 'data': None}
+        except:
+            server_status[port] = {'status': 'offline', 'data': None}
+    
+    return server_status
+
 def get_all_positions():
     """모든 심볼의 포지션 정보 가져오기"""
     try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/positions", timeout=5)
+        response = requests.get(f"{MAIN_SERVER_URL}/positions", timeout=5)
         if response.status_code == 200:
             return response.json()
         return None
@@ -39,34 +63,63 @@ def get_all_positions():
         return None
 
 def get_symbol_config():
-    """심볼 설정 가져오기"""
+    """심볼 설정 가져오기 (메인 서버에서만)"""
     try:
-        response = requests.get(f"{MIDDLE_SERVER_URL}/config", timeout=5)
+        response = requests.get(f"{MAIN_SERVER_URL}/config", timeout=5)
         if response.status_code == 200:
             return response.json()
         return None
     except:
         return None
 
-def update_symbol_config(config):
-    """심볼 설정 업데이트"""
-    try:
-        response = requests.post(
-            f"{MIDDLE_SERVER_URL}/config",
-            json=config,
-            headers={'Content-Type': 'application/json'},
-            timeout=5
-        )
-        if response.status_code == 200:
-            return True, response.json()
-        return False, None
-    except:
-        return False, None
+def get_all_servers_config():
+    """모든 서버의 심볼 설정 가져오기"""
+    configs = {}
+    
+    for port in MIDDLE_SERVER_PORTS:
+        try:
+            response = requests.get(f"{MIDDLE_SERVER_BASE_URL}:{port}/config", timeout=5)
+            if response.status_code == 200:
+                configs[port] = response.json()
+            else:
+                configs[port] = None
+        except:
+            configs[port] = None
+    
+    return configs
+
+def update_symbol_config_all_servers(config):
+    """모든 서버에 심볼 설정 업데이트"""
+    results = {}
+    
+    def update_single_server(port):
+        try:
+            response = requests.post(
+                f"{MIDDLE_SERVER_BASE_URL}:{port}/config",
+                json=config,
+                headers={'Content-Type': 'application/json'},
+                timeout=5
+            )
+            if response.status_code == 200:
+                return port, True, response.json()
+            return port, False, None
+        except Exception as e:
+            return port, False, str(e)
+    
+    # 병렬로 모든 서버에 업데이트
+    with ThreadPoolExecutor(max_workers=len(MIDDLE_SERVER_PORTS)) as executor:
+        futures = [executor.submit(update_single_server, port) for port in MIDDLE_SERVER_PORTS]
+        
+        for future in as_completed(futures):
+            port, success, result = future.result()
+            results[port] = {'success': success, 'result': result}
+    
+    return results
 
 def sync_positions():
     """포지션 동기화 실행"""
     try:
-        response = requests.post(f"{MIDDLE_SERVER_URL}/sync", timeout=5)
+        response = requests.post(f"{MAIN_SERVER_URL}/sync", timeout=5)
         if response.status_code == 200:
             return True, response.json()
         return False, None
@@ -76,7 +129,7 @@ def sync_positions():
 def test_telegram():
     """텔레그램 알림 테스트"""
     try:
-        response = requests.post(f"{MIDDLE_SERVER_URL}/test-telegram", timeout=5)
+        response = requests.post(f"{MAIN_SERVER_URL}/test-telegram", timeout=5)
         if response.status_code == 200:
             return True, response.json()
         return False, None
@@ -91,7 +144,7 @@ def close_position_manually(symbol):
             "symbol": symbol
         }
         response = requests.post(
-            f"{MIDDLE_SERVER_URL}/webhook",
+            f"{MAIN_SERVER_URL}/webhook",
             json=data,
             headers={'Content-Type': 'application/json'},
             timeout=5
@@ -102,19 +155,86 @@ def close_position_manually(symbol):
     except:
         return False, None
 
-def display_symbol_config():
-    """심볼 설정 관리 UI"""
-    st.header("⚙️ Symbol Configuration")
+def display_server_status():
+    """모든 서버 상태 표시"""
+    st.subheader("🖥️ Server Status")
     
-    config = get_symbol_config()
-    if not config:
-        st.error("Failed to load configuration")
+    server_status = check_all_servers_health()
+    
+    cols = st.columns(len(MIDDLE_SERVER_PORTS))
+    
+    for idx, port in enumerate(MIDDLE_SERVER_PORTS):
+        with cols[idx]:
+            status = server_status.get(port, {})
+            
+            if status.get('status') == 'online':
+                st.success(f"✅ Port {port}")
+                data = status.get('data', {})
+                telegram_status = "🔔" if data.get('telegram_enabled') else "🔕"
+                st.write(f"{telegram_status} Telegram: {'On' if data.get('telegram_enabled') else 'Off'}")
+                st.write(f"📊 Positions: {len(data.get('current_positions', {}))}")
+            elif status.get('status') == 'error':
+                st.error(f"⚠️ Port {port}")
+                st.write("Server error")
+            else:
+                st.error(f"❌ Port {port}")
+                st.write("Offline")
+
+def display_symbol_config():
+    """심볼 설정 관리 UI (다중 서버 지원)"""
+    st.header("⚙️ Symbol Configuration (All Servers)")
+    
+    # 서버 상태 표시
+    display_server_status()
+    
+    st.divider()
+    
+    # 모든 서버의 설정 가져오기
+    all_configs = get_all_servers_config()
+    
+    # 메인 서버(5000)의 설정을 기준으로 사용
+    main_config = all_configs.get(5000)
+    
+    if not main_config:
+        st.error("Failed to load configuration from main server (port 5000)")
         return
+    
+    # 설정 동기화 상태 체크
+    config_synced = True
+    for port, config in all_configs.items():
+        if config != main_config:
+            config_synced = False
+            break
+    
+    if config_synced:
+        st.success("✅ All servers have synchronized configurations")
+    else:
+        st.warning("⚠️ Server configurations are not synchronized")
+        
+        if st.button("🔄 Sync All Servers with Main Config"):
+            results = update_symbol_config_all_servers(main_config)
+            
+            success_count = sum(1 for r in results.values() if r['success'])
+            total_count = len(results)
+            
+            if success_count == total_count:
+                st.success(f"✅ Successfully synchronized all {total_count} servers!")
+            else:
+                st.warning(f"⚠️ Synchronized {success_count}/{total_count} servers")
+                
+                for port, result in results.items():
+                    if not result['success']:
+                        st.error(f"Failed to update port {port}: {result['result']}")
+            
+            time.sleep(2)
+            st.rerun()
+    
+    st.divider()
     
     # 기존 심볼 설정
     st.subheader("📊 Existing Symbols")
     
-    for symbol, settings in config.items():
+    for symbol, settings in main_config.items():
         with st.expander(f"{symbol} Settings"):
             col1, col2, col3 = st.columns(3)
             
@@ -156,7 +276,7 @@ def display_symbol_config():
                     key=f"max_size_{symbol}"
                 )
                 
-                if st.button(f"Update {symbol}", key=f"update_{symbol}"):
+                if st.button(f"Update {symbol} (All Servers)", key=f"update_{symbol}"):
                     new_config = {
                         symbol: {
                             'leverage': leverage,
@@ -166,16 +286,30 @@ def display_symbol_config():
                             'enabled': enabled
                         }
                     }
-                    success, result = update_symbol_config(new_config)
-                    if success:
-                        st.success(f"✅ {symbol} configuration updated!")
-                        time.sleep(1)
-                        st.rerun()
+                    
+                    # 모든 서버에 업데이트
+                    results = update_symbol_config_all_servers(new_config)
+                    
+                    success_count = sum(1 for r in results.values() if r['success'])
+                    total_count = len(results)
+                    
+                    if success_count == total_count:
+                        st.success(f"✅ {symbol} updated on all {total_count} servers!")
                     else:
-                        st.error(f"Failed to update {symbol}")
+                        st.warning(f"⚠️ {symbol} updated on {success_count}/{total_count} servers")
+                        
+                        # 실패한 서버들 표시
+                        for port, result in results.items():
+                            if result['success']:
+                                st.success(f"✅ Port {port}: Success")
+                            else:
+                                st.error(f"❌ Port {port}: Failed - {result['result']}")
+                    
+                    time.sleep(2)
+                    st.rerun()
     
     # 새 심볼 추가
-    st.subheader("➕ Add New Symbol")
+    st.subheader("➕ Add New Symbol (All Servers)")
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -189,7 +323,7 @@ def display_symbol_config():
         new_pos_size = st.number_input("Position Size %", min_value=1.0, max_value=100.0, value=10.0)
     
     with col4:
-        if st.button("Add Symbol", disabled=not new_symbol):
+        if st.button("Add Symbol to All Servers", disabled=not new_symbol):
             if new_symbol:
                 new_config = {
                     new_symbol: {
@@ -200,13 +334,37 @@ def display_symbol_config():
                         'enabled': True
                     }
                 }
-                success, result = update_symbol_config(new_config)
-                if success:
-                    st.success(f"✅ {new_symbol} added successfully!")
-                    time.sleep(1)
-                    st.rerun()
+                
+                # 모든 서버에 추가
+                results = update_symbol_config_all_servers(new_config)
+                
+                success_count = sum(1 for r in results.values() if r['success'])
+                total_count = len(results)
+                
+                if success_count == total_count:
+                    st.success(f"✅ {new_symbol} added to all {total_count} servers!")
                 else:
-                    st.error(f"Failed to add {new_symbol}")
+                    st.warning(f"⚠️ {new_symbol} added to {success_count}/{total_count} servers")
+                    
+                    for port, result in results.items():
+                        if result['success']:
+                            st.success(f"✅ Port {port}: Added successfully")
+                        else:
+                            st.error(f"❌ Port {port}: Failed - {result['result']}")
+                
+                time.sleep(2)
+                st.rerun()
+    
+    # 설정 상세 정보 (접힘 메뉴)
+    with st.expander("🔍 Configuration Details by Server"):
+        for port in MIDDLE_SERVER_PORTS:
+            config = all_configs.get(port)
+            st.subheader(f"Server Port {port}")
+            
+            if config:
+                st.json(config)
+            else:
+                st.error(f"Failed to load configuration from port {port}")
 
 def display_portfolio_overview():
     """포트폴리오 전체 개요 표시"""
@@ -466,7 +624,7 @@ def main():
     # 탭 생성
     tab1, tab2, tab3, tab4 = st.tabs([
         "🔴 Live Trading", 
-        "⚙️ Symbol Config", 
+        "⚙️ Symbol Config (Multi-Server)", 
         "📊 Performance Analysis",
         "📚 Strategy Info"
     ])
@@ -507,12 +665,20 @@ def main():
         - SAHARA/USDT (레버리지 3x)
         - 추가 심볼 설정 가능
         
+        ### 다중 서버 구조
+        
+        - **Port 5000**: 메인 서버 (텔레그램 알림 활성화)
+        - **Port 5001**: 복제 서버 1 (텔레그램 알림 비활성화)
+        - **Port 5002**: 복제 서버 2 (텔레그램 알림 비활성화)
+        
+        모든 서버는 동일한 설정을 공유하며, Symbol Config 탭에서 일괄 관리할 수 있습니다.
+        
         ### Alert 메시지 포맷
         
         ```json
         {
             "action": "buy/sell/close_position",
-            "symbol": "SAHARAUSDT",
+            "symbol": "SAHARAUSDT.P",
             "entry_price": 50000,
             "stop_loss": 49000,
             "take_profit": 52000,
@@ -524,8 +690,8 @@ def main():
         ### 사용 방법
         
         1. TradingView에서 Stochastic Fast 전략 스크립트 적용
-        2. Alert 설정 (Webhook URL: http://your-server:5000/webhook)
-        3. Symbol Config 탭에서 심볼별 레버리지 및 포지션 크기 설정
+        2. Alert 설정 (Webhook URL: http://your-server/webhook-all)
+        3. Symbol Config 탭에서 심볼별 레버리지 및 포지션 크기 설정 (모든 서버 동시 적용)
         4. Live Trading 탭에서 실시간 모니터링
         """)
     
@@ -534,30 +700,41 @@ def main():
         st.header("ℹ️ System Info")
         
         # 서버 상태 확인
+        server_status = check_all_servers_health()
+        
+        st.write("**Server Status:**")
+        for port in MIDDLE_SERVER_PORTS:
+            status = server_status.get(port, {})
+            
+            if status.get('status') == 'online':
+                telegram_icon = "🔔" if status.get('data', {}).get('telegram_enabled') else "🔕"
+                st.success(f"✅ Port {port} {telegram_icon}")
+            elif status.get('status') == 'error':
+                st.error(f"⚠️ Port {port}")
+            else:
+                st.error(f"❌ Port {port}")
+        
+        st.write("---")
+        
+        # 메인 서버 정보
         health_status, server_data = check_middle_server_health()
         
-        if health_status:
-            st.success("✅ Server: Online")
+        if health_status and server_data:
+            st.write("**Active Symbols (Main):**")
+            for symbol in server_data.get('symbols', []):
+                config = server_data.get('symbol_config', {}).get(symbol, {})
+                if config.get('enabled', True):
+                    st.write(f"• {symbol} ({config.get('leverage', 'N/A')}x)")
             
-            if server_data:
-                st.write("**Active Symbols:**")
-                for symbol in server_data.get('symbols', []):
-                    config = server_data.get('symbol_config', {}).get(symbol, {})
-                    if config.get('enabled', True):
-                        st.write(f"• {symbol} ({config.get('leverage', 'N/A')}x)")
-                
-                st.write("---")
-                
-                # 현재 포지션 수
-                current_positions = server_data.get('current_positions', {})
-                st.write(f"**Active Positions:** {len(current_positions)}")
-                
-                for symbol, pos in current_positions.items():
-                    side = pos.get('side', 'N/A').upper()
-                    st.write(f"• {symbol}: {side}")
-        else:
-            st.error("❌ Server: Offline")
-            st.info("Start middle_server.py first")
+            st.write("---")
+            
+            # 현재 포지션 수
+            current_positions = server_data.get('current_positions', {})
+            st.write(f"**Active Positions:** {len(current_positions)}")
+            
+            for symbol, pos in current_positions.items():
+                side = pos.get('side', 'N/A').upper()
+                st.write(f"• {symbol}: {side}")
         
         st.write("---")
         
@@ -583,7 +760,8 @@ def main():
         
         **Live Trading**: 실시간 포지션 모니터링
         
-        **Symbol Config**: 심볼별 설정 관리
+        **Symbol Config (Multi-Server)**: 
+        - 모든 서버에 심볼 설정 동시 적용
         - 레버리지 조정
         - 포지션 크기 설정
         - 심볼 활성화/비활성화
