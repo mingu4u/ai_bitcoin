@@ -24,8 +24,8 @@ logging.basicConfig(level=logging.INFO,
 
 # Binance 설정
 exchange = ccxt.binance({
-    'apiKey': os.getenv('BINANCE_API_KEY_HYUK'),
-    'secret': os.getenv('BINANCE_SECRET_KEY_HYUK'),
+    'apiKey': os.getenv('BINANCE_API_KEY_HYUN'),
+    'secret': os.getenv('BINANCE_SECRET_KEY_HYUN'),
     'enableRateLimit': True,
     'options': {
         'defaultType': 'future'  # 선물 거래용
@@ -482,6 +482,7 @@ def webhook():
             'BTCUSDT': 'BTC/USDT',
             'BTCUSDT.P': 'BTC/USDT',  # 영구선물 심볼 매핑 추가
             'SAHARAUSDT': 'SAHARA/USDT',
+            'SAHARAUSDT.P': 'SAHARA/USDT',
             'ETHUSDT': 'ETH/USDT',
             'ETHUSDT.P': 'ETH/USDT'   # ETH 영구선물 매핑 추가
         }
