@@ -24,8 +24,8 @@ logging.basicConfig(level=logging.INFO,
 
 # Binance 설정
 exchange = ccxt.binance({
-    'apiKey': os.getenv('BINANCE_API_KEY_HYUN'),
-    'secret': os.getenv('BINANCE_SECRET_KEY_HYUN'),
+    'apiKey': os.getenv('BINANCE_API_KEY_HYUK'),
+    'secret': os.getenv('BINANCE_SECRET_KEY_HYUK'),
     'enableRateLimit': True,
     'options': {
         'defaultType': 'future'  # 선물 거래용
