@@ -46,8 +46,8 @@ SYMBOL_CONFIG = {
         'enabled': True
     },
     'SAHARA/USDT': {
-        'leverage': 3,
-        'position_size_percent': 25,
+        'leverage': 15,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
@@ -55,6 +55,13 @@ SYMBOL_CONFIG = {
     'ETH/USDT': {
         'leverage': 5,
         'position_size_percent': 35,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'RESOLV/USDT': {
+        'leverage': 15,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
@@ -559,11 +566,13 @@ def webhook():
             'BTCUSDT': 'BTC/USDT',
             'BTCUSDT.P': 'BTC/USDT',
             'SAHARAUSDT': 'SAHARA/USDT',
-            'SAHARAUSDT.P': 'SAHARA/USDT',  # SAHARA 영구선물 매핑
+            'SAHARAUSDT.P': 'SAHARA/USDT',
             'ETHUSDT': 'ETH/USDT',
-            'ETHUSDT.P': 'ETH/USDT'
+            'ETHUSDT.P': 'ETH/USDT',
+            'RESOLVUSDT': 'RESOLV/USDT',
+            'RESOLVUSDT.P': 'RESOLV/USDT'
         }
-        
+                
         if symbol in symbol_mapping:
             symbol = symbol_mapping[symbol]
             logging.info(f"심볼 매핑: {original_symbol} -> {symbol}")
