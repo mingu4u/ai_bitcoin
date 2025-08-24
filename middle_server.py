@@ -40,28 +40,35 @@ TELEGRAM_CHAT_IDS = os.getenv('TELEGRAM_CHAT_IDS', '').split(',')
 SYMBOL_CONFIG = {
     'BTC/USDT': {
         'leverage': 20,
-        'position_size_percent': 50,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
     },
     'SAHARA/USDT': {
-        'leverage': 15,
-        'position_size_percent': 40,
+        'leverage': 10,
+        'position_size_percent': 30,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
     },
     'ETH/USDT': {
         'leverage': 5,
-        'position_size_percent': 35,
+        'position_size_percent': 25,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
     },
     'RESOLV/USDT': {
         'leverage': 15,
-        'position_size_percent': 40,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'BIO/USDT': {
+        'leverage': 15,
+        'position_size_percent': 30,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
@@ -570,9 +577,11 @@ def webhook():
             'ETHUSDT': 'ETH/USDT',
             'ETHUSDT.P': 'ETH/USDT',
             'RESOLVUSDT': 'RESOLV/USDT',
-            'RESOLVUSDT.P': 'RESOLV/USDT'
+            'RESOLVUSDT.P': 'RESOLV/USDT',
+            'BIOUSDT': 'BIO/USDT',
+            'BIOUSDT.P': 'BIO/USDT'
         }
-                
+                        
         if symbol in symbol_mapping:
             symbol = symbol_mapping[symbol]
             logging.info(f"심볼 매핑: {original_symbol} -> {symbol}")
