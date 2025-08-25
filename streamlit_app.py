@@ -155,6 +155,99 @@ def close_position_manually(symbol):
     except:
         return False, None
 
+def emergency_kill_all_auto_positions():
+    """비상 킬 스위치 - 모든 서버에서 자동매매 포지션 일괄 종료"""
+    results = {
+        'closed_positions': [],
+        'server_results': {},
+        'total_closed': 0,
+        'errors': []
+    }
+    
+    # 먼저 메인 서버에서 현재 포지션 정보 가져오기
+    positions_data = get_all_positions()
+    if not positions_data:
+        results['errors'].append("Failed to fetch positions from main server")
+        return results
+    
+    # 자동매매 포지션만 필터링 (manual_entry가 False인 것)
+    auto_positions = []
+    for symbol, data in positions_data.get('positions', {}).items():
+        tracked_pos = data.get('tracked_position')
+        if tracked_pos and not tracked_pos.get('manual_entry', False):
+            auto_positions.append(symbol)
+    
+    if not auto_positions:
+        results['message'] = "No auto-trading positions to close"
+        return results
+    
+    # 각 서버에 포지션 종료 명령 전송
+    def close_positions_on_server(port, symbols):
+        server_results = {
+            'port': port,
+            'closed': [],
+            'failed': [],
+            'errors': []
+        }
+        
+        for symbol in symbols:
+            try:
+                data = {
+                    "action": "close_position",
+                    "symbol": symbol,
+                    "exit_reason": "emergency_kill_switch"
+                }
+                
+                response = requests.post(
+                    f"{MIDDLE_SERVER_BASE_URL}:{port}/webhook",
+                    json=data,
+                    headers={'Content-Type': 'application/json'},
+                    timeout=5
+                )
+                
+                if response.status_code == 200:
+                    server_results['closed'].append(symbol)
+                else:
+                    server_results['failed'].append(symbol)
+                    
+            except Exception as e:
+                server_results['failed'].append(symbol)
+                server_results['errors'].append(f"{symbol}: {str(e)}")
+        
+        return server_results
+    
+    # 병렬로 모든 서버에 종료 명령 전송
+    with ThreadPoolExecutor(max_workers=len(MIDDLE_SERVER_PORTS)) as executor:
+        futures = []
+        for port in MIDDLE_SERVER_PORTS:
+            futures.append(executor.submit(close_positions_on_server, port, auto_positions))
+        
+        for future in as_completed(futures):
+            server_result = future.result()
+            port = server_result['port']
+            results['server_results'][port] = server_result
+            results['total_closed'] += len(server_result['closed'])
+    
+    results['closed_positions'] = auto_positions
+    return results
+
+def get_auto_positions_count():
+    """자동매매 포지션 개수 가져오기"""
+    try:
+        positions_data = get_all_positions()
+        if not positions_data:
+            return 0
+        
+        count = 0
+        for symbol, data in positions_data.get('positions', {}).items():
+            tracked_pos = data.get('tracked_position')
+            if tracked_pos and not tracked_pos.get('manual_entry', False):
+                count += 1
+        
+        return count
+    except:
+        return 0
+
 def display_server_status():
     """모든 서버 상태 표시"""
     st.subheader("🖥️ Server Status")
@@ -379,15 +472,24 @@ def display_portfolio_overview():
     # 전체 통계 계산
     total_pnl = 0
     active_positions = 0
+    auto_positions = 0
+    manual_positions = 0
     total_margin_used = 0
     
     for symbol, data in positions_data.get('positions', {}).items():
         if data.get('tracked_position'):
             active_positions += 1
+            
+            # 자동/수동 구분
+            if data['tracked_position'].get('manual_entry', False):
+                manual_positions += 1
+            else:
+                auto_positions += 1
+            
             if data.get('position_info'):
                 total_pnl += data['position_info'].get('unrealized_pnl', 0)
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.metric("Active Positions", active_positions)
@@ -397,9 +499,12 @@ def display_portfolio_overview():
         st.metric("Total Unrealized PnL", f"${total_pnl:,.2f}", delta=total_pnl, delta_color=pnl_color)
     
     with col3:
-        st.metric("Active Symbols", len([s for s in positions_data.get('positions', {}) if positions_data['positions'][s].get('tracked_position')]))
+        st.metric("Auto Positions", auto_positions)
     
     with col4:
+        st.metric("Manual Positions", manual_positions)
+    
+    with col5:
         st.metric("Last Update", datetime.now().strftime('%H:%M:%S'))
 
 def display_symbol_positions(symbol, position_data):
@@ -416,7 +521,11 @@ def display_symbol_positions(symbol, position_data):
         with col1:
             side = pos_info.get('side', 'N/A').upper()
             side_emoji = "🟢" if side == 'BUY' else "🔴"
-            st.write(f"{side_emoji} **{symbol}**")
+            
+            # 자동/수동 표시
+            entry_type = "🔧 Manual" if pos_info.get('manual_entry', False) else "🤖 Auto"
+            
+            st.write(f"{side_emoji} **{symbol}** {entry_type}")
             st.write(f"Side: {side}")
             st.write(f"Amount: {pos_info.get('amount', 0):.6f}")
         
@@ -436,9 +545,6 @@ def display_symbol_positions(symbol, position_data):
             pnl_color = "green" if pnl >= 0 else "red"
             st.markdown(f"**PnL:** <span style='color:{pnl_color}'>${pnl:,.2f}</span>", unsafe_allow_html=True)
             st.markdown(f"**PnL %:** <span style='color:{pnl_color}'>{pnl_pct:.2f}%</span>", unsafe_allow_html=True)
-            
-            if pos_info.get('manual_entry'):
-                st.info("🔧 Manual")
         
         with col5:
             if st.button("Close", key=f"close_{symbol}"):
@@ -506,9 +612,94 @@ def display_open_orders():
     else:
         st.info("No open orders")
 
+def display_emergency_kill_switch():
+    """비상 킬 스위치 UI"""
+    st.error("🚨 EMERGENCY KILL SWITCH 🚨")
+    
+    col1, col2, col3 = st.columns([2, 2, 3])
+    
+    with col1:
+        auto_positions_count = get_auto_positions_count()
+        st.metric("Auto Positions to Close", auto_positions_count)
+    
+    with col2:
+        st.write("**Affected Servers:**")
+        st.write("• Port 5000 (Main)")
+        st.write("• Port 5001 (Backup)")
+        st.write("• Port 5002 (Backup)")
+    
+    with col3:
+        st.warning("""
+        ⚠️ **WARNING**: This will immediately close ALL auto-trading positions across ALL servers!
+        
+        • Manual positions will NOT be affected
+        • This action cannot be undone
+        • Use only in emergency situations
+        """)
+    
+    # 안전 장치: 체크박스로 확인
+    confirm_kill = st.checkbox("I understand this will close all auto-trading positions immediately", key="confirm_kill")
+    
+    if st.button("🔴 EXECUTE KILL ALL AUTO POSITIONS", 
+                  disabled=not confirm_kill or auto_positions_count == 0,
+                  type="primary"):
+        
+        if auto_positions_count == 0:
+            st.info("No auto-trading positions to close")
+        else:
+            # 실행 확인을 위한 추가 다이얼로그
+            with st.spinner(f"Closing {auto_positions_count} auto positions across all servers..."):
+                results = emergency_kill_all_auto_positions()
+            
+            # 결과 표시
+            st.divider()
+            
+            if results.get('message'):
+                st.info(results['message'])
+            else:
+                st.success(f"✅ Kill switch executed! Total positions closed: {len(results['closed_positions'])}")
+                
+                # 서버별 결과 표시
+                for port, server_result in results.get('server_results', {}).items():
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write(f"**Port {port}:**")
+                    
+                    with col2:
+                        closed_count = len(server_result.get('closed', []))
+                        failed_count = len(server_result.get('failed', []))
+                        
+                        if closed_count > 0:
+                            st.success(f"Closed: {closed_count}")
+                        if failed_count > 0:
+                            st.error(f"Failed: {failed_count}")
+                
+                # 종료된 포지션 목록
+                if results['closed_positions']:
+                    st.write("**Closed Positions:**")
+                    for symbol in results['closed_positions']:
+                        st.write(f"• {symbol}")
+                
+                # 오류가 있었다면 표시
+                if results.get('errors'):
+                    st.error("**Errors encountered:**")
+                    for error in results['errors']:
+                        st.write(f"• {error}")
+            
+            # 페이지 새로고침
+            time.sleep(3)
+            st.rerun()
+
 def display_realtime_section():
     """실시간 거래 정보 섹션"""
     st.header('🔴 Real-time Multi-Symbol Trading')
+    
+    # 비상 킬 스위치 섹션 추가
+    with st.expander("🚨 EMERGENCY CONTROLS", expanded=False):
+        display_emergency_kill_switch()
+    
+    st.divider()
     
     # Health Check 상태 표시
     health_status, server_data = check_middle_server_health()
@@ -575,8 +766,10 @@ def display_performance_by_symbol():
     for symbol, data in positions_data.get('positions', {}).items():
         if data.get('position_info'):
             info = data['position_info']
+            tracked_pos = data.get('tracked_position', {})
             performance_data.append({
                 'Symbol': symbol,
+                'Type': 'Manual' if tracked_pos.get('manual_entry', False) else 'Auto',
                 'PnL ($)': info.get('unrealized_pnl', 0),
                 'PnL (%)': info.get('pnl_percent', 0),
                 'Current Price': info.get('current_price', 0)
@@ -673,6 +866,13 @@ def main():
         
         모든 서버는 동일한 설정을 공유하며, Symbol Config 탭에서 일괄 관리할 수 있습니다.
         
+        ### 🚨 비상 킬 스위치
+        
+        **Emergency Kill Switch**는 모든 자동매매 포지션을 즉시 종료하는 기능입니다:
+        - 3개 서버 모두에 동시 종료 명령 전송
+        - 자동매매 포지션만 종료 (수동 포지션은 유지)
+        - Live Trading 탭의 EMERGENCY CONTROLS에서 실행
+        
         ### Alert 메시지 포맷
         
         ```json
@@ -693,6 +893,7 @@ def main():
         2. Alert 설정 (Webhook URL: http://your-server/webhook-all)
         3. Symbol Config 탭에서 심볼별 레버리지 및 포지션 크기 설정 (모든 서버 동시 적용)
         4. Live Trading 탭에서 실시간 모니터링
+        5. 비상 시 EMERGENCY CONTROLS에서 Kill Switch 실행
         """)
     
     # 사이드바에 간단한 정보 표시
@@ -730,11 +931,17 @@ def main():
             
             # 현재 포지션 수
             current_positions = server_data.get('current_positions', {})
+            auto_count = sum(1 for p in current_positions.values() if not p.get('manual_entry', False))
+            manual_count = sum(1 for p in current_positions.values() if p.get('manual_entry', False))
+            
             st.write(f"**Active Positions:** {len(current_positions)}")
+            st.write(f"• Auto: {auto_count}")
+            st.write(f"• Manual: {manual_count}")
             
             for symbol, pos in current_positions.items():
                 side = pos.get('side', 'N/A').upper()
-                st.write(f"• {symbol}: {side}")
+                type_icon = "🔧" if pos.get('manual_entry', False) else "🤖"
+                st.write(f"• {symbol}: {side} {type_icon}")
         
         st.write("---")
         
@@ -754,11 +961,25 @@ def main():
         
         st.write("---")
         
+        # 비상 킬 스위치 퀵 액세스
+        st.error("🚨 Emergency")
+        auto_positions = get_auto_positions_count()
+        st.metric("Auto Positions", auto_positions)
+        
+        if st.button("🔴 KILL ALL AUTO", 
+                     use_container_width=True,
+                     disabled=auto_positions == 0,
+                     type="primary"):
+            st.warning("Go to Live Trading > EMERGENCY CONTROLS to execute")
+        
+        st.write("---")
+        
         # 설명
         st.markdown("""
         ### 📖 Dashboard Guide
         
         **Live Trading**: 실시간 포지션 모니터링
+        - 🚨 Emergency Kill Switch 포함
         
         **Symbol Config (Multi-Server)**: 
         - 모든 서버에 심볼 설정 동시 적용
