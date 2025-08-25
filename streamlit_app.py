@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timedelta
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Middle Server 설정 - 다중 포트 지원
 MIDDLE_SERVER_PORTS = [5000, 5001, 5002]
@@ -23,18 +24,67 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-def check_middle_server_health():
+# ============ 캐싱 메커니즘 추가 ============
+class DataCache:
+    def __init__(self, ttl=30):
+        self.cache = {}
+        self.ttl = ttl
+        self.lock = threading.Lock()
+    
+    def get(self, key):
+        with self.lock:
+            if key in self.cache:
+                data, timestamp = self.cache[key]
+                if time.time() - timestamp < self.ttl:
+                    return data
+                else:
+                    del self.cache[key]
+            return None
+    
+    def set(self, key, value):
+        with self.lock:
+            self.cache[key] = (value, time.time())
+    
+    def clear(self, key=None):
+        with self.lock:
+            if key:
+                self.cache.pop(key, None)
+            else:
+                self.cache.clear()
+
+# 전역 캐시 인스턴스
+data_cache = DataCache(ttl=30)
+
+# ============ 기존 함수들 (캐싱 추가) ============
+
+def check_middle_server_health(force_refresh=False):
     """Middle Server 상태 확인"""
+    cache_key = "server_health"
+    
+    if not force_refresh:
+        cached = data_cache.get(cache_key)
+        if cached:
+            return cached
+    
     try:
         response = requests.get(f"{MAIN_SERVER_URL}/status", timeout=2)
         if response.status_code == 200:
-            return True, response.json()
+            result = (True, response.json())
+            data_cache.set(cache_key, result)
+            return result
         return False, None
     except:
         return False, None
 
-def check_all_servers_health():
+def check_all_servers_health(force_refresh=False):
     """모든 서버 상태 확인"""
+    cache_key = "all_servers_health"
+    
+    if not force_refresh:
+        cached = data_cache.get(cache_key)
+        if cached:
+            return cached
+    
     server_status = {}
     
     for port in MIDDLE_SERVER_PORTS:
@@ -50,30 +100,56 @@ def check_all_servers_health():
         except:
             server_status[port] = {'status': 'offline', 'data': None}
     
+    data_cache.set(cache_key, server_status)
     return server_status
 
-def get_all_positions():
+def get_all_positions(force_refresh=False):
     """모든 심볼의 포지션 정보 가져오기"""
+    cache_key = "all_positions"
+    
+    if not force_refresh:
+        cached = data_cache.get(cache_key)
+        if cached:
+            return cached
+    
     try:
         response = requests.get(f"{MAIN_SERVER_URL}/positions", timeout=5)
         if response.status_code == 200:
-            return response.json()
+            result = response.json()
+            data_cache.set(cache_key, result)
+            return result
         return None
     except:
         return None
 
-def get_symbol_config():
+def get_symbol_config(force_refresh=False):
     """심볼 설정 가져오기 (메인 서버에서만)"""
+    cache_key = "symbol_config"
+    
+    if not force_refresh:
+        cached = data_cache.get(cache_key)
+        if cached:
+            return cached
+    
     try:
         response = requests.get(f"{MAIN_SERVER_URL}/config", timeout=5)
         if response.status_code == 200:
-            return response.json()
+            result = response.json()
+            data_cache.set(cache_key, result)
+            return result
         return None
     except:
         return None
 
-def get_all_servers_config():
+def get_all_servers_config(force_refresh=False):
     """모든 서버의 심볼 설정 가져오기"""
+    cache_key = "all_servers_config"
+    
+    if not force_refresh:
+        cached = data_cache.get(cache_key)
+        if cached:
+            return cached
+    
     configs = {}
     
     for port in MIDDLE_SERVER_PORTS:
@@ -86,6 +162,7 @@ def get_all_servers_config():
         except:
             configs[port] = None
     
+    data_cache.set(cache_key, configs)
     return configs
 
 def update_symbol_config_all_servers(config):
@@ -114,6 +191,11 @@ def update_symbol_config_all_servers(config):
             port, success, result = future.result()
             results[port] = {'success': success, 'result': result}
     
+    # 캐시 클리어
+    data_cache.clear("symbol_config")
+    data_cache.clear("all_servers_config")
+    data_cache.clear("all_positions")
+    
     return results
 
 def sync_positions():
@@ -121,6 +203,8 @@ def sync_positions():
     try:
         response = requests.post(f"{MAIN_SERVER_URL}/sync", timeout=5)
         if response.status_code == 200:
+            # 캐시 클리어
+            data_cache.clear("all_positions")
             return True, response.json()
         return False, None
     except:
@@ -150,6 +234,8 @@ def close_position_manually(symbol):
             timeout=5
         )
         if response.status_code == 200:
+            # 캐시 클리어
+            data_cache.clear("all_positions")
             return True, response.json()
         return False, None
     except:
@@ -165,7 +251,7 @@ def emergency_kill_all_auto_positions():
     }
     
     # 먼저 메인 서버에서 현재 포지션 정보 가져오기
-    positions_data = get_all_positions()
+    positions_data = get_all_positions(force_refresh=True)
     if not positions_data:
         results['errors'].append("Failed to fetch positions from main server")
         return results
@@ -229,12 +315,16 @@ def emergency_kill_all_auto_positions():
             results['total_closed'] += len(server_result['closed'])
     
     results['closed_positions'] = auto_positions
+    
+    # 캐시 클리어
+    data_cache.clear()
+    
     return results
 
 def get_auto_positions_count():
     """자동매매 포지션 개수 가져오기"""
     try:
-        positions_data = get_all_positions()
+        positions_data = get_all_positions(force_refresh=False)
         if not positions_data:
             return 0
         
@@ -252,7 +342,7 @@ def display_server_status():
     """모든 서버 상태 표시"""
     st.subheader("🖥️ Server Status")
     
-    server_status = check_all_servers_health()
+    server_status = check_all_servers_health(force_refresh=False)
     
     cols = st.columns(len(MIDDLE_SERVER_PORTS))
     
@@ -274,7 +364,7 @@ def display_server_status():
                 st.write("Offline")
 
 def display_symbol_config():
-    """심볼 설정 관리 UI (다중 서버 지원)"""
+    """심볼 설정 관리 UI (다중 서버 지원) - API 호출 최소화"""
     st.header("⚙️ Symbol Configuration (All Servers)")
     
     # 서버 상태 표시
@@ -282,8 +372,14 @@ def display_symbol_config():
     
     st.divider()
     
-    # 모든 서버의 설정 가져오기
-    all_configs = get_all_servers_config()
+    # 새로고침 버튼
+    if st.button("🔄 Refresh Configuration", use_container_width=True):
+        data_cache.clear("all_servers_config")
+        data_cache.clear("symbol_config")
+        st.rerun()
+    
+    # 모든 서버의 설정 가져오기 (캐시 사용)
+    all_configs = get_all_servers_config(force_refresh=False)
     
     # 메인 서버(5000)의 설정을 기준으로 사용
     main_config = all_configs.get(5000)
@@ -328,7 +424,7 @@ def display_symbol_config():
     st.subheader("📊 Existing Symbols")
     
     for symbol, settings in main_config.items():
-        with st.expander(f"{symbol} Settings"):
+        with st.expander(f"{symbol} Settings", expanded=False):
             col1, col2, col3 = st.columns(3)
             
             with col1:
@@ -369,7 +465,8 @@ def display_symbol_config():
                     key=f"max_size_{symbol}"
                 )
                 
-                if st.button(f"Update {symbol} (All Servers)", key=f"update_{symbol}"):
+                # 설정 저장 버튼 (이때만 API 호출)
+                if st.button(f"💾 Update {symbol} (All Servers)", key=f"update_{symbol}"):
                     new_config = {
                         symbol: {
                             'leverage': leverage,
@@ -381,7 +478,8 @@ def display_symbol_config():
                     }
                     
                     # 모든 서버에 업데이트
-                    results = update_symbol_config_all_servers(new_config)
+                    with st.spinner(f"Updating {symbol} on all servers..."):
+                        results = update_symbol_config_all_servers(new_config)
                     
                     success_count = sum(1 for r in results.values() if r['success'])
                     total_count = len(results)
@@ -463,7 +561,7 @@ def display_portfolio_overview():
     """포트폴리오 전체 개요 표시"""
     st.subheader("💰 Portfolio Overview")
     
-    positions_data = get_all_positions()
+    positions_data = get_all_positions(force_refresh=False)
     
     if not positions_data:
         st.warning("No position data available")
@@ -560,7 +658,7 @@ def display_realtime_positions():
     """실시간 포지션 정보 표시"""
     st.subheader("📊 Active Positions by Symbol")
     
-    positions_data = get_all_positions()
+    positions_data = get_all_positions(force_refresh=False)
     
     if not positions_data or not positions_data.get('positions'):
         st.info("No active positions")
@@ -585,7 +683,7 @@ def display_open_orders():
     """열린 주문 표시"""
     st.subheader("📋 Open Orders")
     
-    positions_data = get_all_positions()
+    positions_data = get_all_positions(force_refresh=False)
     
     if not positions_data:
         st.info("No data available")
@@ -701,28 +799,13 @@ def display_realtime_section():
     
     st.divider()
     
-    # Health Check 상태 표시
-    health_status, server_data = check_middle_server_health()
-    
-    if not health_status:
-        st.error("❌ Server Offline")
-        st.info("Please check if middle_server.py is running on port 5000")
-        return
-    
+    # 새로고침 버튼 추가
     col1, col2, col3 = st.columns([1, 1, 1])
     
     with col1:
-        st.success("✅ Server Online")
-        
-        if server_data:
-            symbols = server_data.get('symbols', [])
-            st.metric("Active Symbols", len(symbols))
-            
-            # 텔레그램 상태
-            if server_data.get('telegram_configured'):
-                st.success("📱 Telegram: Connected")
-            else:
-                st.warning("📱 Telegram: Not configured")
+        if st.button("🔄 Refresh Data", use_container_width=True):
+            data_cache.clear()
+            st.rerun()
     
     with col2:
         if st.button("🔄 Sync All Positions", use_container_width=True):
@@ -742,6 +825,14 @@ def display_realtime_section():
             else:
                 st.error("Telegram test failed")
     
+    # Health Check 상태 표시
+    health_status, server_data = check_middle_server_health(force_refresh=False)
+    
+    if not health_status:
+        st.error("❌ Server Offline")
+        st.info("Please check if middle_server.py is running on port 5000")
+        return
+    
     # 포트폴리오 개요
     display_portfolio_overview()
     
@@ -755,7 +846,7 @@ def display_performance_by_symbol():
     """심볼별 성과 분석"""
     st.header("📈 Performance by Symbol")
     
-    positions_data = get_all_positions()
+    positions_data = get_all_positions(force_refresh=False)
     
     if not positions_data:
         st.info("No data available")
@@ -803,15 +894,16 @@ def display_performance_by_symbol():
 def main():
     st.title("🤖 Multi-Symbol Trading Bot Dashboard")
     
-    # 자동 새로고침 설정
-    auto_refresh = st.sidebar.checkbox("🔄 Auto Refresh (10 seconds)", value=False)
+    # 자동 새로고침 설정 (사이드바에 배치, 기본값 OFF, 주기 늘림)
+    auto_refresh = st.sidebar.checkbox("🔄 Auto Refresh (30 seconds)", value=False)
     
     if auto_refresh:
         refresh_placeholder = st.sidebar.empty()
-        for seconds in range(10, 0, -1):
+        for seconds in range(30, 0, -1):
             refresh_placeholder.write(f"⏰ Refreshing in {seconds} seconds...")
             time.sleep(1)
         refresh_placeholder.write("🔄 Refreshing now...")
+        data_cache.clear()
         st.rerun()
     
     # 탭 생성
@@ -900,8 +992,18 @@ def main():
     with st.sidebar:
         st.header("ℹ️ System Info")
         
+        # 캐시 정보
+        st.write(f"**Cache TTL:** 30 seconds")
+        if st.button("🗑️ Clear Cache", use_container_width=True):
+            data_cache.clear()
+            st.success("Cache cleared!")
+            time.sleep(0.5)
+            st.rerun()
+        
+        st.divider()
+        
         # 서버 상태 확인
-        server_status = check_all_servers_health()
+        server_status = check_all_servers_health(force_refresh=False)
         
         st.write("**Server Status:**")
         for port in MIDDLE_SERVER_PORTS:
@@ -918,7 +1020,7 @@ def main():
         st.write("---")
         
         # 메인 서버 정보
-        health_status, server_data = check_middle_server_health()
+        health_status, server_data = check_middle_server_health(force_refresh=False)
         
         if health_status and server_data:
             st.write("**Active Symbols (Main):**")
@@ -949,11 +1051,12 @@ def main():
         st.header("⚡ Quick Actions")
         
         if st.button("🔄 Refresh Dashboard", use_container_width=True):
+            data_cache.clear()
             st.rerun()
         
         if health_status:
             if st.button("📊 Check All Positions", use_container_width=True):
-                positions = get_all_positions()
+                positions = get_all_positions(force_refresh=True)
                 if positions:
                     st.json(positions.get('positions', {}))
                 else:
