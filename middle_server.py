@@ -39,40 +39,48 @@ TELEGRAM_CHAT_IDS = os.getenv('TELEGRAM_CHAT_IDS', '').split(',')
 # ============ 다중 종목 설정 ============
 SYMBOL_CONFIG = {
     'BTC/USDT': {
-        'leverage': 20,
-        'position_size_percent': 40,
+        'leverage': 5,
+        'position_size_percent': 20,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
     },
     'SAHARA/USDT': {
         'leverage': 10,
-        'position_size_percent': 30,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
     },
     'ETH/USDT': {
-        'leverage': 5,
-        'position_size_percent': 25,
+        'leverage': 10,
+        'position_size_percent': 30,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
     },
     'RESOLV/USDT': {
-        'leverage': 15,
+        'leverage': 10,
         'position_size_percent': 30,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
     },
     'BIO/USDT': {
-        'leverage': 15,
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'UNI/USDT': {
+        'leverage': 10,
         'position_size_percent': 30,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
     }
+
 }
 
 # 기본 설정 (환경변수로 오버라이드 가능)
@@ -579,9 +587,11 @@ def webhook():
             'RESOLVUSDT': 'RESOLV/USDT',
             'RESOLVUSDT.P': 'RESOLV/USDT',
             'BIOUSDT': 'BIO/USDT',
-            'BIOUSDT.P': 'BIO/USDT'
+            'BIOUSDT.P': 'BIO/USDT',
+            'UNIUSDT': 'UNI/USDT',
+            'UNIUSDT.P': 'UNI/USDT',            
         }
-                        
+        
         if symbol in symbol_mapping:
             symbol = symbol_mapping[symbol]
             logging.info(f"심볼 매핑: {original_symbol} -> {symbol}")
