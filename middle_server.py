@@ -105,7 +105,42 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
-    } 
+    },
+    'DOT/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },   
+    'ENA/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'ENA/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'RLC/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'ETHFI/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    }
 }
 
 
@@ -658,7 +693,15 @@ def webhook():
             'COMPUSDT': 'COMP/USDT',
             'COMPUSDT.P': 'COMP/USDT',
             'XLMUSDT': 'XLM/USDT',
-            'XLMUSDT.P': 'XLM/USDT',            
+            'XLMUSDT.P': 'XLM/USDT',
+            'DOTUSDT': 'DOT/USDT',
+            'DOTUSDT.P': 'DOT/USDT',
+            'ENAUSDT': 'ENA/USDT',
+            'ENAUSDT.P': 'ENA/USDT',
+            'RLCUSDT': 'RLC/USDT',
+            'RLCUSDT.P': 'RLC/USDT',
+            'ETHFIUSDT': 'ETHFI/USDT',
+            'ETHFIUSDT.P': 'ETHFI/USDT'    
         }
         
         if symbol in symbol_mapping:

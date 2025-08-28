@@ -22,8 +22,8 @@ logging.basicConfig(level=logging.INFO,
 
 # Binance 설정
 exchange = ccxt.binance({
-    'apiKey': os.getenv('BINANCE_API_KEY'),
-    'secret': os.getenv('BINANCE_SECRET_KEY'),
+    'apiKey': os.getenv('BINANCE_API_KEY_HYUN'),
+    'secret': os.getenv('BINANCE_SECRET_KEY_HYUN'),
     'enableRateLimit': True,
     'options': {
         'defaultType': 'future'  # 선물 거래용
@@ -105,7 +105,42 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
-    } 
+    },
+    'DOT/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },   
+    'ENA/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'ENA/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'RLC/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'ETHFI/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    }
 }
 
 
@@ -658,7 +693,15 @@ def webhook():
             'COMPUSDT': 'COMP/USDT',
             'COMPUSDT.P': 'COMP/USDT',
             'XLMUSDT': 'XLM/USDT',
-            'XLMUSDT.P': 'XLM/USDT',            
+            'XLMUSDT.P': 'XLM/USDT',
+            'DOTUSDT': 'DOT/USDT',
+            'DOTUSDT.P': 'DOT/USDT',
+            'ENAUSDT': 'ENA/USDT',
+            'ENAUSDT.P': 'ENA/USDT',
+            'RLCUSDT': 'RLC/USDT',
+            'RLCUSDT.P': 'RLC/USDT',
+            'ETHFIUSDT': 'ETHFI/USDT',
+            'ETHFIUSDT.P': 'ETHFI/USDT'    
         }
         
         if symbol in symbol_mapping:
