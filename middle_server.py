@@ -77,8 +77,37 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
-    }
+    },
+    'PENGU/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'UMA/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },  
+    'COMP/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },  
+    'XLM/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    } 
 }
+
 
 # 기본 설정
 DEFAULT_POSITION_SIZE_PERCENT = float(os.getenv('POSITION_SIZE_PERCENT', 10))
@@ -622,6 +651,14 @@ def webhook():
             'BIOUSDT.P': 'BIO/USDT',
             'UNIUSDT': 'UNI/USDT',
             'UNIUSDT.P': 'UNI/USDT',
+            'PENGUUSDT': 'PENGU/USDT',
+            'PENGUUSDT.P': 'PENGU/USDT',
+            'UMAUSDT': 'UMA/USDT',
+            'UMAUSDT.P': 'UMA/USDT',    
+            'COMPUSDT': 'COMP/USDT',
+            'COMPUSDT.P': 'COMP/USDT',
+            'XLMUSDT': 'XLM/USDT',
+            'XLMUSDT.P': 'XLM/USDT',            
         }
         
         if symbol in symbol_mapping:
