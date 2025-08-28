@@ -120,13 +120,6 @@ SYMBOL_CONFIG = {
         'max_position_size': 100000,
         'enabled': True
     },
-    'ENA/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
-        'min_position_size': 10,
-        'max_position_size': 100000,
-        'enabled': True
-    },
     'RLC/USDT': {
         'leverage': 10,
         'position_size_percent': 30,
@@ -457,7 +450,7 @@ def monitor_trailing_stop(symbol, side, amount, entry_price, trailing_stop_perce
                             current_stop = new_stop
                             logging.info(f"트레일링 스탑 업데이트 ({symbol}): ${new_stop:.2f}")
                 else:  # sell
-                    # 숏 포지션: 최저가 업데이트
+                    # 숏포지션: 최저가 업데이트
                     if current_price < lowest_price:
                         lowest_price = current_price
                         new_stop = lowest_price * (1 + trailing_stop_percent / 100)
@@ -851,14 +844,20 @@ def webhook():
 
 @app.route('/status', methods=['GET'])
 def status():
-    """봇 상태 확인"""
+    """봇 상태 확인 - 개선된 버전"""
     sync_positions_with_exchange()
+    
+    # 활성화된 심볼 목록
+    enabled_symbols = [symbol for symbol, config in SYMBOL_CONFIG.items() 
+                      if config.get('enabled', True)]
     
     return jsonify({
         'status': 'running',
         'server_port': SERVER_PORT,
         'current_positions': current_positions,
         'telegram_enabled': ENABLE_TELEGRAM,
+        'symbols': enabled_symbols,
+        'symbol_config': SYMBOL_CONFIG,
         'timestamp': datetime.now().isoformat()
     }), 200
 
@@ -910,6 +909,88 @@ def get_positions():
         }), 200
         
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/config', methods=['GET'])
+def get_config():
+    """심볼 설정 조회"""
+    try:
+        return jsonify(SYMBOL_CONFIG), 200
+    except Exception as e:
+        logging.error(f"설정 조회 실패: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/config', methods=['POST'])
+def update_config():
+    """심볼 설정 업데이트"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        # 전역 SYMBOL_CONFIG 업데이트
+        global SYMBOL_CONFIG
+        for symbol, config in data.items():
+            SYMBOL_CONFIG[symbol] = config
+            logging.info(f"설정 업데이트: {symbol} = {config}")
+        
+        return jsonify({
+            'status': 'success',
+            'updated_symbols': list(data.keys()),
+            'current_config': SYMBOL_CONFIG
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"설정 업데이트 실패: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/test-telegram', methods=['POST'])
+def test_telegram_endpoint():
+    """텔레그램 알림 테스트"""
+    try:
+        test_message = f"""
+🧪 <b>텔레그램 테스트 메시지</b>
+
+📍 <b>서버 포트:</b> {SERVER_PORT}
+🤖 <b>봇 상태:</b> 정상 작동 중
+📱 <b>텔레그램:</b> {'활성화' if ENABLE_TELEGRAM else '비활성화'}
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """.strip()
+        
+        send_telegram_notification(test_message, 'normal')
+        
+        return jsonify({
+            'status': 'success',
+            'message': '텔레그램 테스트 메시지 전송 완료',
+            'telegram_enabled': ENABLE_TELEGRAM,
+            'server_port': SERVER_PORT
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"텔레그램 테스트 실패: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/sync', methods=['POST'])
+def sync_positions_endpoint():
+    """포지션 동기화"""
+    try:
+        success = sync_positions_with_exchange()
+        
+        if success:
+            return jsonify({
+                'status': 'success',
+                'message': '포지션 동기화 완료',
+                'current_positions': current_positions,
+                'timestamp': datetime.now().isoformat()
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': '포지션 동기화 실패'
+            }), 500
+            
+    except Exception as e:
+        logging.error(f"포지션 동기화 실패: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
