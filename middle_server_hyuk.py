@@ -154,7 +154,14 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
-    }  
+    },
+    'ADA/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    } 
 }
 
 
@@ -721,7 +728,9 @@ def webhook():
             'PYTHUSDT': 'PYTH/USDT',
             'PYTHUSDT.P': 'PYTH/USDT',
             'LINKUSDT': 'LINK/USDT',
-            'LINKUSDT.P': 'LINK/USDT'
+            'LINKUSDT.P': 'LINK/USDT',
+            'ADAUSDT': 'ADA/USDT',
+            'ADAUSDT.P': 'ADA/USDT'
         }
         
         if symbol in symbol_mapping:
