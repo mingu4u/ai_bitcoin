@@ -133,6 +133,20 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
+    },
+    'SOL/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'PYTH/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
     }
 }
 
@@ -694,7 +708,11 @@ def webhook():
             'RLCUSDT': 'RLC/USDT',
             'RLCUSDT.P': 'RLC/USDT',
             'ETHFIUSDT': 'ETHFI/USDT',
-            'ETHFIUSDT.P': 'ETHFI/USDT'    
+            'ETHFIUSDT.P': 'ETHFI/USDT',
+            'SOLUSDT': 'SOL/USDT',
+            'SOLUSDT.P': 'SOL/USDT',
+            'PYTHUSDT': 'PYTH/USDT',
+            'PYTHSDT.P': 'PYTH/USDT' 
         }
         
         if symbol in symbol_mapping:
