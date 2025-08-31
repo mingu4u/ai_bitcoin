@@ -172,6 +172,7 @@ DEFAULT_MAX_POSITION_SIZE = float(os.getenv('MAX_POSITION_SIZE', 100000))
 
 # 포지션 추적
 current_positions = {}
+position_monitor_threads = {}
 
 def get_symbol_config(symbol):
     """종목별 설정 가져오기"""
@@ -225,7 +226,101 @@ def send_telegram_notification(message, priority='normal'):
         except Exception as e:
             logging.error(f"텔레그램 전송 오류: {e}")
 
-def format_position_entry_message(symbol, action, amount, entry_price, stop_loss, take_profit, pl_ratio, position_size, balance, trailing_stop_percent=None):
+def cleanup_open_orders(symbol):
+    """특정 심볼의 모든 열린 주문 취소"""
+    try:
+        open_orders = exchange.fetch_open_orders(symbol)
+        canceled_orders = []
+        
+        for order in open_orders:
+            try:
+                exchange.cancel_order(order['id'], symbol)
+                canceled_orders.append(order['id'])
+                logging.info(f"주문 취소 완료 ({symbol}): {order['id']} - {order['type']}")
+            except Exception as cancel_error:
+                logging.warning(f"주문 취소 실패 ({symbol}): {order['id']} - {str(cancel_error)}")
+        
+        if canceled_orders:
+            logging.info(f"총 {len(canceled_orders)}개 주문 취소 완료 ({symbol})")
+        
+        return canceled_orders
+        
+    except Exception as e:
+        logging.error(f"열린 주문 정리 실패 ({symbol}): {str(e)}")
+        return []
+
+def monitor_position_status(symbol):
+    """포지션 상태를 모니터링하고 종료 시 자동으로 관련 주문 정리"""
+    try:
+        logging.info(f"포지션 상태 모니터링 시작 ({symbol})")
+        check_interval = 5  # 5초마다 체크
+        
+        while symbol in current_positions:
+            time.sleep(check_interval)
+            
+            try:
+                # 실제 포지션 확인
+                positions = exchange.fetch_positions([symbol])
+                has_position = any(p['contracts'] > 0 for p in positions)
+                
+                # 포지션이 종료된 경우
+                if not has_position:
+                    logging.info(f"포지션 종료 감지 ({symbol})")
+                    
+                    # 남은 주문 모두 취소
+                    cleanup_open_orders(symbol)
+                    
+                    # 포지션 정보 정리
+                    if symbol in current_positions:
+                        exit_reason = "trailing_stop" if current_positions[symbol].get('trailing_stop_active') else "unknown"
+                        
+                        # PnL 계산 시도
+                        try:
+                            closed_positions = exchange.fetch_closed_orders(symbol, limit=1)
+                            if closed_positions:
+                                last_order = closed_positions[0]
+                                pnl = last_order.get('info', {}).get('realizedPnl', 0)
+                            else:
+                                pnl = None
+                        except:
+                            pnl = None
+                        
+                        # 종료 메시지 전송
+                        close_message = format_position_close_message(symbol, exit_reason, pnl)
+                        send_telegram_notification(close_message, 'high')
+                        
+                        # 포지션 정보 삭제
+                        del current_positions[symbol]
+                    
+                    # 모니터링 종료
+                    break
+                    
+            except Exception as check_error:
+                logging.error(f"포지션 체크 오류 ({symbol}): {str(check_error)}")
+                time.sleep(check_interval * 2)  # 오류 시 더 긴 대기
+        
+    except Exception as e:
+        logging.error(f"포지션 모니터링 오류 ({symbol}): {str(e)}")
+    finally:
+        logging.info(f"포지션 상태 모니터링 종료 ({symbol})")
+        if symbol in position_monitor_threads:
+            del position_monitor_threads[symbol]
+
+def start_position_monitor(symbol):
+    """포지션 모니터링 스레드 시작"""
+    if symbol in position_monitor_threads:
+        return  # 이미 모니터링 중
+    
+    thread = threading.Thread(
+        target=monitor_position_status,
+        args=(symbol,)
+    )
+    thread.daemon = True
+    thread.start()
+    position_monitor_threads[symbol] = thread
+    logging.info(f"포지션 모니터링 스레드 시작 ({symbol})")
+
+def format_position_entry_message(symbol, action, amount, entry_price, stop_loss, take_profit, pl_ratio, position_size, balance, trailing_stop_percent=None, trailing_activation_percent=None):
     """포지션 진입 메시지 포맷"""
     direction_emoji = "🚀" if action == "buy" else "📉"
     direction_text = "LONG" if action == "buy" else "SHORT"
@@ -244,6 +339,8 @@ def format_position_entry_message(symbol, action, amount, entry_price, stop_loss
     trailing_text = ""
     if trailing_stop_percent:
         trailing_text = f"\n📊 <b>트레일링 스탑:</b> {trailing_stop_percent}%"
+        if trailing_activation_percent and trailing_activation_percent > 0:
+            trailing_text += f" (활성화: +{trailing_activation_percent}%)"
     
     message = f"""
 {direction_emoji} <b>새 포지션 진입 - {symbol}</b>
@@ -267,8 +364,8 @@ def format_position_entry_message(symbol, action, amount, entry_price, stop_loss
     
     return message
 
-def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, take_profit_price, pl_ratio, trailing_stop_percent=None):
-    """트레일링 스탑과 백업 손절을 포함한 주문 실행"""
+def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, take_profit_price, pl_ratio, trailing_stop_percent=None, trailing_activation_percent=None):
+    """트레일링 스탑과 백업 손절을 포함한 주문 실행 - 활성화 가격 지원"""
     try:
         config = get_symbol_config(symbol)
         
@@ -301,6 +398,10 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
         if main_order:
             actual_entry = main_order.get('average', main_order.get('price', entry_price))
             
+            # 현재 가격 가져오기 (활성화 가격 계산용)
+            ticker = exchange.fetch_ticker(symbol)
+            current_price = ticker['last']
+            
             # 2. 주문 옵션 설정
             stop_side = 'sell' if side == 'buy' else 'buy'
             orders_placed = {'main': main_order}
@@ -323,19 +424,33 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
                 logging.info(f"백업 손절 설정 완료: ${stop_loss_price:.2f}")
             except Exception as sl_error:
                 logging.error(f"백업 손절 설정 실패: {str(sl_error)}")
-                # 손절 실패시에도 계속 진행 (익절은 설정)
             
             # 4. 트레일링 스탑 설정 (있는 경우)
             trailing_order_success = False
+            activation_price = None
+            
             if trailing_stop_percent and trailing_stop_percent > 0:
                 try:
-                    logging.info(f"트레일링 스탑 설정 시도: {trailing_stop_percent}%")
+                    # 활성화 가격 계산
+                    if trailing_activation_percent and trailing_activation_percent > 0:
+                        # 수익률 도달시 트레일링 활성화
+                        if side == 'buy':
+                            activation_price = current_price * (1 + trailing_activation_percent / 100)
+                        else:
+                            activation_price = current_price * (1 - trailing_activation_percent / 100)
+                        logging.info(f"트레일링 활성화 가격 계산: ${activation_price:.2f} (현재가: ${current_price:.2f}, 활성화: {trailing_activation_percent}%)")
+                    else:
+                        # 즉시 활성화
+                        activation_price = current_price
+                        logging.info(f"트레일링 즉시 활성화: 현재가 ${current_price:.2f}")
+                    
+                    logging.info(f"트레일링 스탑 설정 시도: {trailing_stop_percent}% (활성화: ${activation_price:.2f})")
                     
                     # 트레일링 스탑 파라미터
                     trailing_params = {
                         'reduceOnly': True,
                         'workingType': 'MARK_PRICE',
-                        'activationPrice': actual_entry,  # 활성화 가격
+                        'activationPrice': activation_price,  # 활성화 가격 설정
                         'callbackRate': trailing_stop_percent,  # 콜백 비율 (%)
                     }
                     
@@ -349,10 +464,9 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
                     
                     orders_placed['trailing_stop'] = trailing_order
                     trailing_order_success = True
-                    logging.info(f"트레일링 스탑 설정 성공: {trailing_stop_percent}%")
+                    logging.info(f"트레일링 스탑 설정 성공: {trailing_stop_percent}% (활성화: ${activation_price:.2f})")
                     
-                    # 트레일링 스탑이 성공하면 백업 손절을 더 낮은 위치로 조정 (선택적)
-                    # 이렇게 하면 트레일링 스탑과 백업 손절이 충돌하지 않음
+                    # 트레일링 스탑이 성공하면 백업 손절을 더 낮은 위치로 조정
                     try:
                         if 'stop_loss' in orders_placed and orders_placed['stop_loss']:
                             # 기존 백업 손절 취소
@@ -387,7 +501,7 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
                     # 트레일링 스탑 실패시 수동 트레일링 스레드 시작
                     thread = threading.Thread(
                         target=monitor_trailing_stop,
-                        args=(symbol, side, adjusted_amount, actual_entry, trailing_stop_percent, stop_loss_price)
+                        args=(symbol, side, adjusted_amount, actual_entry, trailing_stop_percent, stop_loss_price, trailing_activation_percent)
                     )
                     thread.daemon = True
                     thread.start()
@@ -419,6 +533,8 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
                 'stop_loss': stop_loss_price,
                 'take_profit': take_profit_price,
                 'trailing_stop_percent': trailing_stop_percent,
+                'trailing_activation_percent': trailing_activation_percent,
+                'trailing_activation_price': activation_price,
                 'trailing_stop_active': trailing_order_success,
                 'pl_ratio': pl_ratio,
                 'sl_order_id': orders_placed.get('stop_loss', {}).get('id'),
@@ -429,12 +545,17 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
                 'manual_entry': False
             }
             
+            # 7. 포지션 모니터링 시작 (트레일링 스탑이 있는 경우)
+            if trailing_stop_percent and trailing_stop_percent > 0:
+                start_position_monitor(symbol)
+            
             logging.info(f"""
             ✅ 주문 완료 ({symbol}):
             - Entry: ${actual_entry:.2f}
             - Stop Loss: ${stop_loss_price:.2f} (백업)
             - Take Profit: ${take_profit_price:.2f}
             - Trailing Stop: {trailing_stop_percent}% ({'활성' if trailing_order_success else '수동모드'})
+            - Activation Price: ${activation_price:.2f if activation_price else 'N/A'}
             - 설정된 주문: {list(orders_placed.keys())}
             """)
             
@@ -450,44 +571,78 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
         logging.error(f"주문 실행 실패 ({symbol}): {str(e)}")
         return None
 
-def monitor_trailing_stop(symbol, side, amount, entry_price, trailing_stop_percent, initial_stop_loss):
-    """수동 트레일링 스탑 모니터링 (백그라운드)"""
+def monitor_trailing_stop(symbol, side, amount, entry_price, trailing_stop_percent, initial_stop_loss, trailing_activation_percent=None):
+    """수동 트레일링 스탑 모니터링 (백그라운드) - 활성화 가격 지원"""
     try:
-        logging.info(f"수동 트레일링 스탑 모니터링 시작 ({symbol}): {trailing_stop_percent}%")
+        logging.info(f"수동 트레일링 스탑 모니터링 시작 ({symbol}): {trailing_stop_percent}% (활성화: {trailing_activation_percent}%)")
         
         highest_price = entry_price if side == 'buy' else 0
         lowest_price = entry_price if side == 'sell' else float('inf')
         current_stop = initial_stop_loss
+        trailing_activated = False
+        
+        # 활성화 가격 계산
+        activation_price = None
+        if trailing_activation_percent and trailing_activation_percent > 0:
+            if side == 'buy':
+                activation_price = entry_price * (1 + trailing_activation_percent / 100)
+            else:
+                activation_price = entry_price * (1 - trailing_activation_percent / 100)
+            logging.info(f"트레일링 활성화 대기: ${activation_price:.2f}")
+        else:
+            trailing_activated = True  # 즉시 활성화
+            logging.info("트레일링 즉시 활성화")
         
         while symbol in current_positions:
             time.sleep(10)  # 10초마다 체크
             
             try:
+                # 포지션 상태 확인
+                positions = exchange.fetch_positions([symbol])
+                has_position = any(p['contracts'] > 0 for p in positions)
+                
+                if not has_position:
+                    # 포지션이 종료된 경우 남은 주문 정리
+                    logging.info(f"수동 트레일링: 포지션 종료 감지 ({symbol})")
+                    cleanup_open_orders(symbol)
+                    break
+                
                 ticker = exchange.fetch_ticker(symbol)
                 current_price = ticker['last']
                 
-                if side == 'buy':
-                    # 롱 포지션: 최고가 업데이트
-                    if current_price > highest_price:
-                        highest_price = current_price
-                        new_stop = highest_price * (1 - trailing_stop_percent / 100)
-                        
-                        # 새로운 손절가가 기존보다 높은 경우만 업데이트
-                        if new_stop > current_stop:
-                            update_stop_loss(symbol, new_stop, amount, side)
-                            current_stop = new_stop
-                            logging.info(f"트레일링 스탑 업데이트 ({symbol}): ${new_stop:.2f}")
-                else:  # sell
-                    # 숏포지션: 최저가 업데이트
-                    if current_price < lowest_price:
-                        lowest_price = current_price
-                        new_stop = lowest_price * (1 + trailing_stop_percent / 100)
-                        
-                        # 새로운 손절가가 기존보다 낮은 경우만 업데이트
-                        if new_stop < current_stop:
-                            update_stop_loss(symbol, new_stop, amount, side)
-                            current_stop = new_stop
-                            logging.info(f"트레일링 스탑 업데이트 ({symbol}): ${new_stop:.2f}")
+                # 활성화 체크
+                if not trailing_activated and activation_price:
+                    if side == 'buy' and current_price >= activation_price:
+                        trailing_activated = True
+                        logging.info(f"트레일링 활성화! ({symbol}): 현재가 ${current_price:.2f} >= 활성화가 ${activation_price:.2f}")
+                    elif side == 'sell' and current_price <= activation_price:
+                        trailing_activated = True
+                        logging.info(f"트레일링 활성화! ({symbol}): 현재가 ${current_price:.2f} <= 활성화가 ${activation_price:.2f}")
+                
+                # 트레일링 스탑 업데이트 (활성화된 경우만)
+                if trailing_activated:
+                    if side == 'buy':
+                        # 롱 포지션: 최고가 업데이트
+                        if current_price > highest_price:
+                            highest_price = current_price
+                            new_stop = highest_price * (1 - trailing_stop_percent / 100)
+                            
+                            # 새로운 손절가가 기존보다 높은 경우만 업데이트
+                            if new_stop > current_stop:
+                                update_stop_loss(symbol, new_stop, amount, side)
+                                current_stop = new_stop
+                                logging.info(f"트레일링 스탑 업데이트 ({symbol}): ${new_stop:.2f}")
+                    else:  # sell
+                        # 숏 포지션: 최저가 업데이트
+                        if current_price < lowest_price:
+                            lowest_price = current_price
+                            new_stop = lowest_price * (1 + trailing_stop_percent / 100)
+                            
+                            # 새로운 손절가가 기존보다 낮은 경우만 업데이트
+                            if new_stop < current_stop:
+                                update_stop_loss(symbol, new_stop, amount, side)
+                                current_stop = new_stop
+                                logging.info(f"트레일링 스탑 업데이트 ({symbol}): ${new_stop:.2f}")
                             
             except Exception as tick_error:
                 logging.error(f"가격 체크 오류 ({symbol}): {str(tick_error)}")
@@ -537,13 +692,13 @@ def update_stop_loss(symbol, new_stop_price, amount, side):
         logging.error(f"손절 업데이트 실패 ({symbol}): {str(e)}")
 
 def close_position(symbol):
-    """특정 심볼의 포지션 종료"""
+    """특정 심볼의 포지션 종료 및 모든 관련 주문 정리"""
     try:
         positions = exchange.fetch_positions([symbol])
         
+        # 포지션 청산
         for position in positions:
             if position['contracts'] > 0:
-                # 포지션 청산
                 side = 'sell' if position['side'] == 'long' else 'buy'
                 amount = abs(position['contracts'])
                 
@@ -555,10 +710,8 @@ def close_position(symbol):
                     params={'reduceOnly': True}
                 )
         
-        # 열린 주문 모두 취소
-        open_orders = exchange.fetch_open_orders(symbol)
-        for order in open_orders:
-            exchange.cancel_order(order['id'], symbol)
+        # 모든 열린 주문 취소
+        cleanup_open_orders(symbol)
         
         # 포지션 정보 초기화
         if symbol in current_positions:
@@ -593,10 +746,15 @@ def sync_positions_with_exchange():
                             'timestamp': datetime.now().isoformat(),
                             'manual_entry': True
                         }
+                        
+                        # 수동 진입 포지션도 모니터링 시작
+                        start_position_monitor(symbol)
             
             # 포지션이 없는데 current_positions에 있는 경우 정리
             if not any(p['contracts'] > 0 for p in positions) and symbol in current_positions:
                 logging.info(f"포지션이 종료되었습니다: {symbol}")
+                # 남은 주문 정리
+                cleanup_open_orders(symbol)
                 del current_positions[symbol]
         
         return True
@@ -666,7 +824,7 @@ def initialize_bot():
 
 🌐 <b>서버 포트:</b> {SERVER_PORT}
 📊 <b>활성 심볼:</b> {', '.join(enabled_symbols)}
-🔄 <b>트레일링 스탑:</b> 활성화
+🔄 <b>트레일링 스탑:</b> 활성화 (자동 정리)
 📱 <b>텔레그램:</b> {'활성화' if ENABLE_TELEGRAM else '비활성화'}
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -678,7 +836,7 @@ def initialize_bot():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """TradingView 웹훅 수신 - 트레일링 스탑 지원"""
+    """TradingView 웹훅 수신 - 트레일링 스탑 활성화 가격 지원"""
     try:
         # 데이터 파싱
         raw_data = request.get_data(as_text=True)
@@ -730,7 +888,7 @@ def webhook():
             'LINKUSDT': 'LINK/USDT',
             'LINKUSDT.P': 'LINK/USDT',
             'ADAUSDT': 'ADA/USDT',
-            'ADAUSDT.P': 'ADA/USDT'
+            'ADAUSDT.P': 'ADA/USDT'         
         }
         
         if symbol in symbol_mapping:
@@ -777,10 +935,22 @@ def webhook():
             if trailing_stop_data and trailing_stop_data != 'null':
                 try:
                     trailing_stop_percent = float(trailing_stop_data)
-                    logging.info(f"트레일링 스탑 활성화: {trailing_stop_percent}%")
+                    logging.info(f"트레일링 스탑 비율: {trailing_stop_percent}%")
                 except:
                     trailing_stop_percent = None
-                    logging.warning("트레일링 스탑 값 파싱 실패, 일반 손절 사용")
+                    logging.warning("트레일링 스탑 값 파싱 실패")
+            
+            # 트레일링 활성화 비율 파싱
+            trailing_activation_data = data.get('trailing_activation_percent')
+            trailing_activation_percent = None
+            
+            if trailing_activation_data and trailing_activation_data != 'null' and trailing_activation_data != '0':
+                try:
+                    trailing_activation_percent = float(trailing_activation_data)
+                    logging.info(f"트레일링 활성화 비율: {trailing_activation_percent}%")
+                except:
+                    trailing_activation_percent = None
+                    logging.warning("트레일링 활성화 값 파싱 실패")
             
             # 필수 필드 확인
             entry_price = float(data.get('entry_price'))
@@ -828,15 +998,17 @@ def webhook():
             - Stop Loss: ${stop_loss_price:.2f}
             - Take Profit: ${take_profit_price:.2f}
             - Trailing Stop: {trailing_stop_percent}%
+            - Trailing Activation: {trailing_activation_percent}%
             - P/L Ratio: {pl_ratio}:1
             =======================
             """)
             
-            # 주문 실행 (트레일링 스탑 포함)
+            # 주문 실행 (트레일링 스탑 및 활성화 가격 포함)
             orders = place_order_with_stops(
                 symbol, action, amount, entry_price, 
                 stop_loss_price, take_profit_price, pl_ratio,
-                trailing_stop_percent  # 트레일링 스탑 추가
+                trailing_stop_percent,  # 트레일링 스탑 비율
+                trailing_activation_percent  # 트레일링 활성화 비율
             )
             
             if orders:
@@ -844,7 +1016,8 @@ def webhook():
                 entry_message = format_position_entry_message(
                     symbol, action, actual_amount, orders['actual_entry'],
                     stop_loss_price, take_profit_price,
-                    pl_ratio, position_size, balance, trailing_stop_percent
+                    pl_ratio, position_size, balance, 
+                    trailing_stop_percent, trailing_activation_percent
                 )
                 send_telegram_notification(entry_message, 'high')
                 
@@ -857,6 +1030,7 @@ def webhook():
                     'stop_loss': stop_loss_price,
                     'take_profit': take_profit_price,
                     'trailing_stop_percent': trailing_stop_percent,
+                    'trailing_activation_percent': trailing_activation_percent,
                     'pl_ratio': pl_ratio
                 }), 200
             else:
@@ -880,20 +1054,15 @@ def webhook():
 
 @app.route('/status', methods=['GET'])
 def status():
-    """봇 상태 확인 - 개선된 버전"""
+    """봇 상태 확인"""
     sync_positions_with_exchange()
-    
-    # 활성화된 심볼 목록
-    enabled_symbols = [symbol for symbol, config in SYMBOL_CONFIG.items() 
-                      if config.get('enabled', True)]
     
     return jsonify({
         'status': 'running',
         'server_port': SERVER_PORT,
         'current_positions': current_positions,
         'telegram_enabled': ENABLE_TELEGRAM,
-        'symbols': enabled_symbols,
-        'symbol_config': SYMBOL_CONFIG,
+        'position_monitors': list(position_monitor_threads.keys()),
         'timestamp': datetime.now().isoformat()
     }), 200
 
@@ -929,7 +1098,10 @@ def get_positions():
                     'unrealized_pnl': unrealized_pnl,
                     'pnl_percent': pnl_percent,
                     'current_price': current_price,
-                    'trailing_stop_percent': pos.get('trailing_stop_percent')
+                    'trailing_stop_percent': pos.get('trailing_stop_percent'),
+                    'trailing_activation_percent': pos.get('trailing_activation_percent'),
+                    'trailing_activation_price': pos.get('trailing_activation_price'),
+                    'monitoring_active': symbol in position_monitor_threads
                 }
             
             all_positions[symbol] = {
@@ -945,88 +1117,6 @@ def get_positions():
         }), 200
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/config', methods=['GET'])
-def get_config():
-    """심볼 설정 조회"""
-    try:
-        return jsonify(SYMBOL_CONFIG), 200
-    except Exception as e:
-        logging.error(f"설정 조회 실패: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/config', methods=['POST'])
-def update_config():
-    """심볼 설정 업데이트"""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({'error': 'No data provided'}), 400
-        
-        # 전역 SYMBOL_CONFIG 업데이트
-        global SYMBOL_CONFIG
-        for symbol, config in data.items():
-            SYMBOL_CONFIG[symbol] = config
-            logging.info(f"설정 업데이트: {symbol} = {config}")
-        
-        return jsonify({
-            'status': 'success',
-            'updated_symbols': list(data.keys()),
-            'current_config': SYMBOL_CONFIG
-        }), 200
-        
-    except Exception as e:
-        logging.error(f"설정 업데이트 실패: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/test-telegram', methods=['POST'])
-def test_telegram_endpoint():
-    """텔레그램 알림 테스트"""
-    try:
-        test_message = f"""
-🧪 <b>텔레그램 테스트 메시지</b>
-
-📍 <b>서버 포트:</b> {SERVER_PORT}
-🤖 <b>봇 상태:</b> 정상 작동 중
-📱 <b>텔레그램:</b> {'활성화' if ENABLE_TELEGRAM else '비활성화'}
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        """.strip()
-        
-        send_telegram_notification(test_message, 'normal')
-        
-        return jsonify({
-            'status': 'success',
-            'message': '텔레그램 테스트 메시지 전송 완료',
-            'telegram_enabled': ENABLE_TELEGRAM,
-            'server_port': SERVER_PORT
-        }), 200
-        
-    except Exception as e:
-        logging.error(f"텔레그램 테스트 실패: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/sync', methods=['POST'])
-def sync_positions_endpoint():
-    """포지션 동기화"""
-    try:
-        success = sync_positions_with_exchange()
-        
-        if success:
-            return jsonify({
-                'status': 'success',
-                'message': '포지션 동기화 완료',
-                'current_positions': current_positions,
-                'timestamp': datetime.now().isoformat()
-            }), 200
-        else:
-            return jsonify({
-                'status': 'error',
-                'message': '포지션 동기화 실패'
-            }), 500
-            
-    except Exception as e:
-        logging.error(f"포지션 동기화 실패: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
