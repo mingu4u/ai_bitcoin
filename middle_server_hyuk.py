@@ -1052,20 +1052,6 @@ def webhook():
         send_telegram_notification(error_message, 'error')
         return jsonify({'error': str(e)}), 500
 
-@app.route('/status', methods=['GET'])
-def status():
-    """봇 상태 확인"""
-    sync_positions_with_exchange()
-    
-    return jsonify({
-        'status': 'running',
-        'server_port': SERVER_PORT,
-        'current_positions': current_positions,
-        'telegram_enabled': ENABLE_TELEGRAM,
-        'position_monitors': list(position_monitor_threads.keys()),
-        'timestamp': datetime.now().isoformat()
-    }), 200
-
 @app.route('/positions', methods=['GET'])
 def get_positions():
     """모든 포지션 상태 조회"""
@@ -1118,6 +1104,170 @@ def get_positions():
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/config', methods=['GET', 'POST'])
+def config():
+    """심볼 설정 관리"""
+    global SYMBOL_CONFIG
+    
+    if request.method == 'GET':
+        # 현재 설정 반환
+        return jsonify(SYMBOL_CONFIG), 200
+    
+    elif request.method == 'POST':
+        # 설정 업데이트
+        try:
+            new_config = request.get_json()
+            if not new_config:
+                return jsonify({'error': 'No configuration data provided'}), 400
+            
+            # 기존 설정과 병합 (부분 업데이트 지원)
+            for symbol, settings in new_config.items():
+                if symbol in SYMBOL_CONFIG:
+                    # 기존 심볼 업데이트
+                    SYMBOL_CONFIG[symbol].update(settings)
+                else:
+                    # 새 심볼 추가
+                    SYMBOL_CONFIG[symbol] = settings
+            
+            logging.info(f"설정 업데이트 완료: {list(new_config.keys())}")
+            
+            # 업데이트된 설정 반환
+            return jsonify({
+                'status': 'success',
+                'updated_symbols': list(new_config.keys()),
+                'config': SYMBOL_CONFIG
+            }), 200
+            
+        except Exception as e:
+            logging.error(f"설정 업데이트 실패: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+@app.route('/test-telegram', methods=['POST'])
+def test_telegram():
+    """텔레그램 알림 테스트"""
+    try:
+        if not ENABLE_TELEGRAM:
+            return jsonify({
+                'status': 'disabled',
+                'message': f'Telegram is disabled on port {SERVER_PORT}'
+            }), 200
+        
+        test_message = f"""
+🔔 <b>텔레그램 테스트 메시지</b>
+
+✅ 알림이 정상적으로 작동합니다!
+🌐 서버 포트: {SERVER_PORT}
+📊 활성 심볼: {len([s for s, c in SYMBOL_CONFIG.items() if c.get('enabled', True)])}개
+💼 현재 포지션: {len(current_positions)}개
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """.strip()
+        
+        send_telegram_notification(test_message, 'normal')
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Test message sent',
+            'telegram_enabled': ENABLE_TELEGRAM,
+            'chat_ids': len(TELEGRAM_CHAT_IDS)
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"텔레그램 테스트 실패: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+@app.route('/sync', methods=['POST'])
+def sync():
+    """포지션 동기화"""
+    try:
+        # 거래소와 포지션 동기화
+        success = sync_positions_with_exchange()
+        
+        if success:
+            # 동기화 결과 메시지
+            sync_message = f"""
+🔄 <b>포지션 동기화 완료</b>
+
+📊 추적 중인 포지션: {len(current_positions)}개
+{chr(10).join([f"• {symbol}: {pos['side'].upper()}" for symbol, pos in current_positions.items()])}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            """.strip()
+            
+            if ENABLE_TELEGRAM and current_positions:
+                send_telegram_notification(sync_message, 'normal')
+            
+            return jsonify({
+                'status': 'success',
+                'positions_count': len(current_positions),
+                'positions': current_positions
+            }), 200
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': 'Synchronization failed'
+            }), 500
+            
+    except Exception as e:
+        logging.error(f"동기화 실패: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
+@app.route('/webhook-all', methods=['POST'])
+def webhook_all():
+    """모든 서버에 웹훅 전파 (메인 서버용)"""
+    try:
+        if SERVER_PORT != 5000:
+            # 메인 서버가 아니면 일반 웹훅으로 처리
+            return webhook()
+        
+        # 메인 서버인 경우, 다른 서버들에도 전파
+        data = request.get_json()
+        
+        # 먼저 자신이 처리
+        response = webhook()
+        
+        # 다른 서버들에 전파
+        other_ports = [5001, 5002]
+        for port in other_ports:
+            try:
+                url = f"http://localhost:{port}/webhook"
+                requests.post(url, json=data, timeout=5)
+                logging.info(f"웹훅 전파 성공: 포트 {port}")
+            except Exception as e:
+                logging.error(f"웹훅 전파 실패 (포트 {port}): {str(e)}")
+        
+        return response
+        
+    except Exception as e:
+        logging.error(f"웹훅 전파 오류: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# 상태 엔드포인트 수정 (더 많은 정보 제공)
+@app.route('/status', methods=['GET'])
+def status():
+    """봇 상태 확인 - 확장된 정보"""
+    sync_positions_with_exchange()
+    
+    # 활성화된 심볼 목록
+    enabled_symbols = [s for s, c in SYMBOL_CONFIG.items() if c.get('enabled', True)]
+    
+    return jsonify({
+        'status': 'running',
+        'server_port': SERVER_PORT,
+        'current_positions': current_positions,
+        'telegram_enabled': ENABLE_TELEGRAM,
+        'symbols': enabled_symbols,
+        'symbol_config': SYMBOL_CONFIG,  # 설정 정보도 포함
+        'timestamp': datetime.now().isoformat()
+    }), 200
 
 if __name__ == '__main__':
     initialize_bot()
