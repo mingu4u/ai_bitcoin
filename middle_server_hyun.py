@@ -769,19 +769,6 @@ def webhook():
         send_telegram_notification(error_message, 'error')
         return jsonify({'error': str(e)}), 500
 
-@app.route('/status', methods=['GET'])
-def status():
-    """봇 상태 확인"""
-    sync_positions_with_exchange()
-    
-    return jsonify({
-        'status': 'running',
-        'server_port': SERVER_PORT,
-        'current_positions': current_positions,
-        'telegram_enabled': ENABLE_TELEGRAM,
-        'timestamp': datetime.now().isoformat()
-    }), 200
-
 @app.route('/positions', methods=['GET'])
 def get_positions():
     """모든 포지션 상태 조회"""
