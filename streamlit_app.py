@@ -170,17 +170,18 @@ def get_symbol_config(force_refresh=False):
                 data_cache.set(cache_key, result)
                 return result
         else:
-            st.error(f"Server returned status code {response.status_code} for /config")
-        return None
+            # 서버가 실행 중이지만 엔드포인트가 없는 경우
+            st.warning(f"Config endpoint not found. Please update middle_server.py with the missing endpoints.")
+        return {}  # 빈 dict 반환하여 UI가 계속 작동하도록 함
     except requests.exceptions.ConnectionError:
         st.error(f"Cannot connect to {MAIN_SERVER_URL}/config. Please check if the server is running.")
-        return None
+        return {}
     except requests.exceptions.Timeout:
         st.error("Request timed out while fetching configuration.")
-        return None
+        return {}
     except Exception as e:
         st.error(f"Error fetching config: {str(e)}")
-        return None
+        return {}
 
 def get_all_servers_config(force_refresh=False):
     """모든 서버의 심볼 설정 가져오기 - 개선된 에러 처리"""
