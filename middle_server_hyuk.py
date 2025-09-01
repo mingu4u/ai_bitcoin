@@ -164,7 +164,6 @@ SYMBOL_CONFIG = {
     } 
 }
 
-
 # 기본 설정
 DEFAULT_POSITION_SIZE_PERCENT = float(os.getenv('POSITION_SIZE_PERCENT', 10))
 DEFAULT_MIN_POSITION_SIZE = float(os.getenv('MIN_POSITION_SIZE', 10))
@@ -338,9 +337,18 @@ def format_position_entry_message(symbol, action, amount, entry_price, stop_loss
     # 트레일링 스탑 정보 추가
     trailing_text = ""
     if trailing_stop_percent:
-        trailing_text = f"\n📊 <b>트레일링 스탑:</b> {trailing_stop_percent}%"
+        trailing_text = f"\n📊 <b>트레일링 스탑:</b> {trailing_stop_percent:.1f}%"
         if trailing_activation_percent and trailing_activation_percent > 0:
-            trailing_text += f" (활성화: +{trailing_activation_percent}%)"
+            trailing_text += f" (활성화: +{trailing_activation_percent:.1f}%)"
+    
+    # 가격 포맷팅 (큰 숫자와 작은 숫자 모두 처리)
+    def format_price(price):
+        if price >= 100:
+            return f"{price:,.2f}"
+        elif price >= 1:
+            return f"{price:.4f}"
+        else:
+            return f"{price:.8f}"
     
     message = f"""
 {direction_emoji} <b>새 포지션 진입 - {symbol}</b>
@@ -349,10 +357,10 @@ def format_position_entry_message(symbol, action, amount, entry_price, stop_loss
 💰 <b>수량:</b> {amount:.6f}
 💵 <b>포지션 크기:</b> ${position_size:.2f}
 🏦 <b>사용 증거금:</b> ${margin_used:.2f} ({margin_percent:.1f}%)
-💵 <b>진입가:</b> ${entry_price:,.2f}
-🛑 <b>손절가:</b> ${stop_loss:,.2f}
-🎯 <b>익절가:</b> ${take_profit:,.2f}{trailing_text}
-📈 <b>손익비:</b> {pl_ratio}:1
+💵 <b>진입가:</b> ${format_price(entry_price)}
+🛑 <b>손절가:</b> ${format_price(stop_loss)}
+🎯 <b>익절가:</b> ${format_price(take_profit)}{trailing_text}
+📈 <b>손익비:</b> {pl_ratio:.1f}:1
 ⚙️ <b>레버리지:</b> {leverage}x
 
 💸 <b>최대 손실:</b> ${risk_amount:.2f}
@@ -376,6 +384,9 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
         # 수량 정밀도 적용
         amount_precision = market['precision']['amount']
         min_amount = market['limits']['amount']['min']
+        
+        # 가격 정밀도 가져오기
+        price_precision = market['precision']['price']
         
         # 수량 조정
         adjusted_amount = exchange.amount_to_precision(symbol, amount)
@@ -409,19 +420,22 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
             # 3. 백업 손절 주문 (항상 설정)
             logging.info(f"백업 손절 설정: ${stop_loss_price:.2f}")
             try:
+                # 손절 가격도 정밀도 적용
+                formatted_stop_loss = float(exchange.price_to_precision(symbol, stop_loss_price))
+                
                 sl_order = exchange.create_order(
                     symbol=symbol,
                     type='stop_market',
                     side=stop_side,
                     amount=adjusted_amount,
                     params={
-                        'stopPrice': stop_loss_price,
+                        'stopPrice': formatted_stop_loss,
                         'workingType': 'MARK_PRICE',
                         'reduceOnly': True
                     }
                 )
                 orders_placed['stop_loss'] = sl_order
-                logging.info(f"백업 손절 설정 완료: ${stop_loss_price:.2f}")
+                logging.info(f"백업 손절 설정 완료: ${formatted_stop_loss}")
             except Exception as sl_error:
                 logging.error(f"백업 손절 설정 실패: {str(sl_error)}")
             
@@ -430,98 +444,151 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
             activation_price = None
             
             if trailing_stop_percent and trailing_stop_percent > 0:
-                try:
-                    # 활성화 가격 계산
-                    if trailing_activation_percent and trailing_activation_percent > 0:
-                        # 수익률 도달시 트레일링 활성화
-                        if side == 'buy':
-                            activation_price = current_price * (1 + trailing_activation_percent / 100)
-                        else:
-                            activation_price = current_price * (1 - trailing_activation_percent / 100)
-                        logging.info(f"트레일링 활성화 가격 계산: ${activation_price:.2f} (현재가: ${current_price:.2f}, 활성화: {trailing_activation_percent}%)")
+                # 활성화 가격 계산
+                if trailing_activation_percent and trailing_activation_percent > 0:
+                    # 수익률 도달시 트레일링 활성화
+                    if side == 'buy':
+                        raw_activation_price = current_price * (1 + trailing_activation_percent / 100)
                     else:
-                        # 즉시 활성화
-                        activation_price = current_price
-                        logging.info(f"트레일링 즉시 활성화: 현재가 ${current_price:.2f}")
-                    
-                    logging.info(f"트레일링 스탑 설정 시도: {trailing_stop_percent}% (활성화: ${activation_price:.2f})")
-                    
-                    # 트레일링 스탑 파라미터
-                    trailing_params = {
-                        'reduceOnly': True,
-                        'workingType': 'MARK_PRICE',
-                        'activationPrice': activation_price,  # 활성화 가격 설정
-                        'callbackRate': trailing_stop_percent,  # 콜백 비율 (%)
-                    }
-                    
-                    trailing_order = exchange.create_order(
-                        symbol=symbol,
-                        type='trailing_stop_market',
-                        side=stop_side,
-                        amount=adjusted_amount,
-                        params=trailing_params
-                    )
-                    
-                    orders_placed['trailing_stop'] = trailing_order
-                    trailing_order_success = True
-                    logging.info(f"트레일링 스탑 설정 성공: {trailing_stop_percent}% (활성화: ${activation_price:.2f})")
-                    
-                    # 트레일링 스탑이 성공하면 백업 손절을 더 낮은 위치로 조정
+                        raw_activation_price = current_price * (1 - trailing_activation_percent / 100)
+                else:
+                    # 즉시 활성화
+                    raw_activation_price = current_price
+                
+                # 정밀도 레벨 설정 (높은 정밀도부터 시작)
+                def get_precision_levels(price):
+                    """가격대별 정밀도 레벨 리스트 반환 (높은 정밀도부터 낮은 정밀도 순)"""
+                    if price >= 10000:
+                        return [2, 1, 0]  # BTC 같은 큰 가격
+                    elif price >= 1000:
+                        return [3, 2, 1, 0]
+                    elif price >= 100:
+                        return [4, 3, 2, 1]
+                    elif price >= 10:
+                        return [4, 3, 2, 1]
+                    elif price >= 1:
+                        return [6, 5, 4, 3, 2]  # ETHFI 같은 작은 가격 (최소 4자리 시작)
+                    else:
+                        return [8, 7, 6, 5, 4, 3, 2]  # 아주 작은 가격
+                
+                precision_levels = get_precision_levels(raw_activation_price)
+                
+                # 정밀도를 낮춰가며 주문 시도
+                for precision in precision_levels:
                     try:
-                        if 'stop_loss' in orders_placed and orders_placed['stop_loss']:
-                            # 기존 백업 손절 취소
-                            exchange.cancel_order(orders_placed['stop_loss']['id'], symbol)
+                        # 현재 정밀도로 활성화 가격 포맷팅
+                        formatted_activation_price = round(raw_activation_price, precision)
+                        
+                        # ccxt의 price_to_precision도 적용해보기
+                        try:
+                            ccxt_formatted = float(exchange.price_to_precision(symbol, formatted_activation_price))
+                            if ccxt_formatted != formatted_activation_price:
+                                logging.info(f"CCXT 정밀도 조정: {formatted_activation_price} -> {ccxt_formatted}")
+                                formatted_activation_price = ccxt_formatted
+                        except:
+                            pass  # ccxt 정밀도 실패시 그대로 사용
+                        
+                        activation_price = formatted_activation_price
+                        
+                        logging.info(f"트레일링 활성화 가격 시도 (정밀도 {precision}): 원본=${raw_activation_price:.8f}, 포맷=${formatted_activation_price}")
+                        
+                        # 트레일링 스탑 파라미터
+                        trailing_params = {
+                            'reduceOnly': True,
+                            'workingType': 'MARK_PRICE',
+                            'activationPrice': formatted_activation_price,
+                            'callbackRate': float(trailing_stop_percent),
+                        }
+                        
+                        # 디버깅용 로그
+                        logging.info(f"트레일링 파라미터 (시도 {precision_levels.index(precision)+1}/{len(precision_levels)}): {trailing_params}")
+                        
+                        trailing_order = exchange.create_order(
+                            symbol=symbol,
+                            type='trailing_stop_market',
+                            side=stop_side,
+                            amount=adjusted_amount,
+                            params=trailing_params
+                        )
+                        
+                        orders_placed['trailing_stop'] = trailing_order
+                        trailing_order_success = True
+                        logging.info(f"✅ 트레일링 스탑 설정 성공: {trailing_stop_percent}% (활성화: ${formatted_activation_price}, 정밀도: {precision})")
+                        
+                        # 트레일링 스탑이 성공하면 백업 손절을 더 낮은 위치로 조정
+                        try:
+                            if 'stop_loss' in orders_placed and orders_placed['stop_loss']:
+                                # 기존 백업 손절 취소
+                                exchange.cancel_order(orders_placed['stop_loss']['id'], symbol)
+                                
+                                # 더 낮은 백업 손절 재설정 (원래 손절의 1.5배 거리)
+                                if side == 'buy':
+                                    emergency_stop = actual_entry - (actual_entry - stop_loss_price) * 1.5
+                                else:
+                                    emergency_stop = actual_entry + (stop_loss_price - actual_entry) * 1.5
+                                
+                                # 비상 손절도 정밀도 적용
+                                formatted_emergency_stop = float(exchange.price_to_precision(symbol, emergency_stop))
+                                
+                                emergency_sl_order = exchange.create_order(
+                                    symbol=symbol,
+                                    type='stop_market',
+                                    side=stop_side,
+                                    amount=adjusted_amount,
+                                    params={
+                                        'stopPrice': formatted_emergency_stop,
+                                        'workingType': 'MARK_PRICE',
+                                        'reduceOnly': True
+                                    }
+                                )
+                                orders_placed['emergency_stop'] = emergency_sl_order
+                                logging.info(f"비상 손절 재설정: ${formatted_emergency_stop}")
+                        except Exception as e:
+                            logging.warning(f"백업 손절 조정 실패: {str(e)}")
+                        
+                        # 성공했으므로 루프 종료
+                        break
+                        
+                    except Exception as ts_error:
+                        error_msg = str(ts_error)
+                        logging.warning(f"트레일링 스탑 실패 (정밀도 {precision}): {error_msg}")
+                        
+                        # 마지막 시도였다면 수동 모드로 전환
+                        if precision == precision_levels[-1]:
+                            trailing_order_success = False
+                            logging.error(f"모든 정밀도 시도 실패. 수동 모드로 전환")
                             
-                            # 더 낮은 백업 손절 재설정 (원래 손절의 1.5배 거리)
-                            if side == 'buy':
-                                emergency_stop = actual_entry - (actual_entry - stop_loss_price) * 1.5
-                            else:
-                                emergency_stop = actual_entry + (stop_loss_price - actual_entry) * 1.5
-                            
-                            emergency_sl_order = exchange.create_order(
-                                symbol=symbol,
-                                type='stop_market',
-                                side=stop_side,
-                                amount=adjusted_amount,
-                                params={
-                                    'stopPrice': emergency_stop,
-                                    'workingType': 'MARK_PRICE',
-                                    'reduceOnly': True
-                                }
+                            # 트레일링 스탑 실패시 수동 트레일링 스레드 시작
+                            thread = threading.Thread(
+                                target=monitor_trailing_stop,
+                                args=(symbol, side, adjusted_amount, actual_entry, trailing_stop_percent, stop_loss_price, trailing_activation_percent)
                             )
-                            orders_placed['emergency_stop'] = emergency_sl_order
-                            logging.info(f"비상 손절 재설정: ${emergency_stop:.2f}")
-                    except:
-                        pass  # 백업 손절 조정 실패시 원래 손절 유지
-                    
-                except Exception as ts_error:
-                    trailing_order_success = False
-                    logging.warning(f"트레일링 스탑 설정 실패, 백업 손절 유지: {str(ts_error)}")
-                    
-                    # 트레일링 스탑 실패시 수동 트레일링 스레드 시작
-                    thread = threading.Thread(
-                        target=monitor_trailing_stop,
-                        args=(symbol, side, adjusted_amount, actual_entry, trailing_stop_percent, stop_loss_price, trailing_activation_percent)
-                    )
-                    thread.daemon = True
-                    thread.start()
-                    logging.info("수동 트레일링 스탑 모니터링 시작")
+                            thread.daemon = True
+                            thread.start()
+                            logging.info("수동 트레일링 스탑 모니터링 시작")
+                        else:
+                            # 다음 정밀도로 재시도
+                            logging.info(f"낮은 정밀도로 재시도...")
+                            continue
             
             # 5. 익절 주문 설정
             try:
+                # 익절 가격도 정밀도 적용
+                formatted_take_profit = float(exchange.price_to_precision(symbol, take_profit_price))
+                
                 tp_order = exchange.create_order(
                     symbol=symbol,
                     type='take_profit_market',
                     side=stop_side,
                     amount=adjusted_amount,
                     params={
-                        'stopPrice': take_profit_price,
+                        'stopPrice': formatted_take_profit,
                         'workingType': 'MARK_PRICE',
                         'reduceOnly': True
                     }
                 )
                 orders_placed['take_profit'] = tp_order
-                logging.info(f"익절 설정 완료: ${take_profit_price:.2f}")
+                logging.info(f"익절 설정 완료: ${formatted_take_profit}")
             except Exception as tp_error:
                 logging.warning(f"익절 설정 실패: {str(tp_error)}")
             
@@ -551,11 +618,11 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
             
             logging.info(f"""
             ✅ 주문 완료 ({symbol}):
-            - Entry: ${actual_entry:.2f}
-            - Stop Loss: ${stop_loss_price:.2f} (백업)
-            - Take Profit: ${take_profit_price:.2f}
+            - Entry: ${actual_entry:.8f}
+            - Stop Loss: ${stop_loss_price:.8f} (백업)
+            - Take Profit: ${take_profit_price:.8f}
             - Trailing Stop: {trailing_stop_percent}% ({'활성' if trailing_order_success else '수동모드'})
-            - Activation Price: ${activation_price:.2f if activation_price else 'N/A'}
+            - Activation Price: ${activation_price:.8f if activation_price else 'N/A'}
             - 설정된 주문: {list(orders_placed.keys())}
             """)
             
@@ -1105,7 +1172,6 @@ def get_positions():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-
 @app.route('/config', methods=['GET', 'POST'])
 def config():
     """심볼 설정 관리"""
@@ -1250,7 +1316,6 @@ def webhook_all():
         logging.error(f"웹훅 전파 오류: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# 상태 엔드포인트 수정 (더 많은 정보 제공)
 @app.route('/status', methods=['GET'])
 def status():
     """봇 상태 확인 - 확장된 정보"""
