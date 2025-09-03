@@ -320,7 +320,7 @@ def start_position_monitor(symbol):
     logging.info(f"포지션 모니터링 스레드 시작 ({symbol})")
 
 def format_position_entry_message(symbol, action, amount, entry_price, stop_loss, take_profit, pl_ratio, position_size, balance, trailing_stop_percent=None, trailing_activation_percent=None):
-    """포지션 진입 메시지 포맷"""
+    """포지션 진입 메시지 포맷 - 수정된 버전"""
     direction_emoji = "🚀" if action == "buy" else "📉"
     direction_text = "LONG" if action == "buy" else "SHORT"
     
@@ -337,18 +337,36 @@ def format_position_entry_message(symbol, action, amount, entry_price, stop_loss
     # 트레일링 스탑 정보 추가
     trailing_text = ""
     if trailing_stop_percent:
-        trailing_text = f"\n📊 <b>트레일링 스탑:</b> {trailing_stop_percent:.1f}%"
+        # 포맷 에러 방지를 위해 float로 변환
+        ts_percent = float(trailing_stop_percent)
+        trailing_text = f"\n📊 <b>트레일링 스탑:</b> {ts_percent:.1f}%"
         if trailing_activation_percent and trailing_activation_percent > 0:
-            trailing_text += f" (활성화: +{trailing_activation_percent:.1f}%)"
+            ta_percent = float(trailing_activation_percent)
+            trailing_text += f" (활성화: +{ta_percent:.1f}%)"
     
-    # 가격 포맷팅 (큰 숫자와 작은 숫자 모두 처리)
+    # 가격 포맷팅 함수
     def format_price(price):
-        if price >= 100:
-            return f"{price:,.2f}"
-        elif price >= 1:
-            return f"{price:.4f}"
-        else:
-            return f"{price:.8f}"
+        try:
+            price = float(price)  # 명시적 float 변환
+            if price >= 100:
+                return f"{price:,.2f}"
+            elif price >= 1:
+                return f"{price:.4f}"
+            else:
+                return f"{price:.8f}"
+        except:
+            return str(price)  # 포맷 실패시 문자열로 반환
+    
+    # 모든 숫자 값을 float로 변환
+    amount = float(amount)
+    position_size = float(position_size)
+    margin_used = float(margin_used)
+    margin_percent = float(margin_percent)
+    pl_ratio = float(pl_ratio)
+    leverage = int(leverage)
+    risk_amount = float(risk_amount)
+    reward_amount = float(reward_amount)
+    balance = float(balance)
     
     message = f"""
 {direction_emoji} <b>새 포지션 진입 - {symbol}</b>
