@@ -44,7 +44,7 @@ SYMBOL_CONFIG = {
         'enabled': True
     },
     'SAHARA/USDT': {
-        'leverage': 10,
+        'leverage': 15,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -337,12 +337,16 @@ def format_position_entry_message(symbol, action, amount, entry_price, stop_loss
     # 트레일링 스탑 정보 추가
     trailing_text = ""
     if trailing_stop_percent:
-        # 포맷 에러 방지를 위해 float로 변환
-        ts_percent = float(trailing_stop_percent)
-        trailing_text = f"\n📊 <b>트레일링 스탑:</b> {ts_percent:.1f}%"
-        if trailing_activation_percent and trailing_activation_percent > 0:
-            ta_percent = float(trailing_activation_percent)
-            trailing_text += f" (활성화: +{ta_percent:.1f}%)"
+        try:
+            # 포맷 에러 방지를 위해 float로 변환
+            ts_percent = float(trailing_stop_percent)
+            trailing_text = f"\n📊 <b>트레일링 스탑:</b> {ts_percent:.1f}%"
+            if trailing_activation_percent and trailing_activation_percent > 0:
+                ta_percent = float(trailing_activation_percent)
+                trailing_text += f" (활성화: +{ta_percent:.1f}%)"
+        except Exception as e:
+            logging.warning(f"트레일링 텍스트 포맷 에러: {e}")
+            trailing_text = f"\n📊 <b>트레일링 스탑:</b> {trailing_stop_percent}%"
     
     # 가격 포맷팅 함수
     def format_price(price):
@@ -357,18 +361,19 @@ def format_position_entry_message(symbol, action, amount, entry_price, stop_loss
         except:
             return str(price)  # 포맷 실패시 문자열로 반환
     
-    # 모든 숫자 값을 float로 변환
-    amount = float(amount)
-    position_size = float(position_size)
-    margin_used = float(margin_used)
-    margin_percent = float(margin_percent)
-    pl_ratio = float(pl_ratio)
-    leverage = int(leverage)
-    risk_amount = float(risk_amount)
-    reward_amount = float(reward_amount)
-    balance = float(balance)
-    
-    message = f"""
+    try:
+        # 모든 숫자 값을 float로 변환
+        amount = float(amount)
+        position_size = float(position_size)
+        margin_used = float(margin_used)
+        margin_percent = float(margin_percent)
+        pl_ratio = float(pl_ratio)
+        leverage = int(leverage)
+        risk_amount = float(risk_amount)
+        reward_amount = float(reward_amount)
+        balance = float(balance)
+        
+        message = f"""
 {direction_emoji} <b>새 포지션 진입 - {symbol}</b>
 
 📊 <b>방향:</b> {direction_text}
@@ -386,9 +391,23 @@ def format_position_entry_message(symbol, action, amount, entry_price, stop_loss
 💳 <b>현재 잔고:</b> ${balance:,.2f}
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-    """.strip()
-    
-    return message
+        """.strip()
+        
+        return message
+        
+    except Exception as e:
+        logging.error(f"메시지 포맷 에러: {e}")
+        # 에러 발생시 간단한 메시지라도 반환
+        return f"""
+{direction_emoji} <b>새 포지션 진입 - {symbol}</b>
+
+📊 <b>방향:</b> {direction_text}
+💵 <b>진입가:</b> {entry_price}
+🛑 <b>손절가:</b> {stop_loss}
+🎯 <b>익절가:</b> {take_profit}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        """.strip()
 
 def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, take_profit_price, pl_ratio, trailing_stop_percent=None, trailing_activation_percent=None):
     """트레일링 스탑과 백업 손절을 포함한 주문 실행 - 활성화 가격 지원"""
@@ -634,13 +653,17 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
             if trailing_stop_percent and trailing_stop_percent > 0:
                 start_position_monitor(symbol)
             
+            # 8. 수정된 로깅 부분 - 포맷 에러 해결
+            activation_price_str = f"${activation_price:.8f}" if activation_price else "N/A"
+            trailing_status = '활성' if trailing_order_success else '수동모드'
+            
             logging.info(f"""
             ✅ 주문 완료 ({symbol}):
             - Entry: ${actual_entry:.8f}
             - Stop Loss: ${stop_loss_price:.8f} (백업)
             - Take Profit: ${take_profit_price:.8f}
-            - Trailing Stop: {trailing_stop_percent}% ({'활성' if trailing_order_success else '수동모드'})
-            - Activation Price: ${activation_price:.8f if activation_price else 'N/A'}
+            - Trailing Stop: {trailing_stop_percent}% ({trailing_status})
+            - Activation Price: {activation_price_str}
             - 설정된 주문: {list(orders_placed.keys())}
             """)
             
@@ -654,6 +677,19 @@ def place_order_with_stops(symbol, side, amount, entry_price, stop_loss_price, t
             
     except Exception as e:
         logging.error(f"주문 실행 실패 ({symbol}): {str(e)}")
+        # 에러가 발생하더라도 부분적으로 성공한 경우 처리
+        if 'main_order' in locals() and main_order:
+            # 메인 주문은 성공했으므로 기본 정보라도 반환
+            try:
+                return {
+                    'main_order': main_order,
+                    'orders_placed': orders_placed if 'orders_placed' in locals() else {'main': main_order},
+                    'actual_entry': actual_entry if 'actual_entry' in locals() else entry_price,
+                    'adjusted_amount': adjusted_amount if 'adjusted_amount' in locals() else amount,
+                    'trailing_success': False
+                }
+            except:
+                pass
         return None
 
 def monitor_trailing_stop(symbol, side, amount, entry_price, trailing_stop_percent, initial_stop_loss, trailing_activation_percent=None):
