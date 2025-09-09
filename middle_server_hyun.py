@@ -161,6 +161,13 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
+    },
+    'XRP/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
     } 
 }
 
@@ -1009,7 +1016,9 @@ def webhook():
             'LINKUSDT': 'LINK/USDT',
             'LINKUSDT.P': 'LINK/USDT',
             'ADAUSDT': 'ADA/USDT',
-            'ADAUSDT.P': 'ADA/USDT'         
+            'ADAUSDT.P': 'ADA/USDT',
+            'XRPUSDT': 'XRP/USDT',
+            'XRPUSDT.P': 'XRP/USDT'                     
         }
         
         if symbol in symbol_mapping:
