@@ -224,7 +224,21 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
-    }    
+    },
+    'AGLD/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'ONDO/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },     
 }
 
 # 기본 설정
@@ -1090,7 +1104,11 @@ def webhook():
             'LSKUSDT': 'LSK/USDT',
             'LSKUSDT.P': 'LSK/USDT',
             'HBARUSDT': 'HBAR/USDT',
-            'HBARUSDT.P': 'HBAR/USDT',                                         
+            'HBARUSDT.P': 'HBAR/USDT',   
+            'AGLDUSDT': 'AGLD/USDT',
+            'AGLDUSDT.P': 'AGLD/USDT',
+            'ONDOUSDT': 'ONDO/USDT',
+            'ONDOUSDT.P': 'ONDO/USDT'                                      
         }
         
         if symbol in symbol_mapping:
