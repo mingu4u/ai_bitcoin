@@ -175,7 +175,42 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
-    } 
+    },
+    'DOGE/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'ACH/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'CRV/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'RONIN/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'BCH/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    }        
 }
 
 # 기본 설정
@@ -1027,7 +1062,17 @@ def webhook():
             'XRPUSDT': 'XRP/USDT',
             'XRPUSDT.P': 'XRP/USDT',
             'BNBUSDT': 'BNB/USDT',
-            'BNBUSDT.P': 'BNB/USDT'                   
+            'BNBUSDT.P': 'BNB/USDT',
+            'DOGEUSDT': 'DOGE/USDT',
+            'DOGEUSDT.P': 'DOGE/USDT',
+            'ACHUSDT': 'ACH/USDT',
+            'ACHUSDT.P': 'ACH/USDT',
+            'CRVUSDT': 'CRV/USDT',
+            'CRVUSDT.P': 'CRV/USDT',
+            'RONINUSDT': 'RONIN/USDT',
+            'RONINUSDT.P': 'RONIN/USDT',
+            'BCHUSDT': 'BCH/USDT',
+            'BCHUSDT.P': 'BCH/USDT'                              
         }
         
         if symbol in symbol_mapping:
