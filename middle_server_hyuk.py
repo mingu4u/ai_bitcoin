@@ -210,7 +210,21 @@ SYMBOL_CONFIG = {
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True
-    }        
+    },
+    'LSK/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    },
+    'HBAR/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True
+    }    
 }
 
 # 기본 설정
@@ -1072,7 +1086,11 @@ def webhook():
             'RONINUSDT': 'RONIN/USDT',
             'RONINUSDT.P': 'RONIN/USDT',
             'BCHUSDT': 'BCH/USDT',
-            'BCHUSDT.P': 'BCH/USDT'                              
+            'BCHUSDT.P': 'BCH/USDT',
+            'LSKUSDT': 'LSK/USDT',
+            'LSKUSDT.P': 'LSK/USDT',
+            'HBARUSDT': 'HBAR/USDT',
+            'HBARUSDT.P': 'HBAR/USDT',                                         
         }
         
         if symbol in symbol_mapping:
