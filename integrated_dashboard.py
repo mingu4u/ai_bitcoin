@@ -670,7 +670,14 @@ def main():
             st.metric("Active Positions", positions)
         
         with col3:
-            enabled_symbols = len([s for s, c in server_data.get('symbols', {}).items()])
+            symbols = server_data.get('symbols', [])
+            # symbols가 리스트인 경우와 딕셔너리인 경우 모두 처리 (수정된 부분)
+            if isinstance(symbols, list):
+                enabled_symbols = len(symbols)
+            elif isinstance(symbols, dict):
+                enabled_symbols = len([s for s, c in symbols.items()])
+            else:
+                enabled_symbols = 0
             st.metric("Active Symbols", enabled_symbols)
         
         with col4:
@@ -714,6 +721,7 @@ def main():
                     'Symbol': symbol,
                     'Enabled': '✅' if settings.get('enabled', True) else '❌',
                     'AI Validation': '✅' if settings.get('ai_validation', True) else '❌',
+                    'AI Monitoring': '✅' if settings.get('ai_monitoring', True) else '❌',
                     'Leverage': settings.get('leverage', 10),
                     'Position Size %': settings.get('position_size_percent', 10)
                 })
@@ -750,6 +758,13 @@ def main():
             st.write("**Server Status:** 🟢 Online")
             st.write(f"**Port:** 5000")
             st.write(f"**Telegram:** {'🔔 On' if server_data.get('telegram_enabled') else '🔕 Off'}")
+            
+            # AI 모니터링 상태 추가
+            if server_data.get('ai_monitoring_active'):
+                st.write(f"**AI Monitor:** 🤖 Active")
+                st.write(f"**Monitor Interval:** {server_data.get('ai_monitor_interval', 15)} min")
+            else:
+                st.write(f"**AI Monitor:** ⏸️ Inactive")
             
             st.divider()
             
@@ -788,6 +803,7 @@ def main():
         **System Config:**
         - Symbol settings
         - AI validation status
+        - AI monitoring status
         
         ---
         
@@ -796,6 +812,7 @@ def main():
         - 📖 Learning from reflections
         - 📊 Performance tracking
         - 🎮 Decision simulation
+        - ⏰ 15-min AI monitoring
         """)
 
 if __name__ == "__main__":

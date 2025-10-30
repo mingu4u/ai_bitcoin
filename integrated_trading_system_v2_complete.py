@@ -563,7 +563,7 @@ def generate_reflection(trades_df, current_market_data):
     
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-reasoner",
             messages=[
                 {
                     "role": "system",
@@ -709,7 +709,7 @@ Be decisive and protect capital while maximizing gains.
     
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-reasoner",
             messages=[
                 {"role": "system", "content": "You are a professional position manager focused on protecting capital and maximizing gains through optimal exit timing."},
                 {"role": "user", "content": prompt}
@@ -985,7 +985,7 @@ Provide specific reasoning based on the indicators and suggest optimal entry, st
     
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model="deepseek-reasoner",
             messages=[
                 {"role": "system", "content": "You are a professional crypto trading AI that validates signals based on technical analysis. Be decisive and specific."},
                 {"role": "user", "content": prompt}
