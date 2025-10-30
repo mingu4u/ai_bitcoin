@@ -1,0 +1,10 @@
+# Integrated Trading System Requirements
+flask==2.3.0
+ccxt==4.1.0
+python-dotenv==1.0.0
+pandas==2.0.0
+ta==0.10.2
+openai==1.0.0
+pydantic==2.0.0
+numpy==1.24.0
+requests==2.31.0
