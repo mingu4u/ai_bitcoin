@@ -919,10 +919,23 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df):
     df_5min = market_data['df_5min']
     df_hourly = market_data['df_hourly'] 
     df_4h = market_data['df_4h']
-    
+
+    # JSON 템플릿을 프롬프트에 명시
+    json_template = """
+    {
+    "decision": "approve",
+    "modified_action": "sell",
+    "percentage": 30,
+    "reason": "Strong bearish indicators",
+    "stop_loss_price": 186.42,
+    "take_profit_price": 166.11,
+    "pl_ratio": 2.5,
+    "confidence": 0.75
+    }"""
+
     # 프롬프트 구성
     prompt = f"""
-You are an expert crypto trading AI validator. You need to validate trading signals using technical analysis.
+You are an expert crypto trading AI validator. You need to validate trading signals using technical analysis and return ONLY valid JSON.
 
 **SIGNAL TO VALIDATE:**
 - Symbol: {symbol}
@@ -963,13 +976,13 @@ You are an expert crypto trading AI validator. You need to validate trading sign
 **VALIDATION CRITERIA:**
 
 For BUY signals, validate if:
-- RSI is not overbought (preferably < 70)
+- RSI is not overbought (preferably < 80)
 - MACD shows bullish momentum or crossover
 - Price is near support levels or breaking resistance
 - Volume and momentum indicators confirm
 
 For SELL signals, validate if:  
-- RSI is not oversold (preferably > 30)
+- RSI is not oversold (preferably > 20)
 - MACD shows bearish momentum or crossover
 - Price is near resistance levels or breaking support
 - Volume and momentum indicators confirm
@@ -980,6 +993,26 @@ Based on the technical indicators and market conditions, should this {action} si
 2. REJECTED - Do not execute, conditions unfavorable
 3. MODIFIED - Execute with adjusted parameters
 
+**CRITICAL INSTRUCTIONS:**
+1. You MUST respond with ONLY a valid JSON object
+2. Do NOT include any text before or after the JSON
+3. Do NOT use markdown code blocks (no ```)
+4. Follow this EXACT structure:
+
+{json_template}
+
+**Field Requirements:**
+- decision: must be "approve", "reject", or "modify"
+- modified_action: must be "buy", "sell", or "hold"
+- percentage: integer between 10 and 100
+- reason: string explaining the decision
+- stop_loss_price: number (price level)
+- take_profit_price: number (price level)
+- pl_ratio: number between 1.0 and 5.0
+- confidence: number between 0.0 and 1.0
+
+Return ONLY the JSON object. Start with {{ and end with }}
+
 Provide specific reasoning based on the indicators and suggest optimal entry, stop loss, and take profit levels.
 """
     
@@ -987,31 +1020,32 @@ Provide specific reasoning based on the indicators and suggest optimal entry, st
         response = client.chat.completions.create(
             model="deepseek-reasoner",
             messages=[
-                {"role": "system", "content": "You are a professional crypto trading AI that validates signals based on technical analysis. Be decisive and specific."},
+                {"role": "system", "content": "You are a professional crypto trading AI that validates signals based on technical analysis. Be decisive and specific. only return valid JSON objects. Never include explanations or markdown."},
                 {"role": "user", "content": prompt}
             ],
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "trading_validation",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "decision": {"type": "string", "enum": ["approve", "reject", "modify"]},
-                            "modified_action": {"type": "string", "enum": ["buy", "sell", "hold"]},
-                            "percentage": {"type": "integer", "minimum": 0, "maximum": 100},
-                            "reason": {"type": "string"},
-                            "stop_loss_price": {"type": "number"},
-                            "take_profit_price": {"type": "number"},
-                            "pl_ratio": {"type": "number", "minimum": 1.0, "maximum": 5.0},
-                            "confidence": {"type": "number", "minimum": 0, "maximum": 1}
-                        },
-                        "required": ["decision", "modified_action", "percentage", "reason", "stop_loss_price", "take_profit_price", "pl_ratio", "confidence"],
-                        "additionalProperties": False
-                    }
-                }
-            },
+            # response_format={
+            #     "type": "json_schema",
+            #     "json_schema": {
+            #         "name": "trading_validation",
+            #         "strict": True,
+            #         "schema": {
+            #             "type": "object",
+            #             "properties": {
+            #                 "decision": {"type": "string", "enum": ["approve", "reject", "modify"]},
+            #                 "modified_action": {"type": "string", "enum": ["buy", "sell", "hold"]},
+            #                 "percentage": {"type": "integer", "minimum": 0, "maximum": 100},
+            #                 "reason": {"type": "string"},
+            #                 "stop_loss_price": {"type": "number"},
+            #                 "take_profit_price": {"type": "number"},
+            #                 "pl_ratio": {"type": "number", "minimum": 1.0, "maximum": 5.0},
+            #                 "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            #             },
+            #             "required": ["decision", "modified_action", "percentage", "reason", "stop_loss_price", "take_profit_price", "pl_ratio", "confidence"],
+            #             "additionalProperties": False
+            #         }
+            #     }
+            # },
+            temperature=0.1,
             max_tokens=1000
         )
         
@@ -1295,7 +1329,7 @@ def webhook():
         
         action = data.get('action')
         symbol = data.get('symbol', 'BTC/USDT')
-        message = data.get('message', '')
+        message = data if data else json.dumps(data, ensure_ascii=False)
         
         # 심볼 매핑 테이블 (정규화 전에 수행!)
         symbol_mapping = {
