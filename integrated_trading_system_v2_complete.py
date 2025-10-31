@@ -1297,9 +1297,84 @@ def webhook():
         symbol = data.get('symbol', 'BTC/USDT')
         message = data.get('message', '')
         
-        # 심볼 정규화
-        if not symbol.endswith('/USDT'):
-            symbol = f"{symbol}/USDT"
+        # 심볼 매핑 테이블 (정규화 전에 수행!)
+        symbol_mapping = {
+            'BTCUSDT': 'BTC/USDT',
+            'BTCUSDT.P': 'BTC/USDT',
+            'SAHARAUSDT': 'SAHARA/USDT',
+            'SAHARAUSDT.P': 'SAHARA/USDT',
+            'ETHUSDT': 'ETH/USDT',
+            'ETHUSDT.P': 'ETH/USDT',
+            'RESOLVUSDT': 'RESOLV/USDT',
+            'RESOLVUSDT.P': 'RESOLV/USDT',
+            'BIOUSDT': 'BIO/USDT',
+            'BIOUSDT.P': 'BIO/USDT',
+            'UNIUSDT': 'UNI/USDT',
+            'UNIUSDT.P': 'UNI/USDT',
+            'PENGUUSDT': 'PENGU/USDT',
+            'PENGUUSDT.P': 'PENGU/USDT',
+            'UMAUSDT': 'UMA/USDT',
+            'UMAUSDT.P': 'UMA/USDT',
+            'COMPUSDT': 'COMP/USDT',
+            'COMPUSDT.P': 'COMP/USDT',
+            'XLMUSDT': 'XLM/USDT',
+            'XLMUSDT.P': 'XLM/USDT',
+            'DOTUSDT': 'DOT/USDT',
+            'DOTUSDT.P': 'DOT/USDT',
+            'ENAUSDT': 'ENA/USDT',
+            'ENAUSDT.P': 'ENA/USDT',
+            'RLCUSDT': 'RLC/USDT',
+            'RLCUSDT.P': 'RLC/USDT',
+            'ETHFIUSDT': 'ETHFI/USDT',
+            'ETHFIUSDT.P': 'ETHFI/USDT',
+            'SOLUSDT': 'SOL/USDT',
+            'SOLUSDT.P': 'SOL/USDT',
+            'PYTHUSDT': 'PYTH/USDT',
+            'PYTHUSDT.P': 'PYTH/USDT',
+            'LINKUSDT': 'LINK/USDT',
+            'LINKUSDT.P': 'LINK/USDT',
+            'ADAUSDT': 'ADA/USDT',
+            'ADAUSDT.P': 'ADA/USDT',
+            'XRPUSDT': 'XRP/USDT',
+            'XRPUSDT.P': 'XRP/USDT',
+            'BNBUSDT': 'BNB/USDT',
+            'BNBUSDT.P': 'BNB/USDT',
+            'DOGEUSDT': 'DOGE/USDT',
+            'DOGEUSDT.P': 'DOGE/USDT',
+            'ACHUSDT': 'ACH/USDT',
+            'ACHUSDT.P': 'ACH/USDT',
+            'CRVUSDT': 'CRV/USDT',
+            'CRVUSDT.P': 'CRV/USDT',
+            'RONINUSDT': 'RONIN/USDT',
+            'RONINUSDT.P': 'RONIN/USDT',
+            'BCHUSDT': 'BCH/USDT',
+            'BCHUSDT.P': 'BCH/USDT',
+            'LSKUSDT': 'LSK/USDT',
+            'LSKUSDT.P': 'LSK/USDT',
+            'HBARUSDT': 'HBAR/USDT',
+            'HBARUSDT.P': 'HBAR/USDT',
+            'AGLDUSDT': 'AGLD/USDT',
+            'AGLDUSDT.P': 'AGLD/USDT',
+            'ONDOUSDT': 'ONDO/USDT',
+            'ONDOUSDT.P': 'ONDO/USDT',
+            'HOMEUSDT': 'HOME/USDT',
+            'HOMEUSDT.P': 'HOME/USDT',
+            'TRXUSDT': 'TRX/USDT',
+            'TRXUSDT.P': 'TRX/USDT',
+        }
+        
+        # 심볼 매핑 적용
+        if symbol in symbol_mapping:
+            symbol = symbol_mapping[symbol]
+        # 매핑이 없는 경우만 정규화
+        elif not symbol.endswith('/USDT'):
+            # .P 제거 후 정규화
+            clean_symbol = symbol.replace('.P', '').replace('.p', '')
+            if 'USDT' in clean_symbol:
+                base = clean_symbol.replace('USDT', '')
+                symbol = f"{base}/USDT"
+            else:
+                symbol = f"{clean_symbol}/USDT"
         
         # 심볼 설정 확인
         if symbol not in SYMBOL_CONFIG:
