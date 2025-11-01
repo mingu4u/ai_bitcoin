@@ -6,7 +6,7 @@ import json
 import requests
 
 # 서버 URL 설정
-MAIN_SERVER_URL = "http://15.164.170.176:5000"  # 기본 서버 URL
+MAIN_SERVER_URL = "http://localhost:5000"  # 기본 서버 URL
 
 # CSS 스타일
 st.set_page_config(
@@ -224,8 +224,6 @@ def render_telegram_settings(key_prefix=""):
 
 def render_telegram_test_section(bot_token, chat_id, use_server, server_url):
     """텔레그램 테스트 섹션 렌더링"""
-    st.markdown('<div class="sub-header">🧪 텔레그램 테스트</div>', unsafe_allow_html=True)
-    
     col1, col2, col3 = st.columns(3)
     
     # 연결 확인 버튼
@@ -548,6 +546,11 @@ def main():
     # 헤더
     st.markdown('<div class="main-header">📊 통합 트레이딩 대시보드</div>', unsafe_allow_html=True)
     
+    # 텔레그램 설정 (탭 외부에서 한 번만 렌더링)
+    bot_token, chat_id, use_server, server_url = render_telegram_settings("main")
+    
+    st.markdown("---")
+    
     # 사이드바
     with st.sidebar:
         st.image("https://img.icons8.com/color/96/000000/telegram-app.png", width=100)
@@ -594,10 +597,9 @@ def main():
     
     # 탭 1: 설정 및 테스트
     with tabs[0]:
-        bot_token, chat_id, use_server, server_url = render_telegram_settings("tab1")
+        st.markdown('<div class="sub-header">🧪 텔레그램 테스트</div>', unsafe_allow_html=True)
         
         if use_server and server_url:
-            st.markdown("---")
             render_telegram_test_section(bot_token, chat_id, use_server, server_url)
             
             # 연결 상태 표시
@@ -609,30 +611,26 @@ def main():
                 """, unsafe_allow_html=True)
         elif not use_server:
             st.info("💡 직접 모드는 현재 지원되지 않습니다. '서버를 통해 전송' 옵션을 활성화해주세요.")
+        else:
+            st.warning("⚠️ 서버 URL을 입력해주세요.")
     
     # 탭 2: 메시지 전송
     with tabs[1]:
-        bot_token, chat_id, use_server, server_url = render_telegram_settings("tab2")
-        
         if use_server and server_url:
-            st.markdown("---")
             render_custom_message_section(bot_token, chat_id, use_server, server_url)
         elif not use_server:
             st.info("💡 직접 모드는 현재 지원되지 않습니다. '서버를 통해 전송' 옵션을 활성화해주세요.")
         else:
-            st.warning("⚠️ 먼저 '설정 및 테스트' 탭에서 서버 URL을 입력해주세요.")
+            st.warning("⚠️ 서버 URL을 입력해주세요.")
     
     # 탭 3: 템플릿
     with tabs[2]:
-        bot_token, chat_id, use_server, server_url = render_telegram_settings("tab3")
-        
         if use_server and server_url:
-            st.markdown("---")
             render_message_templates(bot_token, chat_id, use_server, server_url)
         elif not use_server:
             st.info("💡 직접 모드는 현재 지원되지 않습니다. '서버를 통해 전송' 옵션을 활성화해주세요.")
         else:
-            st.warning("⚠️ 먼저 '설정 및 테스트' 탭에서 서버 URL을 입력해주세요.")
+            st.warning("⚠️ 서버 URL을 입력해주세요.")
     
     # 탭 4: 이력
     with tabs[3]:
