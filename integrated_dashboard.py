@@ -6,7 +6,7 @@ import json
 import requests
 
 # 서버 URL 설정
-MAIN_SERVER_URL = "http://localhost:5000"  # 기본 서버 URL
+MAIN_SERVER_URL = "http://15.164.170.176:5000"  # 기본 서버 URL
 
 # CSS 스타일
 st.set_page_config(
@@ -131,7 +131,7 @@ def init_session_state():
         st.session_state.server_url = MAIN_SERVER_URL
 
 
-def render_telegram_settings():
+def render_telegram_settings(key_prefix=""):
     """텔레그램 설정 섹션 렌더링"""
     st.markdown('<div class="sub-header">📱 텔레그램 설정</div>', unsafe_allow_html=True)
     
@@ -139,6 +139,7 @@ def render_telegram_settings():
     use_server = st.checkbox(
         "🔌 서버를 통해 전송 (권장)",
         value=st.session_state.use_server,
+        key=f"{key_prefix}_use_server_checkbox",
         help="integrated_trading_system_v2_complete.py 서버가 실행 중일 때 사용"
     )
     st.session_state.use_server = use_server
@@ -147,6 +148,7 @@ def render_telegram_settings():
         server_url = st.text_input(
             "🌐 서버 URL",
             value=st.session_state.server_url,
+            key=f"{key_prefix}_server_url_input",
             placeholder="http://localhost:5000",
             help="트레이딩 시스템 서버의 URL을 입력하세요"
         )
@@ -193,6 +195,7 @@ def render_telegram_settings():
             bot_token = st.text_input(
                 "🤖 Bot Token",
                 type="password",
+                key=f"{key_prefix}_bot_token_input",
                 placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz",
                 help="BotFather에게서 받은 봇 토큰을 입력하세요"
             )
@@ -200,6 +203,7 @@ def render_telegram_settings():
         with col2:
             chat_id_input = st.text_input(
                 "💬 Chat ID(s)",
+                key=f"{key_prefix}_chat_id_input",
                 placeholder="123456789 또는 123456,789012",
                 help="본인의 텔레그램 Chat ID를 입력하세요 (여러 개는 쉼표로 구분)"
             )
@@ -590,7 +594,7 @@ def main():
     
     # 탭 1: 설정 및 테스트
     with tabs[0]:
-        bot_token, chat_id, use_server, server_url = render_telegram_settings()
+        bot_token, chat_id, use_server, server_url = render_telegram_settings("tab1")
         
         if use_server and server_url:
             st.markdown("---")
@@ -608,7 +612,7 @@ def main():
     
     # 탭 2: 메시지 전송
     with tabs[1]:
-        bot_token, chat_id, use_server, server_url = render_telegram_settings()
+        bot_token, chat_id, use_server, server_url = render_telegram_settings("tab2")
         
         if use_server and server_url:
             st.markdown("---")
@@ -620,7 +624,7 @@ def main():
     
     # 탭 3: 템플릿
     with tabs[2]:
-        bot_token, chat_id, use_server, server_url = render_telegram_settings()
+        bot_token, chat_id, use_server, server_url = render_telegram_settings("tab3")
         
         if use_server and server_url:
             st.markdown("---")
