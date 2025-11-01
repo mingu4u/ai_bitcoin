@@ -3,17 +3,12 @@ import sys
 import os
 from datetime import datetime
 import json
+import requests
 
-# 트레이딩 시스템 임포트
-sys.path.append(os.path.dirname(__file__))
-from integrated_trading_system_v2_complete import (
-    IntegratedTradingSystem,
-    send_telegram_test_message,
-    verify_telegram_bot,
-    send_custom_telegram_message
-)
+# 서버 URL 설정
+MAIN_SERVER_URL = "http://localhost:5000"  # 기본 서버 URL
 
-# 페이지 설정
+# CSS 스타일
 st.set_page_config(
     page_title="통합 트레이딩 대시보드",
     page_icon="📊",
@@ -74,82 +69,156 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
+def test_telegram_via_server(server_url):
+    """서버를 통한 텔레그램 테스트"""
+    try:
+        response = requests.post(f"{server_url}/test-telegram", timeout=10)
+        if response.status_code == 200:
+            return True, response.json()
+        else:
+            error_msg = f"Server returned status code: {response.status_code}"
+            if response.text:
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('error', error_msg)
+                except:
+                    error_msg = response.text[:200]
+            return False, error_msg
+    except requests.exceptions.ConnectionError:
+        return False, "Cannot connect to server. Please check if the server is running."
+    except requests.exceptions.Timeout:
+        return False, "Request timed out. The server might be busy."
+    except Exception as e:
+        return False, f"Error: {str(e)}"
+
+def verify_telegram_via_server(server_url):
+    """서버를 통한 텔레그램 봇 확인"""
+    try:
+        response = requests.get(f"{server_url}/telegram/verify", timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"success": False, "message": f"Server error: {response.status_code}"}
+    except Exception as e:
+        return {"success": False, "message": f"Connection error: {str(e)}"}
+
+def send_telegram_via_server(server_url, message, parse_mode='HTML', importance='normal'):
+    """서버를 통한 텔레그램 메시지 전송"""
+    try:
+        payload = {
+            'message': message,
+            'parse_mode': parse_mode,
+            'importance': importance
+        }
+        response = requests.post(f"{server_url}/telegram/send", json=payload, timeout=10)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"success": False, "message": f"Server error: {response.status_code}"}
+    except Exception as e:
+        return {"success": False, "message": f"Connection error: {str(e)}"}
+
+
 def init_session_state():
     """세션 상태 초기화"""
-    if 'trading_system' not in st.session_state:
-        st.session_state.trading_system = None
     if 'telegram_test_result' not in st.session_state:
         st.session_state.telegram_test_result = None
     if 'telegram_verified' not in st.session_state:
         st.session_state.telegram_verified = False
+    if 'use_server' not in st.session_state:
+        st.session_state.use_server = True
+    if 'server_url' not in st.session_state:
+        st.session_state.server_url = MAIN_SERVER_URL
 
 
 def render_telegram_settings():
     """텔레그램 설정 섹션 렌더링"""
     st.markdown('<div class="sub-header">📱 텔레그램 설정</div>', unsafe_allow_html=True)
     
-    with st.expander("ℹ️ 텔레그램 봇 설정 방법", expanded=False):
-        st.markdown("""
-        ### 텔레그램 봇 설정 가이드
-        
-        1. **봇 생성**
-           - 텔레그램에서 [@BotFather](https://t.me/botfather) 검색
-           - `/newbot` 명령어로 새 봇 생성
-           - 봇 이름과 사용자명 설정
-           - 받은 **Bot Token** 저장
-        
-        2. **Chat ID 확인**
-           - 생성한 봇과 대화 시작 (아무 메시지나 전송)
-           - [@userinfobot](https://t.me/userinfobot)에게 `/start` 전송
-           - 받은 **Chat ID** 저장
-           
-        3. **설정 입력**
-           - 아래 입력란에 Bot Token과 Chat ID 입력
-           - 여러 Chat ID는 쉼표로 구분 (예: 123456,789012)
-           - "연결 확인" 버튼으로 설정 검증
-           - "테스트 메시지 전송" 버튼으로 메시지 수신 확인
-        
-        4. **중요도 시스템**
-           - 🚨 high: 중요한 거래 신호
-           - 📊 normal: 일반 알림
-           - ℹ️ low: 정보성 메시지
-           - ✅ success: 성공 메시지
-           - ❌ error: 에러 알림
-           - ⚠️ warning: 경고 메시지
-        """)
+    # 서버 모드 선택
+    use_server = st.checkbox(
+        "🔌 서버를 통해 전송 (권장)",
+        value=st.session_state.use_server,
+        help="integrated_trading_system_v2_complete.py 서버가 실행 중일 때 사용"
+    )
+    st.session_state.use_server = use_server
     
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        bot_token = st.text_input(
-            "🤖 Bot Token",
-            type="password",
-            placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz",
-            help="BotFather에게서 받은 봇 토큰을 입력하세요"
+    if use_server:
+        server_url = st.text_input(
+            "🌐 서버 URL",
+            value=st.session_state.server_url,
+            placeholder="http://localhost:5000",
+            help="트레이딩 시스템 서버의 URL을 입력하세요"
         )
+        st.session_state.server_url = server_url
+        
+        st.info("💡 서버 모드: 서버의 텔레그램 설정을 사용합니다. Bot Token과 Chat ID는 서버의 .env 파일에서 설정되어 있어야 합니다.")
+        
+        return None, None, True, server_url
     
-    with col2:
-        chat_id_input = st.text_input(
-            "💬 Chat ID(s)",
-            placeholder="123456789 또는 123456,789012",
-            help="본인의 텔레그램 Chat ID를 입력하세요 (여러 개는 쉼표로 구분)"
-        )
-    
-    # Chat ID 파싱 (쉼표로 구분된 여러 ID 지원)
-    chat_id = None
-    if chat_id_input:
-        # 쉼표 또는 공백으로 구분
-        chat_ids = [id.strip() for id in chat_id_input.replace(',', ' ').split() if id.strip()]
-        if len(chat_ids) == 1:
-            chat_id = chat_ids[0]
-        elif len(chat_ids) > 1:
-            chat_id = chat_ids
-            st.info(f"📢 {len(chat_ids)}개의 Chat ID가 입력되었습니다: {', '.join(chat_ids)}")
-    
-    return bot_token, chat_id
+    else:
+        with st.expander("ℹ️ 텔레그램 봇 설정 방법", expanded=False):
+            st.markdown("""
+            ### 텔레그램 봇 설정 가이드
+            
+            1. **봇 생성**
+               - 텔레그램에서 [@BotFather](https://t.me/botfather) 검색
+               - `/newbot` 명령어로 새 봇 생성
+               - 봇 이름과 사용자명 설정
+               - 받은 **Bot Token** 저장
+            
+            2. **Chat ID 확인**
+               - 생성한 봇과 대화 시작 (아무 메시지나 전송)
+               - [@userinfobot](https://t.me/userinfobot)에게 `/start` 전송
+               - 받은 **Chat ID** 저장
+               
+            3. **설정 입력**
+               - 아래 입력란에 Bot Token과 Chat ID 입력
+               - 여러 Chat ID는 쉼표로 구분 (예: 123456,789012)
+               - "연결 확인" 버튼으로 설정 검증
+               - "테스트 메시지 전송" 버튼으로 메시지 수신 확인
+            
+            4. **중요도 시스템**
+               - 🚨 high: 중요한 거래 신호
+               - 📊 normal: 일반 알림
+               - ℹ️ low: 정보성 메시지
+               - ✅ success: 성공 메시지
+               - ❌ error: 에러 알림
+               - ⚠️ warning: 경고 메시지
+            """)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            bot_token = st.text_input(
+                "🤖 Bot Token",
+                type="password",
+                placeholder="1234567890:ABCdefGHIjklMNOpqrsTUVwxyz",
+                help="BotFather에게서 받은 봇 토큰을 입력하세요"
+            )
+        
+        with col2:
+            chat_id_input = st.text_input(
+                "💬 Chat ID(s)",
+                placeholder="123456789 또는 123456,789012",
+                help="본인의 텔레그램 Chat ID를 입력하세요 (여러 개는 쉼표로 구분)"
+            )
+        
+        # Chat ID 파싱 (쉼표로 구분된 여러 ID 지원)
+        chat_id = None
+        if chat_id_input:
+            # 쉼표 또는 공백으로 구분
+            chat_ids = [id.strip() for id in chat_id_input.replace(',', ' ').split() if id.strip()]
+            if len(chat_ids) == 1:
+                chat_id = chat_ids[0]
+            elif len(chat_ids) > 1:
+                chat_id = chat_ids
+                st.info(f"📢 {len(chat_ids)}개의 Chat ID가 입력되었습니다: {', '.join(chat_ids)}")
+        
+        return bot_token, chat_id, False, None
 
 
-def render_telegram_test_section(bot_token, chat_id):
+def render_telegram_test_section(bot_token, chat_id, use_server, server_url):
     """텔레그램 테스트 섹션 렌더링"""
     st.markdown('<div class="sub-header">🧪 텔레그램 테스트</div>', unsafe_allow_html=True)
     
@@ -158,72 +227,91 @@ def render_telegram_test_section(bot_token, chat_id):
     # 연결 확인 버튼
     with col1:
         if st.button("🔗 연결 확인", use_container_width=True):
-            if not bot_token or not chat_id:
-                st.error("❌ Bot Token과 Chat ID를 모두 입력해주세요.")
+            if use_server:
+                if not server_url:
+                    st.error("❌ 서버 URL을 입력해주세요.")
+                else:
+                    with st.spinner("서버에 연결 확인 중..."):
+                        result = verify_telegram_via_server(server_url)
+                        
+                        if result.get('success'):
+                            st.session_state.telegram_verified = True
+                            bot_info = result.get('bot_info', {})
+                            st.markdown(f"""
+                            <div class="success-box">
+                                <strong>✅ 연결 성공!</strong><br>
+                                봇 이름: {bot_info.get('first_name', 'N/A')}<br>
+                                사용자명: @{bot_info.get('username', 'N/A')}
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.session_state.telegram_verified = False
+                            st.markdown(f"""
+                            <div class="error-box">
+                                <strong>❌ 연결 실패</strong><br>
+                                {result.get('message', '알 수 없는 오류')}
+                            </div>
+                            """, unsafe_allow_html=True)
             else:
-                with st.spinner("연결 확인 중..."):
-                    result = verify_telegram_bot(bot_token, chat_id)
-                    
-                    if result['success']:
-                        st.session_state.telegram_verified = True
-                        bot_info = result.get('bot_info', {})
-                        st.markdown(f"""
-                        <div class="success-box">
-                            <strong>✅ 연결 성공!</strong><br>
-                            봇 이름: {bot_info.get('first_name', 'N/A')}<br>
-                            사용자명: @{bot_info.get('username', 'N/A')}
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.session_state.telegram_verified = False
-                        st.markdown(f"""
-                        <div class="error-box">
-                            <strong>❌ 연결 실패</strong><br>
-                            {result['message']}
-                        </div>
-                        """, unsafe_allow_html=True)
+                if not bot_token or not chat_id:
+                    st.error("❌ Bot Token과 Chat ID를 모두 입력해주세요.")
+                else:
+                    st.warning("⚠️ 직접 모드는 현재 지원되지 않습니다. 서버 모드를 사용해주세요.")
     
     # 테스트 메시지 전송 버튼
     with col2:
         if st.button("✉️ 테스트 메시지 전송", use_container_width=True):
-            if not bot_token or not chat_id:
-                st.error("❌ Bot Token과 Chat ID를 모두 입력해주세요.")
+            if use_server:
+                if not server_url:
+                    st.error("❌ 서버 URL을 입력해주세요.")
+                else:
+                    with st.spinner("메시지 전송 중..."):
+                        success, result = test_telegram_via_server(server_url)
+                        st.session_state.telegram_test_result = {"success": success, "data": result}
+                        
+                        if success:
+                            st.markdown("""
+                            <div class="success-box">
+                                <strong>✅ 메시지 전송 성공!</strong><br>
+                                텔레그램을 확인해보세요.
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.markdown(f"""
+                            <div class="error-box">
+                                <strong>❌ 메시지 전송 실패</strong><br>
+                                {result}
+                            </div>
+                            """, unsafe_allow_html=True)
             else:
-                with st.spinner("메시지 전송 중..."):
-                    result = send_telegram_test_message(bot_token, chat_id)
-                    st.session_state.telegram_test_result = result
-                    
-                    if result['success']:
-                        st.markdown("""
-                        <div class="success-box">
-                            <strong>✅ 메시지 전송 성공!</strong><br>
-                            텔레그램을 확인해보세요.
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        st.markdown(f"""
-                        <div class="error-box">
-                            <strong>❌ 메시지 전송 실패</strong><br>
-                            {result['message']}
-                        </div>
-                        """, unsafe_allow_html=True)
+                st.warning("⚠️ 직접 모드는 현재 지원되지 않습니다. 서버 모드를 사용해주세요.")
     
-    # 설정 저장 버튼
+    # 서버 상태 확인 버튼
     with col3:
-        if st.button("💾 설정 저장", use_container_width=True):
-            if not bot_token or not chat_id:
-                st.error("❌ Bot Token과 Chat ID를 모두 입력해주세요.")
+        if st.button("🔍 서버 상태 확인", use_container_width=True):
+            if not server_url:
+                st.error("❌ 서버 URL을 입력해주세요.")
             else:
-                # 트레이딩 시스템 초기화
-                config = {
-                    'telegram_bot_token': bot_token,
-                    'telegram_chat_id': chat_id
-                }
-                st.session_state.trading_system = IntegratedTradingSystem(config)
-                st.success("✅ 설정이 저장되었습니다!")
+                with st.spinner("서버 상태 확인 중..."):
+                    try:
+                        response = requests.get(f"{server_url}/status", timeout=5)
+                        if response.status_code == 200:
+                            status = response.json()
+                            st.markdown(f"""
+                            <div class="success-box">
+                                <strong>✅ 서버 연결 성공</strong><br>
+                                포트: {status.get('server_port', 'N/A')}<br>
+                                텔레그램: {'활성화' if status.get('telegram_enabled') else '비활성화'}<br>
+                                활성 심볼: {status.get('total_symbols', 0)}개
+                            </div>
+                            """, unsafe_allow_html=True)
+                        else:
+                            st.error(f"❌ 서버 오류: {response.status_code}")
+                    except Exception as e:
+                        st.error(f"❌ 서버 연결 실패: {str(e)}")
 
 
-def render_custom_message_section(bot_token, chat_id):
+def render_custom_message_section(bot_token, chat_id, use_server, server_url):
     """커스텀 메시지 전송 섹션"""
     st.markdown('<div class="sub-header">✍️ 커스텀 메시지 전송</div>', unsafe_allow_html=True)
     
@@ -269,37 +357,39 @@ def render_custom_message_section(bot_token, chat_id):
             submit_button = st.form_submit_button("📤 전송", use_container_width=True)
         
         if submit_button:
-            if not bot_token or not chat_id:
-                st.error("❌ Bot Token과 Chat ID를 먼저 입력해주세요.")
-            elif not message.strip():
+            if not message.strip():
                 st.error("❌ 메시지 내용을 입력해주세요.")
-            else:
-                with st.spinner("메시지 전송 중..."):
-                    result = send_custom_telegram_message(
-                        bot_token, 
-                        chat_id, 
-                        message,
-                        parse_mode if parse_mode != "None" else None,
-                        importance
-                    )
-                    
-                    if result['success']:
-                        st.success(f"✅ 메시지가 성공적으로 전송되었습니다! ({result.get('message', '')})")
+            elif use_server:
+                if not server_url:
+                    st.error("❌ 서버 URL을 입력해주세요.")
+                else:
+                    with st.spinner("메시지 전송 중..."):
+                        result = send_telegram_via_server(
+                            server_url,
+                            message,
+                            parse_mode if parse_mode != "None" else None,
+                            importance
+                        )
                         
-                        # 결과 상세 표시
-                        if result.get('results'):
-                            with st.expander("전송 결과 상세", expanded=False):
-                                for res in result['results']:
-                                    if res['success']:
-                                        st.success(f"Chat ID {res['chat_id']}: 전송 성공")
-                                    else:
-                                        st.error(f"Chat ID {res['chat_id']}: {res.get('error', '전송 실패')}")
-                    else:
-                        st.error(f"❌ 메시지 전송 실패: {result.get('message', '알 수 없는 오류')}")
+                        if result.get('success'):
+                            st.success(f"✅ 메시지가 성공적으로 전송되었습니다! ({result.get('message', '')})")
+                            
+                            # 결과 상세 표시
+                            if result.get('results'):
+                                with st.expander("전송 결과 상세", expanded=False):
+                                    for res in result['results']:
+                                        if res.get('success'):
+                                            st.success(f"Chat ID {res['chat_id']}: 전송 성공")
+                                        else:
+                                            st.error(f"Chat ID {res['chat_id']}: {res.get('error', '전송 실패')}")
+                        else:
+                            st.error(f"❌ 메시지 전송 실패: {result.get('message', '알 수 없는 오류')}")
+            else:
+                st.warning("⚠️ 직접 모드는 현재 지원되지 않습니다. 서버 모드를 사용해주세요.")
 
 
 
-def render_message_templates(bot_token, chat_id):
+def render_message_templates(bot_token, chat_id, use_server, server_url):
     """메시지 템플릿 섹션"""
     st.markdown('<div class="sub-header">📋 메시지 템플릿</div>', unsafe_allow_html=True)
     
@@ -388,31 +478,33 @@ def render_message_templates(bot_token, chat_id):
         st.code(template_message, language="html")
         
         if st.button(f"📤 '{template_name}' 전송", use_container_width=True):
-            if not bot_token or not chat_id:
-                st.error("❌ Bot Token과 Chat ID를 먼저 입력해주세요.")
-            else:
-                with st.spinner("메시지 전송 중..."):
-                    result = send_custom_telegram_message(
-                        bot_token, 
-                        chat_id, 
-                        template_message,
-                        parse_mode="HTML",
-                        importance=importance
-                    )
-                    
-                    if result['success']:
-                        st.success(f"✅ 템플릿 메시지가 전송되었습니다! ({result.get('message', '')})")
+            if use_server:
+                if not server_url:
+                    st.error("❌ 서버 URL을 입력해주세요.")
+                else:
+                    with st.spinner("메시지 전송 중..."):
+                        result = send_telegram_via_server(
+                            server_url,
+                            template_message,
+                            parse_mode="HTML",
+                            importance=importance
+                        )
                         
-                        # 결과 상세 표시
-                        if result.get('results'):
-                            with st.expander("전송 결과 상세", expanded=False):
-                                for res in result['results']:
-                                    if res['success']:
-                                        st.success(f"Chat ID {res['chat_id']}: 전송 성공")
-                                    else:
-                                        st.error(f"Chat ID {res['chat_id']}: {res.get('error', '전송 실패')}")
-                    else:
-                        st.error(f"❌ 메시지 전송 실패: {result.get('message', '알 수 없는 오류')}")
+                        if result.get('success'):
+                            st.success(f"✅ 템플릿 메시지가 전송되었습니다! ({result.get('message', '')})")
+                            
+                            # 결과 상세 표시
+                            if result.get('results'):
+                                with st.expander("전송 결과 상세", expanded=False):
+                                    for res in result['results']:
+                                        if res.get('success'):
+                                            st.success(f"Chat ID {res['chat_id']}: 전송 성공")
+                                        else:
+                                            st.error(f"Chat ID {res['chat_id']}: {res.get('error', '전송 실패')}")
+                        else:
+                            st.error(f"❌ 메시지 전송 실패: {result.get('message', '알 수 없는 오류')}")
+            else:
+                st.warning("⚠️ 직접 모드는 현재 지원되지 않습니다. 서버 모드를 사용해주세요.")
 
 
 
@@ -498,11 +590,11 @@ def main():
     
     # 탭 1: 설정 및 테스트
     with tabs[0]:
-        bot_token, chat_id = render_telegram_settings()
+        bot_token, chat_id, use_server, server_url = render_telegram_settings()
         
-        if bot_token and chat_id:
+        if use_server and server_url:
             st.markdown("---")
-            render_telegram_test_section(bot_token, chat_id)
+            render_telegram_test_section(bot_token, chat_id, use_server, server_url)
             
             # 연결 상태 표시
             if st.session_state.telegram_verified:
@@ -511,26 +603,32 @@ def main():
                     <strong>✅ 텔레그램 연결 상태: 정상</strong>
                 </div>
                 """, unsafe_allow_html=True)
+        elif not use_server:
+            st.info("💡 직접 모드는 현재 지원되지 않습니다. '서버를 통해 전송' 옵션을 활성화해주세요.")
     
     # 탭 2: 메시지 전송
     with tabs[1]:
-        bot_token, chat_id = render_telegram_settings()
+        bot_token, chat_id, use_server, server_url = render_telegram_settings()
         
-        if bot_token and chat_id:
+        if use_server and server_url:
             st.markdown("---")
-            render_custom_message_section(bot_token, chat_id)
+            render_custom_message_section(bot_token, chat_id, use_server, server_url)
+        elif not use_server:
+            st.info("💡 직접 모드는 현재 지원되지 않습니다. '서버를 통해 전송' 옵션을 활성화해주세요.")
         else:
-            st.warning("⚠️ 먼저 '설정 및 테스트' 탭에서 Bot Token과 Chat ID를 입력해주세요.")
+            st.warning("⚠️ 먼저 '설정 및 테스트' 탭에서 서버 URL을 입력해주세요.")
     
     # 탭 3: 템플릿
     with tabs[2]:
-        bot_token, chat_id = render_telegram_settings()
+        bot_token, chat_id, use_server, server_url = render_telegram_settings()
         
-        if bot_token and chat_id:
+        if use_server and server_url:
             st.markdown("---")
-            render_message_templates(bot_token, chat_id)
+            render_message_templates(bot_token, chat_id, use_server, server_url)
+        elif not use_server:
+            st.info("💡 직접 모드는 현재 지원되지 않습니다. '서버를 통해 전송' 옵션을 활성화해주세요.")
         else:
-            st.warning("⚠️ 먼저 '설정 및 테스트' 탭에서 Bot Token과 Chat ID를 입력해주세요.")
+            st.warning("⚠️ 먼저 '설정 및 테스트' 탭에서 서버 URL을 입력해주세요.")
     
     # 탭 4: 이력
     with tabs[3]:
