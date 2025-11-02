@@ -348,15 +348,6 @@ SYMBOL_CONFIG = {
         'enabled': True,
         'ai_validation': True,
         'ai_monitoring': True
-    },
-    'ASTER/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
-        'min_position_size': 10,
-        'max_position_size': 100000,
-        'enabled': True,
-        'ai_validation': True,
-        'ai_monitoring': True
     }
 }
 
@@ -453,41 +444,6 @@ def add_indicators(df):
     df['ppo'] = ta.momentum.PercentagePriceOscillator(close=df['close']).ppo()
     
     return df
-
-# ============ AI Response Helper ============
-def extract_ai_response(response):
-    """
-    DeepSeek Reasoner 응답에서 content 추출
-    reasoning_content와 content를 모두 확인
-    """
-    try:
-        message = response.choices[0].message
-        
-        # 응답 구조 로깅
-        logger.debug(f"응답 구조: {dir(message)}")
-        
-        # content 확인
-        content = getattr(message, 'content', None)
-        if content and content.strip():
-            logger.info(f"Content 응답 길이: {len(content)} 문자")
-            return content
-        
-        # reasoning_content 확인 (DeepSeek Reasoner 특수 필드)
-        reasoning_content = getattr(message, 'reasoning_content', None)
-        if reasoning_content and reasoning_content.strip():
-            logger.info(f"Reasoning content 응답 길이: {len(reasoning_content)} 문자")
-            logger.warning("Content가 비어있어 reasoning_content 사용")
-            return reasoning_content
-        
-        # 둘 다 없으면 전체 응답 로깅
-        logger.error(f"응답이 비어있음. Message 객체: {message}")
-        logger.error(f"전체 response: {response}")
-        return None
-        
-    except Exception as e:
-        logger.error(f"AI 응답 추출 중 오류: {str(e)}")
-        logger.error(f"전체 response: {response}")
-        return None
 
 # ============ Market Data Collection ============
 def get_market_data(symbol):
@@ -613,14 +569,12 @@ def generate_reflection(trades_df, current_market_data):
     
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",  # Chat 모델 사용 - 자연어 응답에 더 효율적
+            model="deepseek-reasoner",
             messages=[
                 {
                     "role": "system",
                     "content": """
 You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance including position monitoring decisions and current market conditions to generate specific, actionable insights.
-
-Provide clear, concise analysis in natural language.
 """
                 },
                 {
@@ -642,17 +596,10 @@ Keep the analysis concise and actionable.
                 }
             ],
             temperature=0.3,
-            max_tokens=1500  # Chat 모델은 더 효율적
+            max_tokens=2000
         )
         
-        # AI 응답 추출 - 개선된 버전
-        ai_response_text = extract_ai_response(response)
-        
-        if not ai_response_text:
-            logger.error("Reflection 생성 실패: AI 응답이 비어있음")
-            return None
-            
-        return ai_response_text
+        return response.choices[0].message.content
         
     except Exception as e:
         logger.error(f"Error generating reflection: {e}")
@@ -696,19 +643,7 @@ def extract_json_from_text(text: str) -> str:
         except json.JSONDecodeError:
             pass
     
-    # 방법 4: 첫 { 부터 마지막 } 까지 추출 (공격적 방법)
-    first_brace = text.find('{')
-    last_brace = text.rfind('}')
-    if first_brace != -1 and last_brace != -1 and first_brace < last_brace:
-        extracted = text[first_brace:last_brace+1]
-        try:
-            json.loads(extracted)
-            logger.debug(f"첫/마지막 중괄호 사이에서 JSON 추출 (길이: {len(extracted)})")
-            return extracted
-        except json.JSONDecodeError:
-            pass
-    
-    # 방법 5: { ... } 패턴 찾기 (가장 긴 것 우선)
+    # 방법 4: { ... } 패턴 찾기 (가장 긴 것 우선)
     brace_matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
     if brace_matches:
         # 길이순으로 정렬 (긴 것이 완전한 JSON일 가능성 높음)
@@ -722,7 +657,6 @@ def extract_json_from_text(text: str) -> str:
                 continue
     
     logger.error("모든 JSON 추출 방법 실패")
-    logger.debug(f"추출 실패한 텍스트 샘플 (처음 500자): {text[:500]}")
     return None
 
 def create_default_hold_decision(reason: str) -> dict:
@@ -890,34 +824,25 @@ Return ONLY the JSON object.
         logger.info(f"포지션 모니터 시작 - {symbol} {side}")
         
         response = client.chat.completions.create(
-            model="deepseek-chat",  # Reasoner 대신 Chat 사용
+            model="deepseek-reasoner",
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a professional position manager.
-
-CRITICAL RULES:
-1. ONLY return valid JSON - no explanations, no reasoning, no markdown
-2. Start your response with { and end with }
-3. Follow the exact JSON schema provided
-4. Be decisive about position management
-
-Your response must be a single JSON object."""
+                    "content": "You are a professional position manager. Return valid JSON only. No markdown."
                 },
                 {"role": "user", "content": prompt}
             ],
             response_format={'type': 'json_object'},
             temperature=0.1,
-            max_tokens=1500  # Chat 모델은 Reasoner보다 토큰 효율적
+            max_tokens=1000
         )
         
-        # 1. 응답 추출 - 개선된 버전
-        ai_response_text = extract_ai_response(response)
+        # 1. 응답 추출
+        ai_response_text = response.choices[0].message.content
         
         if not ai_response_text or not ai_response_text.strip():
-            logger.error("AI 응답이 비어있음 (content와 reasoning_content 모두 확인)")
+            logger.error("AI 응답이 비어있음")
             return create_default_hold_decision("AI 응답 없음")
-
         
         logger.info(f"AI 응답 길이: {len(ai_response_text)} 문자")
         logger.debug(f"AI 응답 내용: {ai_response_text[:500]}")
@@ -1243,37 +1168,28 @@ Provide specific reasoning based on the indicators and suggest optimal entry, st
         logger.info(f"AI 시그널 검증 시작 - {symbol} {action}")
         
         response = client.chat.completions.create(
-            model="deepseek-chat",  # Reasoner 대신 Chat 사용 - JSON 포맷을 더 잘 따름
+            model="deepseek-reasoner",
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a professional crypto trading AI validator.
-
-CRITICAL RULES:
-1. ONLY return valid JSON - no explanations, no reasoning, no markdown
-2. Start your response with { and end with }
-3. Follow the exact JSON schema provided
-4. Be decisive and specific in your analysis
-
-Your response must be a single JSON object."""
+                    "content": "You are a professional crypto trading AI that validates signals based on technical analysis. Be decisive and specific. Only return valid JSON objects. Never include explanations or markdown."
                 },
                 {"role": "user", "content": prompt}
             ],
             response_format={'type': 'json_object'},
             temperature=0.1,
-            max_tokens=1500  # Chat 모델은 Reasoner보다 토큰 효율적
+            max_tokens=1000
         )
         
-        # 1. 응답 추출 - 개선된 버전
-        ai_response_text = extract_ai_response(response)
+        # 1. 응답 추출
+        ai_response_text = response.choices[0].message.content
         
         if not ai_response_text or not ai_response_text.strip():
-            logger.error("AI 응답이 비어있음 (content와 reasoning_content 모두 확인)")
+            logger.error("AI 응답이 비어있음")
             return create_default_reject_decision("AI 응답 없음")
         
         logger.info(f"AI 응답 길이: {len(ai_response_text)} 문자")
         logger.debug(f"AI 응답 내용: {ai_response_text[:500]}")
-
         
         # 2. JSON 추출
         json_str = extract_json_from_text(ai_response_text)
@@ -1699,6 +1615,20 @@ def webhook():
         symbol = data.get('symbol', 'BTC/USDT')
         message = data if data else json.dumps(data, ensure_ascii=False)
         
+        # 액션 정규화 (close_position, exit_position 등을 close로 통일)
+        action_mapping = {
+            'close_position': 'close',
+            'exit_position': 'close',
+            'exit': 'close',
+            'close_long': 'close',
+            'close_short': 'close',
+        }
+        
+        if action in action_mapping:
+            original_action = action
+            action = action_mapping[action]
+            logger.info(f"액션 매핑: {original_action} -> {action}")
+        
         # 심볼 매핑 테이블 (정규화 전에 수행!)
         symbol_mapping = {
             'BTCUSDT': 'BTC/USDT',
@@ -1763,8 +1693,6 @@ def webhook():
             'HOMEUSDT.P': 'HOME/USDT',
             'TRXUSDT': 'TRX/USDT',
             'TRXUSDT.P': 'TRX/USDT',
-            'ASTERUSDT': 'ASTER/USDT',            
-            'ASTERUSDT.P': 'ASTER/USDT'         
         }
         
         # 심볼 매핑 적용
@@ -1833,6 +1761,19 @@ def webhook():
                 # AI가 수정한 매매 신호 사용
                 action = ai_decision['modified_action']
                 if action == 'hold':
+                    # Hold 결정 시 알림 전송
+                    message = f"""
+ℹ️ <b>AI 신호 보류 (Hold)</b>
+
+<b>심볼:</b> {symbol}
+<b>원래 신호:</b> {data.get('action', 'N/A').upper()}
+<b>AI 결정:</b> HOLD
+<b>신뢰도:</b> {ai_decision['confidence']:.1%}
+<b>이유:</b> {ai_decision['reason']}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    """.strip()
+                    send_telegram_notification(message, 'info')
                     return jsonify({'status': 'hold', 'reason': ai_decision['reason']}), 200
             
             # AI가 승인하거나 수정한 경우 거래 실행
@@ -1865,8 +1806,11 @@ def webhook():
             if action == 'close':
                 # 포지션 청산
                 positions = exchange.fetch_positions([symbol])
+                position_closed = False
+                
                 for position in positions:
                     if float(position['contracts']) != 0:
+                        position_closed = True
                         close_side = 'sell' if position['side'] == 'long' else 'buy'
                         exchange.create_market_order(symbol, close_side, abs(float(position['contracts'])))
                         
@@ -1883,8 +1827,21 @@ def webhook():
                         # 포지션 추적에서 제거
                         if symbol in current_positions:
                             del current_positions[symbol]
+                
+                # 포지션이 없었던 경우 알림
+                if not position_closed:
+                    message = f"""
+ℹ️ <b>청산 시도 - 포지션 없음</b>
+
+<b>심볼:</b> {symbol}
+<b>상태:</b> 청산할 활성 포지션이 없습니다
+<b>원인:</b> {data.get('exit_reason', 'N/A')}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    """.strip()
+                    send_telegram_notification(message, 'info')
                         
-                return jsonify({'status': 'closed'}), 200
+                return jsonify({'status': 'closed' if position_closed else 'no_position'}), 200
             
             # 포지션 크기 계산
             position_size = usdt_balance * (position_percent / 100)
