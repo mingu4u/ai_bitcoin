@@ -348,6 +348,15 @@ SYMBOL_CONFIG = {
         'enabled': True,
         'ai_validation': True,
         'ai_monitoring': True
+    },
+    'ASTER/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
     }
 }
 
@@ -1754,6 +1763,8 @@ def webhook():
             'HOMEUSDT.P': 'HOME/USDT',
             'TRXUSDT': 'TRX/USDT',
             'TRXUSDT.P': 'TRX/USDT',
+            'ASTERUSDT': 'ASTER/USDT',            
+            'ASTERUSDT.P': 'ASTER/USDT'         
         }
         
         # 심볼 매핑 적용
