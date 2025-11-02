@@ -80,16 +80,30 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # 서버 URL 설정
-SERVER_URL = "http://localhost:5000"
+DEFAULT_SERVER_URL = "http://localhost:5000"
+
+# Session state 초기화
+def init_session_state():
+    """세션 상태 초기화"""
+    if 'server_url' not in st.session_state:
+        st.session_state.server_url = DEFAULT_SERVER_URL
+
+def get_server_url():
+    """현재 서버 URL 반환"""
+    return st.session_state.get('server_url', DEFAULT_SERVER_URL)
 
 def get_status():
     """시스템 상태 조회"""
     try:
-        response = requests.get(f"{SERVER_URL}/status", timeout=5)
+        response = requests.get(f"{get_server_url()}/status", timeout=5)
         if response.status_code == 200:
             return response.json()
         return None
-    except:
+    except requests.exceptions.RequestException as e:
+        # 연결 오류, 타임아웃 등
+        return None
+    except Exception as e:
+        # 기타 예외
         return None
 
 def get_trades(limit=200, symbol=None):
@@ -99,12 +113,16 @@ def get_trades(limit=200, symbol=None):
         if symbol:
             params['symbol'] = symbol
         
-        response = requests.get(f"{SERVER_URL}/trades", params=params, timeout=10)
+        response = requests.get(f"{get_server_url()}/trades", params=params, timeout=10)
         if response.status_code == 200:
             data = response.json()
             return data.get('trades', [])
         return []
-    except:
+    except requests.exceptions.RequestException as e:
+        # 연결 오류, 타임아웃 등
+        return []
+    except Exception as e:
+        # 기타 예외
         return []
 
 def calculate_pnl(trades):
@@ -127,6 +145,10 @@ def calculate_pnl(trades):
         
         for idx, row in df.iterrows():
             if pd.notna(row['entry_price']) and pd.notna(row['current_price']) and pd.notna(row['position_size']):
+                # Zero division 체크
+                if row['entry_price'] == 0:
+                    continue
+                    
                 action = row.get('action', '')
                 if action == 'buy':
                     # 매수 포지션: (현재가 - 진입가) / 진입가 * 포지션크기
@@ -179,13 +201,19 @@ def calculate_symbol_performance(trades):
     symbol_stats = []
     
     for symbol in df['symbol'].unique():
-        symbol_trades = df[df['symbol'] == symbol]
+        symbol_trades = df[df['symbol'] == symbol].copy()
         
         # PnL 계산
         symbol_pnl = 0
+        symbol_trades['pnl'] = 0.0  # pnl 컬럼 초기화
+        
         if 'entry_price' in symbol_trades.columns and 'current_price' in symbol_trades.columns:
             for idx, row in symbol_trades.iterrows():
                 if pd.notna(row['entry_price']) and pd.notna(row['current_price']) and pd.notna(row.get('position_size', 0)):
+                    # Zero division 체크
+                    if row['entry_price'] == 0:
+                        continue
+                        
                     action = row.get('action', '')
                     if action == 'buy':
                         pnl_percent = (row['current_price'] - row['entry_price']) / row['entry_price']
@@ -193,10 +221,15 @@ def calculate_symbol_performance(trades):
                         pnl_percent = (row['entry_price'] - row['current_price']) / row['entry_price']
                     else:
                         pnl_percent = 0
-                    symbol_pnl += pnl_percent * row.get('position_size', 0)
+                    
+                    trade_pnl = pnl_percent * row.get('position_size', 0)
+                    symbol_trades.at[idx, 'pnl'] = trade_pnl
+                    symbol_pnl += trade_pnl
         
-        # 승률 계산
-        profitable = len(symbol_trades[symbol_trades.get('pnl', 0) > 0]) if 'pnl' in symbol_trades.columns else 0
+        # 승률 계산 (PnL이 양수인 거래 개수)
+        profitable = 0
+        if 'pnl' in symbol_trades.columns:
+            profitable = len(symbol_trades[symbol_trades['pnl'] > 0])
         total = len(symbol_trades)
         win_rate = (profitable / total * 100) if total > 0 else 0
         
@@ -242,7 +275,7 @@ def render_overview():
     
     if not trades:
         st.warning("⚠️ 거래 데이터를 불러올 수 없습니다. 서버가 실행 중인지 확인해주세요.")
-        st.info(f"서버 URL: {SERVER_URL}")
+        st.info(f"서버 URL: {get_server_url()}")
         return
     
     # 성과 계산
@@ -562,19 +595,22 @@ def render_charts():
 def main():
     """메인 함수"""
     
+    # Session state 초기화
+    init_session_state()
+    
     # 사이드바 (최소화)
     with st.sidebar:
         st.markdown("### ⚙️ 설정")
         
         server_url_input = st.text_input(
             "서버 URL",
-            value=SERVER_URL,
+            value=get_server_url(),
             help="트레이딩 시스템 서버 주소"
         )
         
-        if server_url_input != SERVER_URL:
-            global SERVER_URL
-            SERVER_URL = server_url_input
+        if server_url_input != get_server_url():
+            st.session_state.server_url = server_url_input
+            st.rerun()
         
         st.markdown("---")
         st.markdown("""
