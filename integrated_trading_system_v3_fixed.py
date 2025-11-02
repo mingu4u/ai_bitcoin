@@ -604,12 +604,14 @@ def generate_reflection(trades_df, current_market_data):
     
     try:
         response = client.chat.completions.create(
-            model="deepseek-reasoner",
+            model="deepseek-chat",  # Chat 모델 사용 - 자연어 응답에 더 효율적
             messages=[
                 {
                     "role": "system",
                     "content": """
 You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance including position monitoring decisions and current market conditions to generate specific, actionable insights.
+
+Provide clear, concise analysis in natural language.
 """
                 },
                 {
@@ -631,7 +633,7 @@ Keep the analysis concise and actionable.
                 }
             ],
             temperature=0.3,
-            max_tokens=2000
+            max_tokens=1500  # Chat 모델은 더 효율적
         )
         
         # AI 응답 추출 - 개선된 버전
@@ -685,7 +687,19 @@ def extract_json_from_text(text: str) -> str:
         except json.JSONDecodeError:
             pass
     
-    # 방법 4: { ... } 패턴 찾기 (가장 긴 것 우선)
+    # 방법 4: 첫 { 부터 마지막 } 까지 추출 (공격적 방법)
+    first_brace = text.find('{')
+    last_brace = text.rfind('}')
+    if first_brace != -1 and last_brace != -1 and first_brace < last_brace:
+        extracted = text[first_brace:last_brace+1]
+        try:
+            json.loads(extracted)
+            logger.debug(f"첫/마지막 중괄호 사이에서 JSON 추출 (길이: {len(extracted)})")
+            return extracted
+        except json.JSONDecodeError:
+            pass
+    
+    # 방법 5: { ... } 패턴 찾기 (가장 긴 것 우선)
     brace_matches = re.findall(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
     if brace_matches:
         # 길이순으로 정렬 (긴 것이 완전한 JSON일 가능성 높음)
@@ -699,6 +713,7 @@ def extract_json_from_text(text: str) -> str:
                 continue
     
     logger.error("모든 JSON 추출 방법 실패")
+    logger.debug(f"추출 실패한 텍스트 샘플 (처음 500자): {text[:500]}")
     return None
 
 def create_default_hold_decision(reason: str) -> dict:
@@ -866,17 +881,25 @@ Return ONLY the JSON object.
         logger.info(f"포지션 모니터 시작 - {symbol} {side}")
         
         response = client.chat.completions.create(
-            model="deepseek-reasoner",
+            model="deepseek-chat",  # Reasoner 대신 Chat 사용
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a professional position manager. Return valid JSON only. No markdown."
+                    "content": """You are a professional position manager.
+
+CRITICAL RULES:
+1. ONLY return valid JSON - no explanations, no reasoning, no markdown
+2. Start your response with { and end with }
+3. Follow the exact JSON schema provided
+4. Be decisive about position management
+
+Your response must be a single JSON object."""
                 },
                 {"role": "user", "content": prompt}
             ],
             response_format={'type': 'json_object'},
             temperature=0.1,
-            max_tokens=2000  # DeepSeek Reasoner를 위해 증가
+            max_tokens=1500  # Chat 모델은 Reasoner보다 토큰 효율적
         )
         
         # 1. 응답 추출 - 개선된 버전
@@ -1211,17 +1234,25 @@ Provide specific reasoning based on the indicators and suggest optimal entry, st
         logger.info(f"AI 시그널 검증 시작 - {symbol} {action}")
         
         response = client.chat.completions.create(
-            model="deepseek-reasoner",
+            model="deepseek-chat",  # Reasoner 대신 Chat 사용 - JSON 포맷을 더 잘 따름
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a professional crypto trading AI that validates signals based on technical analysis. Be decisive and specific. Only return valid JSON objects. Never include explanations or markdown."
+                    "content": """You are a professional crypto trading AI validator.
+
+CRITICAL RULES:
+1. ONLY return valid JSON - no explanations, no reasoning, no markdown
+2. Start your response with { and end with }
+3. Follow the exact JSON schema provided
+4. Be decisive and specific in your analysis
+
+Your response must be a single JSON object."""
                 },
                 {"role": "user", "content": prompt}
             ],
             response_format={'type': 'json_object'},
             temperature=0.1,
-            max_tokens=2000  # DeepSeek Reasoner를 위해 증가
+            max_tokens=1500  # Chat 모델은 Reasoner보다 토큰 효율적
         )
         
         # 1. 응답 추출 - 개선된 버전
