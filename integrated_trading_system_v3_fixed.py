@@ -380,6 +380,92 @@ position_monitor_threads = {}
 ai_monitor_thread = None
 ai_monitor_running = False
 
+# ============ Position Sync Functions ============
+def sync_positions_from_exchange():
+    """거래소의 실제 포지션을 current_positions와 동기화"""
+    global current_positions
+    
+    try:
+        logger.info("=== 거래소 포지션 동기화 시작 ===")
+        
+        # 모든 활성 심볼에 대해 포지션 조회
+        synced_count = 0
+        new_positions = {}
+        
+        for symbol in SYMBOL_CONFIG.keys():
+            if not SYMBOL_CONFIG[symbol].get('enabled', True):
+                continue
+            
+            try:
+                # 거래소에서 실제 포지션 조회
+                positions = exchange.fetch_positions([symbol])
+                
+                for position in positions:
+                    contracts = float(position.get('contracts', 0))
+                    
+                    if contracts != 0:  # 포지션이 있는 경우
+                        entry_price = float(position.get('entryPrice', 0))
+                        side = 'buy' if position['side'] == 'long' else 'sell'
+                        
+                        # 기존 포지션 정보가 있으면 유지, 없으면 새로 생성
+                        if symbol in current_positions:
+                            # 기존 정보 유지 (SL/TP 등)
+                            new_positions[symbol] = current_positions[symbol]
+                            # 수량과 진입가는 거래소 기준으로 업데이트
+                            new_positions[symbol]['amount'] = abs(contracts)
+                            new_positions[symbol]['entry_price'] = entry_price
+                            logger.info(f"✓ {symbol} 포지션 업데이트: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
+                        else:
+                            # 새로운 포지션 발견
+                            new_positions[symbol] = {
+                                'side': side,
+                                'entry_price': entry_price,
+                                'amount': abs(contracts),
+                                'stop_loss': 0,  # 실제 SL/TP는 거래소에서 조회 가능하지만 간단히 0으로
+                                'take_profit': 0,
+                                'trailing_stop_percent': DEFAULT_TRAILING_STOP_PERCENT,
+                                'trailing_activation_percent': DEFAULT_TRAILING_ACTIVATION_PERCENT,
+                                'entry_time': datetime.now()  # 동기화 시점을 진입 시간으로
+                            }
+                            logger.info(f"🆕 {symbol} 새 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
+                            synced_count += 1
+                        
+            except Exception as e:
+                logger.error(f"{symbol} 포지션 조회 오류: {str(e)}")
+                continue
+        
+        # 동기화 완료 - 메모리에 없지만 거래소에 있는 포지션 추가
+        for symbol, pos_info in new_positions.items():
+            if symbol not in current_positions:
+                current_positions[symbol] = pos_info
+        
+        # 메모리에는 있지만 거래소에 없는 포지션 제거
+        removed_symbols = []
+        for symbol in list(current_positions.keys()):
+            if symbol not in new_positions:
+                removed_symbols.append(symbol)
+                del current_positions[symbol]
+                logger.warning(f"⚠️ {symbol} 포지션이 거래소에 없어 메모리에서 제거")
+        
+        logger.info(f"=== 동기화 완료: 총 {len(current_positions)}개 포지션 (새로 발견: {synced_count}개, 제거: {len(removed_symbols)}개) ===")
+        
+        return len(current_positions)
+        
+    except Exception as e:
+        logger.error(f"포지션 동기화 오류: {str(e)}", exc_info=True)
+        return 0
+
+def get_position_summary():
+    """현재 포지션 요약 정보"""
+    if not current_positions:
+        return "현재 보유 포지션 없음"
+    
+    summary = []
+    for symbol, pos in current_positions.items():
+        summary.append(f"• {symbol}: {pos['side'].upper()} {pos['amount']:.4f} @ ${pos['entry_price']:.2f}")
+    
+    return "\n".join(summary)
+
 # ============ SQLite 데이터베이스 초기화 ============
 def init_db():
     conn = sqlite3.connect('integrated_trades.db')
@@ -1050,6 +1136,13 @@ def ai_monitoring_cycle():
     
     logger.info("=== AI Position Monitoring Cycle Start ===")
     
+    # 🔄 실제 거래소 포지션과 동기화 (중요!)
+    sync_positions_from_exchange()
+    
+    if not current_positions:
+        logger.info("No positions to monitor after sync")
+        return 0, []
+    
     monitored_count = 0
     exit_decisions = []
     
@@ -1089,7 +1182,7 @@ def ai_monitoring_cycle():
         if exit_decisions:
             logger.info(f"Exit decisions executed: {exit_decisions}")
     else:
-        logger.info("No positions to monitor")
+        logger.info("No positions monitored (all disabled or no active positions)")
     
     logger.info("=== AI Position Monitoring Cycle End ===")
     
@@ -2297,10 +2390,21 @@ def status():
     ai_enabled_symbols = [s for s, c in SYMBOL_CONFIG.items() if c.get('ai_validation', True)]
     ai_monitored_symbols = [s for s, c in SYMBOL_CONFIG.items() if c.get('ai_monitoring', True)]
     
+    # 포지션 상세 정보
+    positions_detail = {}
+    for symbol, pos in current_positions.items():
+        positions_detail[symbol] = {
+            'side': pos['side'],
+            'entry_price': pos['entry_price'],
+            'amount': pos['amount'],
+            'entry_time': pos.get('entry_time', datetime.now()).isoformat() if isinstance(pos.get('entry_time'), datetime) else str(pos.get('entry_time', 'N/A'))
+        }
+    
     return jsonify({
         'status': 'running',
         'server_port': SERVER_PORT,
-        'current_positions': current_positions,
+        'current_positions': positions_detail,
+        'position_count': len(current_positions),
         'telegram_enabled': ENABLE_TELEGRAM,
         'total_symbols': len(enabled_symbols),
         'ai_enabled_symbols': len(ai_enabled_symbols),
@@ -2310,6 +2414,28 @@ def status():
         'symbols': enabled_symbols,
         'timestamp': datetime.now().isoformat()
     }), 200
+
+@app.route('/positions/sync', methods=['POST'])
+def sync_positions():
+    """거래소 포지션 수동 동기화"""
+    try:
+        position_count = sync_positions_from_exchange()
+        
+        return jsonify({
+            'status': 'success',
+            'message': f'{position_count}개 포지션 동기화 완료',
+            'positions': {
+                symbol: {
+                    'side': pos['side'],
+                    'entry_price': pos['entry_price'],
+                    'amount': pos['amount']
+                } for symbol, pos in current_positions.items()
+            }
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"포지션 동기화 오류: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/config', methods=['GET', 'POST'])
 def config():
@@ -2509,9 +2635,6 @@ def initialize_bot():
     conn = init_db()
     conn.close()
     
-    # AI 모니터링 자동 시작
-    start_ai_monitoring()
-    
     # 거래소 연결 테스트
     try:
         balance = exchange.fetch_balance()
@@ -2519,6 +2642,21 @@ def initialize_bot():
         logger.info(f"거래소 연결 성공. USDT 잔고: ${usdt_balance:,.2f}")
     except Exception as e:
         logger.error(f"거래소 연결 실패: {str(e)}")
+    
+    # 🔄 실제 포지션 동기화 (서버 재시작 시 복구)
+    try:
+        position_count = sync_positions_from_exchange()
+        if position_count > 0:
+            logger.info(f"✅ {position_count}개의 기존 포지션 복구 완료")
+            position_summary = get_position_summary()
+            logger.info(f"복구된 포지션:\n{position_summary}")
+        else:
+            logger.info("복구할 포지션 없음 (새로 시작)")
+    except Exception as e:
+        logger.error(f"포지션 동기화 실패: {str(e)}")
+    
+    # AI 모니터링 자동 시작
+    start_ai_monitoring()
     
     # OpenAI API 테스트
     try:
@@ -2540,19 +2678,24 @@ def initialize_bot():
     logger.info(f"AI 모니터링 활성 심볼: {len(ai_monitor_symbols)}개")
     
     if ENABLE_TELEGRAM:
+        position_info = ""
+        if len(current_positions) > 0:
+            position_info = f"\n\n<b>복구된 포지션:</b>\n{get_position_summary()}"
+        
         startup_message = f"""
-🚀 <b>통합 트레이딩 시스템 v3.2 시작</b>
+🚀 <b>통합 트레이딩 시스템 v3.3 시작</b>
 
 <b>서버 포트:</b> {SERVER_PORT}
 <b>활성 심볼:</b> {len(enabled_symbols)}개
 <b>AI 검증:</b> {len(ai_symbols)}개 심볼
 <b>AI 모니터링:</b> {len(ai_monitor_symbols)}개 심볼
 <b>모니터링 주기:</b> {AI_MONITOR_INTERVAL}분
+<b>현재 포지션:</b> {len(current_positions)}개{position_info}
 
 ✅ 시스템이 정상적으로 시작되었습니다.
 🤖 AI 포지션 모니터링이 활성화되었습니다.
-🔧 close_position도 AI 검증을 거치도록 개선
-📊 포지션 진입/청산 알림 강화
+🔄 거래소 포지션 자동 동기화 활성화
+📊 서버 재시작 시 포지션 자동 복구
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """.strip()
