@@ -56,6 +56,13 @@ class TradingDecision(BaseModel):
     pl_ratio: float = Field(..., ge=1.0, le=5.0)
     confidence: float = Field(..., ge=0.0, le=1.0)
 
+class ClosePositionDecision(BaseModel):
+    """청산 시그널 검증용 모델 (SL/TP 불필요)"""
+    decision: str = Field(..., pattern="^(approve|reject)$")
+    reason: str = Field(..., min_length=1)
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    urgency: str = Field(..., pattern="^(immediate|soon|normal|low)$")
+
 class PositionExitDecision(BaseModel):
     """포지션 종료 결정용 모델 - 개선 버전"""
     decision: str = Field(..., pattern="^(hold|close|partial_close)$")
@@ -1143,6 +1150,169 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df):
         df_hourly = market_data['df_hourly'] 
         df_4h = market_data['df_4h']
 
+        # close_position 액션 처리 (별도 로직)
+        if action in ['close', 'close_position']:
+            json_template = """
+{
+    "decision": "approve",
+    "reason": "Favorable exit conditions confirmed",
+    "confidence": 0.75,
+    "urgency": "immediate"
+}"""
+
+            prompt = f"""
+You are an expert crypto trading AI validator. Analyze whether to approve closing the position for {symbol}.
+
+**CURRENT MARKET CONDITIONS:**
+- Symbol: {symbol}
+- Current Price: {market_data['current_price']:.2f}
+- Action: Close Position
+
+**TECHNICAL INDICATORS:**
+
+**5-Minute Chart (Latest):**
+- RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
+- MACD: {df_5min['macd'].iloc[-1]:.2f}
+- Bollinger: Middle={df_5min['bb_bbm'].iloc[-1]:.2f}, Upper={df_5min['bb_bbh'].iloc[-1]:.2f}, Lower={df_5min['bb_bbl'].iloc[-1]:.2f}
+- ADX: {df_5min['adx'].iloc[-1]:.2f}
+- CMF: {df_5min['cmf'].iloc[-1]:.2f}
+
+**1-Hour Chart (Latest):**
+- RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
+- MACD: {df_hourly['macd'].iloc[-1]:.2f}
+- ADX: {df_hourly['adx'].iloc[-1]:.2f}
+
+**4-Hour Chart (Latest):**
+- RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
+- ADX: {df_4h['adx'].iloc[-1]:.2f}
+
+**RECENT PERFORMANCE REFLECTION:**
+{reflection if reflection else 'No previous trading data available'}
+
+**VALIDATION CRITERIA:**
+Consider if this is a good time to close the position based on:
+- Current market momentum
+- Technical indicator signals
+- Recent price action
+- Risk management perspective
+
+**CRITICAL INSTRUCTIONS:**
+1. You MUST respond with ONLY a valid JSON object
+2. Do NOT include any text before or after the JSON
+3. Do NOT use markdown code blocks (no ```)
+4. Follow this EXACT structure:
+
+{json_template}
+
+**Field Requirements:**
+- decision: must be "approve" or "reject"
+- reason: string explaining the decision
+- confidence: number between 0.0 and 1.0
+- urgency: "immediate", "soon", "normal", or "low"
+
+Return ONLY the JSON object. Start with {{ and end with }}
+"""
+            
+            # AI API 호출
+            logger.info(f"AI 청산 시그널 검증 시작 - {symbol}")
+            
+            response = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are a professional crypto trading AI validator for position exits.
+
+CRITICAL RULES:
+1. ONLY return valid JSON - no explanations, no reasoning, no markdown
+2. Start your response with { and end with }
+3. Follow the exact JSON schema provided
+4. Be decisive about exit decisions
+
+Your response must be a single JSON object."""
+                    },
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={'type': 'json_object'},
+                temperature=0.1,
+                max_tokens=1000
+            )
+            
+            # 응답 추출
+            ai_response_text = extract_ai_response(response)
+            
+            if not ai_response_text or not ai_response_text.strip():
+                logger.error("AI 응답이 비어있음")
+                return {
+                    "decision": "reject",
+                    "reason": "AI 응답 없음",
+                    "confidence": 0.0,
+                    "urgency": "low"
+                }
+            
+            logger.info(f"AI 응답 길이: {len(ai_response_text)} 문자")
+            
+            # JSON 추출
+            json_str = extract_json_from_text(ai_response_text)
+            if not json_str:
+                logger.error("JSON 추출 실패")
+                return {
+                    "decision": "reject",
+                    "reason": "JSON 파싱 실패",
+                    "confidence": 0.0,
+                    "urgency": "low"
+                }
+            
+            # JSON 파싱
+            try:
+                parsed_json = json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode 실패: {e}")
+                return {
+                    "decision": "reject",
+                    "reason": f"JSON 형식 오류: {str(e)}",
+                    "confidence": 0.0,
+                    "urgency": "low"
+                }
+            
+            # Pydantic 검증
+            try:
+                decision = ClosePositionDecision.model_validate(parsed_json)
+                result = decision.model_dump()
+                
+                logger.info(
+                    f"✅ AI 청산 시그널 검증 완료: {result['decision'].upper()} "
+                    f"(신뢰도: {result['confidence']:.2%})"
+                )
+                logger.info(f"결정 이유: {result['reason']}")
+                
+                # 거래 기록 저장
+                conn = init_db()
+                c = conn.cursor()
+                timestamp = datetime.now().isoformat()
+                c.execute("""INSERT INTO trades 
+                             (timestamp, symbol, trade_type, ai_decision, action, reason, 
+                              current_price, confidence) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                          (timestamp, symbol, 'AI_VALIDATION', result['decision'], 'close_position', 
+                           result['reason'], market_data['current_price'], result['confidence']))
+                conn.commit()
+                conn.close()
+                
+                return result
+                
+            except ValidationError as e:
+                logger.error(f"Pydantic 검증 실패:")
+                for error in e.errors():
+                    logger.error(f"  - 필드 {error['loc']}: {error['msg']}")
+                return {
+                    "decision": "reject",
+                    "reason": f"데이터 검증 실패: {str(e.errors()[0]['msg'])}",
+                    "confidence": 0.0,
+                    "urgency": "low"
+                }
+
+        # 일반 buy/sell 액션 처리
         # JSON 템플릿을 프롬프트에 명시
         json_template = """
 {
@@ -1527,18 +1697,13 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         
         entry_price = order['average'] if order['average'] else order['price']
         
+        logger.info(f"포지션 진입 완료 - {symbol} {action} @ ${entry_price:.2f}, 수량: {amount}")
+        
         # SL/TP 주문 설정
         time.sleep(1)
         
         # 스탑로스 주문
         sl_side = 'sell' if action == 'buy' else 'buy'
-        # sl_order = exchange.create_order(
-        #     symbol=symbol,
-        #     type='stop',
-        #     side=sl_side,
-        #     amount=amount,
-        #     stopPrice=stop_loss_price
-        # )
         sl_order = exchange.create_order(
             symbol=symbol,
             type='stop_market',
@@ -1550,15 +1715,11 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 'reduceOnly': True
             }
         )
+        
+        logger.info(f"스탑로스 주문 완료 - {symbol} @ ${stop_loss_price:.2f}")
+        
         # 테이크프로핏 주문
         tp_side = 'sell' if action == 'buy' else 'buy'
-        # tp_order = exchange.create_order(
-        #     symbol=symbol,
-        #     type='take_profit_market',
-        #     side=tp_side,
-        #     amount=amount,
-        #     stopPrice=take_profit_price
-        # )
         tp_order = exchange.create_order(
             symbol=symbol,
             type='take_profit_market',
@@ -1570,6 +1731,9 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 'reduceOnly': True
             }
         )
+        
+        logger.info(f"테이크프로핏 주문 완료 - {symbol} @ ${take_profit_price:.2f}")
+        
         # 트레일링 스탑 설정 (지원하는 경우)
         if trailing_stop_percent and trailing_activation_percent:
             # 트레일링 스탑 모니터링 스레드 시작
@@ -1585,7 +1749,7 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         }
         
     except Exception as e:
-        logger.error(f"주문 실행 오류: {str(e)}")
+        logger.error(f"주문 실행 오류: {str(e)}", exc_info=True)
         return None
 
 def start_trailing_stop_monitor(symbol, side, entry_price, amount, trailing_percent, activation_percent):
@@ -1641,7 +1805,7 @@ def update_stop_loss(symbol, new_sl_price, amount):
         # 기존 스탑로스 주문 취소
         open_orders = exchange.fetch_open_orders(symbol)
         for order in open_orders:
-            if order['type'] == 'stop':
+            if order['type'] == 'stop' or order['type'] == 'stop_market':
                 exchange.cancel_order(order['id'], symbol)
                 time.sleep(1)
         
@@ -1649,13 +1813,6 @@ def update_stop_loss(symbol, new_sl_price, amount):
         position = current_positions.get(symbol)
         if position:
             sl_side = 'sell' if position['side'] == 'buy' else 'buy'
-            # exchange.create_order(
-            #     symbol=symbol,
-            #     type='stop',
-            #     side=sl_side,
-            #     amount=amount,
-            #     stopPrice=new_sl_price
-            # )
             new_order = exchange.create_order(
                 symbol=symbol,
                 type='stop_market',
@@ -1835,12 +1992,112 @@ def webhook():
             recent_trades = get_recent_trades(conn, symbol)
             conn.close()
             
-            # AI 검증
+            # AI 검증 (close_position 포함)
             ai_decision = ai_validate_signal(symbol, action, market_data, recent_trades)
             
             if not ai_decision:
                 return jsonify({'error': 'AI validation failed'}), 500
             
+            # close_position 액션 처리
+            if action in ['close', 'close_position']:
+                # AI 결정에 따른 처리
+                if ai_decision['decision'] == 'reject':
+                    message = f"""
+⚠️ <b>AI 청산 신호 거부</b>
+
+<b>심볼:</b> {symbol}
+<b>원래 신호:</b> CLOSE POSITION
+<b>AI 결정:</b> REJECT
+<b>신뢰도:</b> {ai_decision['confidence']:.1%}
+<b>긴급도:</b> {ai_decision.get('urgency', 'N/A')}
+<b>이유:</b> {ai_decision['reason']}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    """.strip()
+                    send_telegram_notification(message, 'warning')
+                    return jsonify({
+                        'status': 'rejected',
+                        'reason': ai_decision['reason'],
+                        'confidence': ai_decision['confidence']
+                    }), 200
+                
+                # AI가 승인한 경우 포지션 청산 실행
+                try:
+                    positions = exchange.fetch_positions([symbol])
+                    closed_positions = []
+                    
+                    for position in positions:
+                        if float(position['contracts']) != 0:
+                            close_side = 'sell' if position['side'] == 'long' else 'buy'
+                            close_amount = abs(float(position['contracts']))
+                            
+                            close_order = exchange.create_market_order(symbol, close_side, close_amount)
+                            closed_positions.append({
+                                'side': position['side'],
+                                'amount': close_amount,
+                                'entry_price': float(position['entryPrice'])
+                            })
+                            
+                            # 현재가 조회
+                            ticker = exchange.fetch_ticker(symbol)
+                            current_price = ticker['last']
+                            
+                            # PnL 계산
+                            if position['side'] == 'long':
+                                pnl_percent = ((current_price - float(position['entryPrice'])) / float(position['entryPrice'])) * 100
+                            else:
+                                pnl_percent = ((float(position['entryPrice']) - current_price) / float(position['entryPrice'])) * 100
+                            
+                            message = f"""
+✅ <b>포지션 청산 완료 (AI 승인)</b>
+
+<b>심볼:</b> {symbol}
+<b>방향:</b> {'🟢 롱' if position['side'] == 'long' else '🔴 숏'}
+<b>진입가:</b> ${float(position['entryPrice']):,.2f}
+<b>청산가:</b> ${current_price:,.2f}
+<b>청산 수량:</b> {close_amount:.4f}
+<b>수익률:</b> {pnl_percent:+.2f}%
+<b>청산 사유:</b> {data.get('exit_reason', 'Manual close')}
+
+<b>AI 검증:</b>
+• 신뢰도: {ai_decision['confidence']:.1%}
+• 긴급도: {ai_decision.get('urgency', 'N/A')}
+• 이유: {ai_decision['reason']}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                            """.strip()
+                            send_telegram_notification(message, 'success')
+                            
+                            # 포지션 추적에서 제거
+                            if symbol in current_positions:
+                                del current_positions[symbol]
+                    
+                    if closed_positions:
+                        return jsonify({
+                            'status': 'closed',
+                            'symbol': symbol,
+                            'closed_positions': closed_positions,
+                            'ai_confidence': ai_decision['confidence']
+                        }), 200
+                    else:
+                        return jsonify({
+                            'status': 'no_position',
+                            'message': f'No open position found for {symbol}'
+                        }), 200
+                        
+                except Exception as e:
+                    logger.error(f"포지션 청산 오류: {str(e)}", exc_info=True)
+                    error_message = f"""
+❌ <b>포지션 청산 오류</b>
+
+<b>심볼:</b> {symbol}
+<b>오류:</b> {str(e)}
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    """.strip()
+                    send_telegram_notification(error_message, 'error')
+                    return jsonify({'error': str(e)}), 500
+            
+            # buy/sell 액션 처리
             # AI 결정에 따른 처리
             if ai_decision['decision'] == 'reject':
                 message = f"""
@@ -1888,35 +2145,11 @@ def webhook():
             pl_ratio = 2.0
             position_percent = SYMBOL_CONFIG[symbol].get('position_size_percent', 10)
         
-        # 거래 실행
-        if action in ['buy', 'sell', 'close']:
+        # 거래 실행 (buy/sell만)
+        if action in ['buy', 'sell']:
             # 잔고 확인
             balance_info = exchange.fetch_balance()
             usdt_balance = balance_info['USDT']['free']
-            
-            if action == 'close':
-                # 포지션 청산
-                positions = exchange.fetch_positions([symbol])
-                for position in positions:
-                    if float(position['contracts']) != 0:
-                        close_side = 'sell' if position['side'] == 'long' else 'buy'
-                        exchange.create_market_order(symbol, close_side, abs(float(position['contracts'])))
-                        
-                        message = f"""
-✅ <b>포지션 청산 완료</b>
-
-<b>심볼:</b> {symbol}
-<b>청산 수량:</b> {abs(float(position['contracts']))}
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-                        """.strip()
-                        send_telegram_notification(message, 'success')
-                        
-                        # 포지션 추적에서 제거
-                        if symbol in current_positions:
-                            del current_positions[symbol]
-                        
-                return jsonify({'status': 'closed'}), 200
             
             # 포지션 크기 계산
             position_size = usdt_balance * (position_percent / 100)
@@ -1924,6 +2157,13 @@ def webhook():
             # 레버리지 설정
             leverage = set_leverage(symbol)
             if not leverage:
+                error_msg = f"""
+❌ <b>레버리지 설정 실패</b>
+
+<b>심볼:</b> {symbol}
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                """.strip()
+                send_telegram_notification(error_msg, 'error')
                 return jsonify({'error': 'Failed to set leverage'}), 500
             
             # 레버리지 적용한 실제 수량 계산
@@ -1979,6 +2219,14 @@ def webhook():
                     'ai_confidence': ai_decision['confidence'] if use_ai else None
                 }), 200
             else:
+                error_msg = f"""
+❌ <b>주문 실행 실패</b>
+
+<b>심볼:</b> {symbol}
+<b>액션:</b> {action.upper()}
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                """.strip()
+                send_telegram_notification(error_msg, 'error')
                 return jsonify({'error': 'Order execution failed'}), 500
         
         else:
@@ -2293,7 +2541,7 @@ def initialize_bot():
     
     if ENABLE_TELEGRAM:
         startup_message = f"""
-🚀 <b>통합 트레이딩 시스템 v3 시작</b>
+🚀 <b>통합 트레이딩 시스템 v3.2 시작</b>
 
 <b>서버 포트:</b> {SERVER_PORT}
 <b>활성 심볼:</b> {len(enabled_symbols)}개
@@ -2303,7 +2551,8 @@ def initialize_bot():
 
 ✅ 시스템이 정상적으로 시작되었습니다.
 🤖 AI 포지션 모니터링이 활성화되었습니다.
-🔧 개선된 JSON 파싱 및 에러 처리 적용됨
+🔧 close_position도 AI 검증을 거치도록 개선
+📊 포지션 진입/청산 알림 강화
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """.strip()
