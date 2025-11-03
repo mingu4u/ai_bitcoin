@@ -23,7 +23,7 @@ load_dotenv()
 # ============ 서버별 하드코딩 설정 ============
 SERVER_PORT = 5000  # 여기서 포트 변경 (5000, 5001, 5002)
 ENABLE_TELEGRAM = True if SERVER_PORT == 5000 else False  # 5000번 포트만 텔레그램 활성화
-AI_MONITOR_INTERVAL = 15  # AI 포지션 모니터링 간격 (분)
+AI_MONITOR_INTERVAL = 5 # AI 포지션 모니터링 간격 (분)
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, 
@@ -1532,24 +1532,44 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         
         # 스탑로스 주문
         sl_side = 'sell' if action == 'buy' else 'buy'
+        # sl_order = exchange.create_order(
+        #     symbol=symbol,
+        #     type='stop',
+        #     side=sl_side,
+        #     amount=amount,
+        #     stopPrice=stop_loss_price
+        # )
         sl_order = exchange.create_order(
             symbol=symbol,
-            type='stop',
+            type='stop_market',
             side=sl_side,
             amount=amount,
-            stopPrice=stop_loss_price
+            params={
+                'stopPrice': stop_loss_price,
+                'workingType': 'MARK_PRICE',
+                'reduceOnly': True
+            }
         )
-        
         # 테이크프로핏 주문
         tp_side = 'sell' if action == 'buy' else 'buy'
+        # tp_order = exchange.create_order(
+        #     symbol=symbol,
+        #     type='take_profit_market',
+        #     side=tp_side,
+        #     amount=amount,
+        #     stopPrice=take_profit_price
+        # )
         tp_order = exchange.create_order(
             symbol=symbol,
             type='take_profit_market',
             side=tp_side,
             amount=amount,
-            stopPrice=take_profit_price
+            params={
+                'stopPrice': take_profit_price,
+                'workingType': 'MARK_PRICE',
+                'reduceOnly': True
+            }
         )
-        
         # 트레일링 스탑 설정 (지원하는 경우)
         if trailing_stop_percent and trailing_activation_percent:
             # 트레일링 스탑 모니터링 스레드 시작
@@ -1629,13 +1649,25 @@ def update_stop_loss(symbol, new_sl_price, amount):
         position = current_positions.get(symbol)
         if position:
             sl_side = 'sell' if position['side'] == 'buy' else 'buy'
-            exchange.create_order(
+            # exchange.create_order(
+            #     symbol=symbol,
+            #     type='stop',
+            #     side=sl_side,
+            #     amount=amount,
+            #     stopPrice=new_sl_price
+            # )
+            new_order = exchange.create_order(
                 symbol=symbol,
-                type='stop',
+                type='stop_market',
                 side=sl_side,
                 amount=amount,
-                stopPrice=new_sl_price
+                params={
+                    'stopPrice': new_sl_price,
+                    'workingType': 'MARK_PRICE',
+                    'reduceOnly': True
+                }
             )
+
             logger.info(f"{symbol} 스탑로스 업데이트: {new_sl_price}")
             
     except Exception as e:
