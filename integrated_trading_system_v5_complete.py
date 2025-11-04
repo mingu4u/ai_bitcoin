@@ -30,6 +30,10 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - [Port:{port}] - %(levelname)s - %(message)s'.format(port=SERVER_PORT))
 logger = logging.getLogger(__name__)
 
+# Flask 로깅 레벨 조정 (404 에러 등 줄이기)
+import logging as flask_logging
+flask_logging.getLogger('werkzeug').setLevel(flask_logging.WARNING)
+
 # Binance 설정
 exchange = ccxt.binance({
     'apiKey': os.getenv('BINANCE_API_KEY'),
@@ -480,7 +484,7 @@ def get_position_summary():
 def record_completed_trade(symbol, position_info, exit_price, close_reason='manual'):
     """완료된 거래를 DB에 기록"""
     try:
-        conn = init_db()
+        conn = get_db_connection()
         c = conn.cursor()
         
         # PnL 계산
@@ -530,7 +534,7 @@ def record_completed_trade(symbol, position_info, exit_price, close_reason='manu
 def record_balance_snapshot(exchange):
     """잔고 스냅샷 기록"""
     try:
-        conn = init_db()
+        conn = get_db_connection()
         c = conn.cursor()
         
         # 잔고 정보 가져오기
@@ -569,7 +573,7 @@ def record_balance_snapshot(exchange):
         conn.commit()
         conn.close()
         
-        logger.info(f"📊 잔고 스냅샷 기록: Total ${total_balance:,.2f}, Free ${free_balance:,.2f}")
+        logger.debug(f"📊 잔고 스냅샷 기록: Total ${total_balance:,.2f}, Free ${free_balance:,.2f}")
         
         return True
         
@@ -580,7 +584,7 @@ def record_balance_snapshot(exchange):
 def record_position_history(exchange):
     """현재 포지션 히스토리 기록"""
     try:
-        conn = init_db()
+        conn = get_db_connection()
         c = conn.cursor()
         
         for symbol, pos in current_positions.items():
@@ -620,7 +624,7 @@ def record_position_history(exchange):
         conn.commit()
         conn.close()
         
-        logger.info(f"📈 포지션 히스토리 기록 완료: {len(current_positions)}개")
+        logger.debug(f"📈 포지션 히스토리 기록 완료: {len(current_positions)}개")
         
         return True
         
@@ -628,10 +632,22 @@ def record_position_history(exchange):
         logger.error(f"❌ 포지션 히스토리 기록 실패: {str(e)}")
         return False
 
-def init_db():
-    """DB 초기화 - 대시보드와 완전히 호환되는 스키마"""
+def get_db_connection():
+    """DB 연결 반환 (초기화 메시지 없음)"""
+    return sqlite3.connect('integrated_trades.db')
+
+def init_db_once():
+    """DB 초기화 - 프로그램 시작 시 1회만 실행"""
     conn = sqlite3.connect('integrated_trades.db')
     c = conn.cursor()
+    
+    # 테이블 존재 여부 확인
+    c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
+    table_count = c.fetchone()[0]
+    
+    if table_count >= 4:  # 이미 초기화됨
+        conn.close()
+        return
     
     # 1. 실시간 거래 테이블 (기존)
     c.execute('''CREATE TABLE IF NOT EXISTS trades
@@ -715,7 +731,7 @@ def init_db():
                  ON balance_history(timestamp DESC)''')
     
     conn.commit()
-    logger.info("✅ DB 초기화 완료 (4개 테이블 + 인덱스)")
+    logger.info("✅ DB 초기화 완료 (프로그램 시작)")
     return conn
 
 # ============ Technical Indicators 추가 ============
@@ -1271,7 +1287,7 @@ Your response must be a single JSON object."""
             logger.info(f"결정 이유: {result['reason']}")
             
             # DB에 모니터링 기록 저장
-            conn = init_db()
+            conn = get_db_connection()
             c = conn.cursor()
             timestamp = datetime.now().isoformat()
             c.execute("""INSERT INTO trades 
@@ -1446,7 +1462,7 @@ def start_ai_monitoring():
                 if current_positions:
                     ai_monitoring_cycle()
                 else:
-                    logger.info("No positions to monitor")
+                    logger.debug("No positions to monitor")
                 
                 # 다음 모니터링까지 대기
                 time.sleep(AI_MONITOR_INTERVAL * 60)
@@ -1624,7 +1640,7 @@ Your response must be a single JSON object."""
                 logger.info(f"결정 이유: {result['reason']}")
                 
                 # 거래 기록 저장
-                conn = init_db()
+                conn = get_db_connection()
                 c = conn.cursor()
                 timestamp = datetime.now().isoformat()
                 c.execute("""INSERT INTO trades 
@@ -1812,7 +1828,7 @@ Your response must be a single JSON object."""
             logger.info(f"결정 이유: {result['reason']}")
             
             # 거래 기록 저장
-            conn = init_db()
+            conn = get_db_connection()
             c = conn.cursor()
             timestamp = datetime.now().isoformat()
             c.execute("""INSERT INTO trades 
@@ -2477,7 +2493,7 @@ def webhook():
                 return jsonify({'error': 'Failed to collect market data'}), 500
             
             # 최근 거래 내역 조회
-            conn = init_db()
+            conn = get_db_connection()
             recent_trades = get_recent_trades(conn, symbol)
             conn.close()
             
@@ -2888,7 +2904,7 @@ def config():
 def ai_performance():
     """AI 거래 성과 조회"""
     try:
-        conn = init_db()
+        conn = get_db_connection()
         c = conn.cursor()
         
         # 전체 AI 거래 통계
@@ -3004,7 +3020,7 @@ def send_telegram_endpoint():
 def get_completed_trades():
     """완료된 거래 조회 (대시보드용)"""
     try:
-        conn = init_db()
+        conn = get_db_connection()
         c = conn.cursor()
         
         limit = request.args.get('limit', 100, type=int)
@@ -3041,7 +3057,7 @@ def get_completed_trades():
 def get_balance_history():
     """잔고 히스토리 조회 (대시보드용)"""
     try:
-        conn = init_db()
+        conn = get_db_connection()
         c = conn.cursor()
         
         days = request.args.get('days', 30, type=int)
@@ -3070,7 +3086,7 @@ def get_balance_history():
 def get_position_history():
     """포지션 히스토리 조회"""
     try:
-        conn = init_db()
+        conn = get_db_connection()
         c = conn.cursor()
         
         hours = request.args.get('hours', 24, type=int)
@@ -3099,7 +3115,7 @@ def get_position_history():
 def get_stats_overview():
     """통계 개요 조회 (대시보드용)"""
     try:
-        conn = init_db()
+        conn = get_db_connection()
         c = conn.cursor()
         
         # 전체 통계
@@ -3160,7 +3176,7 @@ def get_trades():
         symbol = request.args.get('symbol', None)
         trade_type = request.args.get('trade_type', None)
         
-        conn = init_db()
+        conn = get_db_connection()
         c = conn.cursor()
         
         query = "SELECT * FROM trades WHERE 1=1"
@@ -3198,9 +3214,8 @@ def initialize_bot():
     """봇 초기화"""
     logger.info(f"봇 초기화 중... (포트: {SERVER_PORT})")
     
-    # 데이터베이스 초기화
-    conn = init_db()
-    conn.close()
+    # 데이터베이스 초기화 (프로그램 시작 시 1회)
+    init_db_once()
     
     # 거래소 연결 테스트
     try:
