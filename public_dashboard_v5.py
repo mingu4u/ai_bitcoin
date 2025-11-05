@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
-Public Dashboard v5 - Fixed Enhanced Version
-실시간 포지션과 AI 모니터링 기록을 표시하는 개선된 버전
-
-주요 개선사항:
-1. 실시간 활성 포지션 표시
-2. AI 모니터링 기록 표시
-3. position_history 테이블 조회 추가
-4. trades 테이블 조회 추가
+Public Dashboard v5 - Exchange Direct Version
+거래소 직접 조회와 DB 동기화 기능이 있는 최종 버전
 """
 
 import streamlit as st
@@ -20,78 +14,144 @@ import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
 import sqlite3
+import ccxt
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 페이지 설정
 st.set_page_config(
-    page_title="Trading Performance Dashboard v5 Enhanced",
+    page_title="Trading Dashboard v5 - Live Exchange",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"
 )
 
 # CSS 스타일
 st.markdown("""
 <style>
-    /* 메인 헤더 */
     .main-header {
-        font-size: 3rem;
+        font-size: 2.5rem;
         font-weight: bold;
         background: linear-gradient(120deg, #1f77b4, #2ca02c);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         text-align: center;
         margin-bottom: 1rem;
-        padding: 1rem 0;
     }
     
-    .sub-header {
-        font-size: 1.2rem;
-        color: #6c757d;
-        text-align: center;
-        margin-bottom: 2rem;
+    .sync-status {
+        padding: 0.5rem 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
     }
     
-    /* 메트릭 카드 */
-    .metric-card {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 1rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    .sync-ok {
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
     }
     
-    /* AI 모니터링 스타일 */
-    .ai-monitor-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        border-radius: 10px;
-        padding: 1rem;
-        margin: 0.5rem 0;
+    .sync-warning {
+        background: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffeeba;
     }
     
-    /* 포지션 카드 */
+    .sync-error {
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+    
     .position-card {
         background: white;
-        border-left: 4px solid #1f77b4;
-        border-radius: 5px;
+        border-radius: 10px;
         padding: 1rem;
         margin: 0.5rem 0;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .exchange-badge {
+        background: #007bff;
+        color: white;
+        padding: 0.25rem 0.5rem;
+        border-radius: 3px;
+        font-size: 0.8rem;
+    }
+    
+    .db-badge {
+        background: #6c757d;
+        color: white;
+        padding: 0.25rem 0.5rem;
+        border-radius: 3px;
+        font-size: 0.8rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# 전역 변수로 거래소 객체
+@st.cache_resource
+def get_exchange():
+    """바이낸스 거래소 연결"""
+    try:
+        exchange = ccxt.binance({
+            'apiKey': os.getenv('BINANCE_API_KEY'),
+            'secret': os.getenv('BINANCE_SECRET_KEY'),
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'future'
+            }
+        })
+        return exchange
+    except Exception as e:
+        st.error(f"거래소 연결 실패: {e}")
+        return None
+
 @st.cache_data(ttl=10)
-def get_active_positions_realtime():
-    """실시간 활성 포지션 조회 - 새로운 함수"""
+def get_exchange_positions():
+    """거래소에서 직접 포지션 조회"""
+    exchange = get_exchange()
+    if not exchange:
+        return pd.DataFrame()
+    
+    try:
+        positions = exchange.fetch_positions()
+        active_positions = []
+        
+        for pos in positions:
+            if pos['contracts'] > 0:
+                symbol = pos['symbol']
+                if symbol.endswith(':USDT'):
+                    symbol = symbol.replace(':USDT', '/USDT')
+                
+                active_positions.append({
+                    'symbol': symbol,
+                    'side': pos['side'],
+                    'contracts': abs(pos['contracts']),
+                    'entry_price': pos['entryPrice'] or pos['markPrice'],
+                    'mark_price': pos['markPrice'],
+                    'unrealized_pnl': pos['unrealizedPnl'],
+                    'pnl_percent': pos['percentage'],
+                    'margin': pos['initialMargin'],
+                    'source': 'EXCHANGE'
+                })
+        
+        return pd.DataFrame(active_positions)
+        
+    except Exception as e:
+        st.error(f"거래소 조회 오류: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=30)
+def get_db_positions():
+    """DB에서 활성 포지션 조회"""
     try:
         conn = sqlite3.connect('integrated_trades.db')
         
-        # 방법 1: position_history에서 최신 포지션 가져오기
-        query1 = """
+        query = """
         WITH latest_positions AS (
-            SELECT 
-                symbol,
-                MAX(timestamp) as latest_time
+            SELECT symbol, MAX(timestamp) as latest_time
             FROM position_history
             WHERE DATE(timestamp) >= date('now', '-1 day')
             GROUP BY symbol
@@ -99,509 +159,403 @@ def get_active_positions_realtime():
         SELECT 
             ph.symbol,
             ph.side,
-            ph.amount,
+            ph.amount as contracts,
             ph.entry_price,
-            ph.current_price,
-            ph.pnl_usdt,
+            ph.current_price as mark_price,
+            ph.pnl_usdt as unrealized_pnl,
             ph.pnl_percent,
-            ph.position_value,
+            ph.position_value / ph.amount as margin,
+            'DB' as source,
             ph.timestamp
         FROM position_history ph
         INNER JOIN latest_positions lp 
             ON ph.symbol = lp.symbol 
             AND ph.timestamp = lp.latest_time
         WHERE ph.amount > 0
-        ORDER BY ph.pnl_percent DESC
         """
         
-        positions_df = pd.read_sql_query(query1, conn)
-        
-        # 방법 2: trades 테이블에서 활성 포지션 확인 (백업)
-        if positions_df.empty:
-            query2 = """
-            SELECT DISTINCT
-                symbol,
-                action as side,
-                entry_price,
-                current_price,
-                position_size as amount,
-                timestamp
-            FROM trades
-            WHERE status = 'active'
-            AND trade_type IN ('entry', 'manual')
-            ORDER BY timestamp DESC
-            """
-            positions_df = pd.read_sql_query(query2, conn)
-        
+        df = pd.read_sql_query(query, conn)
         conn.close()
-        return positions_df
         
-    except Exception as e:
-        st.error(f"Error getting active positions: {e}")
-        return pd.DataFrame()
-
-@st.cache_data(ttl=30)
-def get_ai_monitoring_history(days=7):
-    """AI 모니터링 기록 조회 - 새로운 함수"""
-    try:
-        conn = sqlite3.connect('integrated_trades.db')
-        
-        cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
-        
-        query = """
-        SELECT 
-            timestamp,
-            symbol,
-            ai_decision,
-            action,
-            percentage,
-            reason,
-            entry_price,
-            current_price,
-            confidence,
-            exit_type,
-            urgency,
-            ROUND(((current_price - entry_price) / entry_price * 100), 2) as price_change_pct
-        FROM trades
-        WHERE trade_type = 'AI_MONITOR'
-        AND timestamp >= ?
-        ORDER BY timestamp DESC
-        LIMIT 100
-        """
-        
-        df = pd.read_sql_query(query, conn, params=(cutoff_date,))
-        
-        # 타임스탬프 변환
-        if not df.empty:
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-        
-        conn.close()
         return df
         
     except Exception as e:
-        st.error(f"Error getting AI monitoring history: {e}")
+        st.error(f"DB 조회 오류: {e}")
         return pd.DataFrame()
 
-@st.cache_data(ttl=30)
-def get_current_balance():
-    """현재 잔고 조회 - 개선된 버전"""
+def compare_positions(exchange_df, db_df):
+    """거래소와 DB 포지션 비교"""
+    comparison = {
+        'matched': [],
+        'exchange_only': [],
+        'db_only': [],
+        'mismatched': []
+    }
+    
+    if exchange_df.empty and db_df.empty:
+        return comparison
+    
+    # 거래소 포지션 심볼 목록
+    exchange_symbols = set(exchange_df['symbol'].tolist()) if not exchange_df.empty else set()
+    
+    # DB 포지션 심볼 목록
+    db_symbols = set(db_df['symbol'].tolist()) if not db_df.empty else set()
+    
+    # 매칭된 포지션
+    matched_symbols = exchange_symbols & db_symbols
+    for symbol in matched_symbols:
+        ex_pos = exchange_df[exchange_df['symbol'] == symbol].iloc[0]
+        db_pos = db_df[db_df['symbol'] == symbol].iloc[0]
+        
+        # 수량 비교
+        amount_match = abs(ex_pos['contracts'] - db_pos['contracts']) < 0.0001
+        
+        comparison['matched'].append({
+            'symbol': symbol,
+            'exchange_amount': ex_pos['contracts'],
+            'db_amount': db_pos['contracts'],
+            'amount_match': amount_match,
+            'exchange_pnl': ex_pos['unrealized_pnl'],
+            'db_pnl': db_pos['unrealized_pnl']
+        })
+        
+        if not amount_match:
+            comparison['mismatched'].append(symbol)
+    
+    # 거래소에만 있는 포지션
+    for symbol in exchange_symbols - db_symbols:
+        ex_pos = exchange_df[exchange_df['symbol'] == symbol].iloc[0]
+        comparison['exchange_only'].append({
+            'symbol': symbol,
+            'amount': ex_pos['contracts'],
+            'pnl': ex_pos['unrealized_pnl']
+        })
+    
+    # DB에만 있는 포지션 (종료되었지만 DB에 남은 것)
+    for symbol in db_symbols - exchange_symbols:
+        db_pos = db_df[db_df['symbol'] == symbol].iloc[0]
+        comparison['db_only'].append({
+            'symbol': symbol,
+            'amount': db_pos['contracts'],
+            'last_update': db_pos.get('timestamp', 'Unknown')
+        })
+    
+    return comparison
+
+def sync_positions_to_db(comparison):
+    """불일치 포지션 DB 동기화"""
     try:
         conn = sqlite3.connect('integrated_trades.db')
+        cursor = conn.cursor()
         
-        # 잔고 정보
-        balance_query = """
-        SELECT 
-            timestamp,
-            total_balance,
-            free_balance,
-            used_balance,
-            active_positions,
-            total_position_value,
-            total_pnl
-        FROM balance_history
-        ORDER BY timestamp DESC
-        LIMIT 1
-        """
-        
-        balance_result = pd.read_sql_query(balance_query, conn)
-        
-        # 실제 활성 포지션 수 계산 (position_history 기반)
-        active_pos_query = """
-        WITH latest_positions AS (
-            SELECT 
-                symbol,
-                MAX(timestamp) as latest_time
-            FROM position_history
-            WHERE DATE(timestamp) >= date('now', '-1 day')
-            GROUP BY symbol
-        )
-        SELECT COUNT(DISTINCT ph.symbol) as real_active_positions
-        FROM position_history ph
-        INNER JOIN latest_positions lp 
-            ON ph.symbol = lp.symbol 
-            AND ph.timestamp = lp.latest_time
-        WHERE ph.amount > 0
-        """
-        
-        active_pos_result = pd.read_sql_query(active_pos_query, conn)
-        
-        conn.close()
-        
-        if not balance_result.empty:
-            balance_dict = balance_result.iloc[0].to_dict()
-            # 실제 활성 포지션 수로 업데이트
-            if not active_pos_result.empty:
-                balance_dict['active_positions'] = active_pos_result.iloc[0]['real_active_positions']
-            return balance_dict
-        else:
-            return {
-                'total_balance': 0,
-                'free_balance': 0,
-                'used_balance': 0,
-                'active_positions': 0,
-                'total_position_value': 0,
-                'total_pnl': 0
-            }
+        # DB에만 있는 포지션 종료 처리
+        for pos in comparison['db_only']:
+            symbol = pos['symbol']
             
-    except Exception as e:
-        st.error(f"Error getting current balance: {e}")
-        return None
-
-@st.cache_data(ttl=60)
-def get_trading_statistics(days=None, symbol=None):
-    """거래 통계 조회"""
-    try:
-        conn = sqlite3.connect('integrated_trades.db')
+            # position_history에 종료 기록 (amount = 0)
+            cursor.execute("""
+                INSERT INTO position_history 
+                (timestamp, symbol, side, amount, entry_price, current_price,
+                 pnl_usdt, pnl_percent, position_value, required_margin, liquidation_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                datetime.now().isoformat(), symbol, 'closed', 0, 0, 0,
+                0, 0, 0, 0, 0
+            ))
+            
+            # trades 테이블 업데이트
+            cursor.execute("""
+                UPDATE trades 
+                SET status = 'closed_by_sync'
+                WHERE symbol = ? AND status = 'active'
+            """, (symbol,))
         
-        query = "SELECT * FROM completed_trades WHERE 1=1"
-        params = []
-        
-        if days:
-            cutoff_date = (datetime.now() - timedelta(days=days)).isoformat()
-            query += " AND open_timestamp >= ?"
-            params.append(cutoff_date)
-        
-        if symbol:
-            query += " AND symbol = ?"
-            params.append(symbol)
-        
-        query += " ORDER BY close_timestamp DESC"
-        
-        df = pd.read_sql_query(query, conn, params=params)
+        conn.commit()
         conn.close()
         
-        if df.empty:
-            return {
-                'total_trades': 0,
-                'winning_trades': 0,
-                'losing_trades': 0,
-                'win_rate': 0,
-                'total_pnl': 0,
-                'avg_pnl': 0,
-                'best_trade': 0,
-                'worst_trade': 0,
-                'avg_win': 0,
-                'avg_loss': 0,
-                'profit_factor': 0,
-                'max_win': 0,
-                'max_loss': 0,
-                'avg_holding_time': 0
-            }
-        
-        # 통계 계산
-        total_trades = len(df)
-        winning_trades = len(df[df['is_win'] == 1])
-        losing_trades = len(df[df['is_win'] == 0])
-        win_rate = (winning_trades / total_trades * 100) if total_trades > 0 else 0
-        
-        total_pnl = df['pnl_usdt'].sum()
-        avg_pnl = df['pnl_usdt'].mean()
-        best_trade = df['pnl_usdt'].max()
-        worst_trade = df['pnl_usdt'].min()
-        
-        wins_df = df[df['is_win'] == 1]
-        losses_df = df[df['is_win'] == 0]
-        
-        avg_win = wins_df['pnl_usdt'].mean() if not wins_df.empty else 0
-        avg_loss = losses_df['pnl_usdt'].mean() if not losses_df.empty else 0
-        
-        total_wins = wins_df['pnl_usdt'].sum() if not wins_df.empty else 0
-        total_losses = abs(losses_df['pnl_usdt'].sum()) if not losses_df.empty else 1
-        profit_factor = total_wins / total_losses if total_losses != 0 else 0
-        
-        max_win = wins_df['pnl_usdt'].max() if not wins_df.empty else 0
-        max_loss = losses_df['pnl_usdt'].min() if not losses_df.empty else 0
-        
-        avg_holding_time = df['holding_time_minutes'].mean() if 'holding_time_minutes' in df.columns else 0
-        
-        return {
-            'total_trades': total_trades,
-            'winning_trades': winning_trades,
-            'losing_trades': losing_trades,
-            'win_rate': win_rate,
-            'total_pnl': total_pnl,
-            'avg_pnl': avg_pnl,
-            'best_trade': best_trade,
-            'worst_trade': worst_trade,
-            'avg_win': avg_win,
-            'avg_loss': avg_loss,
-            'profit_factor': profit_factor,
-            'max_win': max_win,
-            'max_loss': max_loss,
-            'avg_holding_time': avg_holding_time
-        }
+        return True
         
     except Exception as e:
-        st.error(f"Error getting trading statistics: {e}")
-        return {}
+        st.error(f"동기화 오류: {e}")
+        return False
 
-def display_active_positions(positions_df):
-    """활성 포지션 표시 - 새로운 함수"""
-    if positions_df.empty:
-        st.info("현재 활성 포지션이 없습니다.")
-        return
+def display_sync_status(comparison):
+    """동기화 상태 표시"""
+    total_issues = len(comparison['exchange_only']) + len(comparison['db_only']) + len(comparison['mismatched'])
     
-    st.subheader("📍 Active Positions (Real-time)")
-    
-    for idx, pos in positions_df.iterrows():
-        col1, col2, col3, col4, col5 = st.columns([2, 1, 1, 1, 1])
+    if total_issues == 0:
+        st.markdown("""
+        <div class="sync-status sync-ok">
+            ✅ 거래소와 DB가 완벽히 동기화되어 있습니다
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="sync-status sync-warning">
+            ⚠️ 동기화 필요: {total_issues}개 불일치 발견
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2, col3 = st.columns(3)
         
         with col1:
-            side_emoji = "🟢" if pos.get('side', '').lower() in ['buy', 'long'] else "🔴"
-            st.markdown(f"**{side_emoji} {pos['symbol']}**")
+            if comparison['exchange_only']:
+                st.warning(f"거래소에만: {len(comparison['exchange_only'])}개")
+                for pos in comparison['exchange_only']:
+                    st.text(f"  • {pos['symbol']}")
         
         with col2:
-            st.metric("Entry", f"${pos.get('entry_price', 0):.2f}")
+            if comparison['db_only']:
+                st.error(f"DB에만 (종료됨): {len(comparison['db_only'])}개")
+                for pos in comparison['db_only']:
+                    st.text(f"  • {pos['symbol']}")
         
         with col3:
-            current_price = pos.get('current_price', pos.get('entry_price', 0))
-            st.metric("Current", f"${current_price:.2f}")
+            if comparison['mismatched']:
+                st.warning(f"수량 불일치: {len(comparison['mismatched'])}개")
+                for symbol in comparison['mismatched']:
+                    st.text(f"  • {symbol}")
+        
+        # 동기화 버튼
+        if st.button("🔄 DB 동기화 실행", type="primary"):
+            if sync_positions_to_db(comparison):
+                st.success("✅ DB 동기화 완료!")
+                st.experimental_rerun()
+
+def display_combined_positions(exchange_df, db_df):
+    """통합 포지션 표시"""
+    st.subheader("📍 Active Positions")
+    
+    if exchange_df.empty and db_df.empty:
+        st.info("활성 포지션이 없습니다")
+        return
+    
+    # 거래소 우선으로 통합
+    all_symbols = set()
+    if not exchange_df.empty:
+        all_symbols.update(exchange_df['symbol'].tolist())
+    if not db_df.empty:
+        all_symbols.update(db_df['symbol'].tolist())
+    
+    for symbol in sorted(all_symbols):
+        col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 1])
+        
+        # 거래소 데이터 우선
+        if not exchange_df.empty and symbol in exchange_df['symbol'].values:
+            pos = exchange_df[exchange_df['symbol'] == symbol].iloc[0]
+            source_badge = '<span class="exchange-badge">LIVE</span>'
+        elif not db_df.empty and symbol in db_df['symbol'].values:
+            pos = db_df[db_df['symbol'] == symbol].iloc[0]
+            source_badge = '<span class="db-badge">DB</span>'
+        else:
+            continue
+        
+        with col1:
+            side_emoji = "🟢" if pos['side'] in ['buy', 'long'] else "🔴"
+            st.markdown(f"{side_emoji} **{symbol}** {source_badge}", unsafe_allow_html=True)
+        
+        with col2:
+            st.metric("Entry", f"${pos['entry_price']:.2f}", label_visibility="collapsed")
+        
+        with col3:
+            st.metric("Current", f"${pos['mark_price']:.2f}", label_visibility="collapsed")
         
         with col4:
-            pnl_usdt = pos.get('pnl_usdt', 0)
-            pnl_percent = pos.get('pnl_percent', 0)
-            color = "green" if pnl_usdt >= 0 else "red"
-            st.markdown(f"<span style='color:{color}'>PnL: ${pnl_usdt:.2f} ({pnl_percent:.2f}%)</span>", unsafe_allow_html=True)
+            pnl = pos['unrealized_pnl']
+            pnl_pct = pos['pnl_percent']
+            color = "green" if pnl >= 0 else "red"
+            st.markdown(f'<span style="color:{color}">${pnl:.2f} ({pnl_pct:.2f}%)</span>', unsafe_allow_html=True)
         
         with col5:
-            amount = pos.get('amount', 0)
-            st.metric("Size", f"{amount:.4f}")
-
-def display_ai_monitoring(ai_df):
-    """AI 모니터링 기록 표시 - 새로운 함수"""
-    if ai_df.empty:
-        st.info("AI 모니터링 기록이 없습니다.")
-        return
-    
-    st.subheader("🤖 AI Monitoring History")
-    
-    # 요약 통계
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        total_monitors = len(ai_df)
-        st.metric("Total Monitors", total_monitors)
-    
-    with col2:
-        hold_count = len(ai_df[ai_df['ai_decision'] == 'hold'])
-        st.metric("Hold Decisions", hold_count)
-    
-    with col3:
-        close_count = len(ai_df[ai_df['ai_decision'] == 'close'])
-        st.metric("Close Decisions", close_count)
-    
-    with col4:
-        avg_confidence = ai_df['confidence'].mean() * 100 if 'confidence' in ai_df.columns else 0
-        st.metric("Avg Confidence", f"{avg_confidence:.1f}%")
-    
-    # 최근 모니터링 기록
-    st.markdown("### Recent AI Decisions")
-    
-    # 테이블로 표시
-    display_df = ai_df[['timestamp', 'symbol', 'ai_decision', 'confidence', 'urgency', 'reason']].head(20)
-    
-    # 신뢰도를 퍼센트로 변환
-    if 'confidence' in display_df.columns:
-        display_df['confidence'] = display_df['confidence'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "N/A")
-    
-    # 타임스탬프 포맷
-    if 'timestamp' in display_df.columns:
-        display_df['timestamp'] = display_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M')
-    
-    # 스타일 적용
-    def highlight_decisions(row):
-        if row['ai_decision'] == 'close':
-            return ['background-color: #ffebee'] * len(row)
-        elif row['ai_decision'] == 'partial_close':
-            return ['background-color: #fff3e0'] * len(row)
-        else:
-            return ['background-color: #e8f5e9'] * len(row)
-    
-    styled_df = display_df.style.apply(highlight_decisions, axis=1)
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-def plot_ai_monitoring_chart(ai_df):
-    """AI 모니터링 차트 - 새로운 함수"""
-    if ai_df.empty:
-        return
-    
-    # AI 결정 분포
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=('AI Decision Distribution', 'Confidence by Decision'),
-        specs=[[{'type': 'pie'}, {'type': 'box'}]]
-    )
-    
-    # Pie chart
-    decision_counts = ai_df['ai_decision'].value_counts()
-    fig.add_trace(
-        go.Pie(
-            labels=decision_counts.index,
-            values=decision_counts.values,
-            hole=0.3,
-            marker_colors=['#2ecc71', '#e74c3c', '#f39c12']
-        ),
-        row=1, col=1
-    )
-    
-    # Box plot
-    for decision in ai_df['ai_decision'].unique():
-        data = ai_df[ai_df['ai_decision'] == decision]['confidence'] * 100
-        fig.add_trace(
-            go.Box(
-                y=data,
-                name=decision,
-                boxmean=True
-            ),
-            row=1, col=2
-        )
-    
-    fig.update_layout(height=400, showlegend=True)
-    st.plotly_chart(fig, use_container_width=True)
+            st.metric("Size", f"{pos['contracts']:.4f}", label_visibility="collapsed")
+        
+        with col6:
+            if 'margin' in pos:
+                st.metric("Margin", f"${pos['margin']:.2f}", label_visibility="collapsed")
 
 def main():
-    """메인 대시보드"""
-    
     # 헤더
-    st.markdown('<div class="main-header">Trading Performance Dashboard v5</div>', 
-                unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Enhanced with Real-time Positions & AI Monitoring</div>', 
-                unsafe_allow_html=True)
+    st.markdown('<div class="main-header">Trading Dashboard v5 - Live Exchange</div>', unsafe_allow_html=True)
     
-    # 현재 잔고 표시
-    balance = get_current_balance()
-    if balance:
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Balance", 
-                     f"${balance.get('total_balance', 0):,.2f}",
-                     f"{balance.get('total_pnl', 0):+,.2f}")
-        
-        with col2:
-            st.metric("Free Balance", 
-                     f"${balance.get('free_balance', 0):,.2f}")
-        
-        with col3:
-            st.metric("Used Balance", 
-                     f"${balance.get('used_balance', 0):,.2f}")
-        
-        with col4:
-            # 실시간 활성 포지션 수 표시
-            st.metric("Active Positions", 
-                     f"{balance.get('active_positions', 0)}",
-                     "Real-time")
+    # 사이드바 - 데이터 소스 선택
+    st.sidebar.header("⚙️ Settings")
+    data_source = st.sidebar.radio(
+        "Data Source",
+        ["Exchange + DB", "Exchange Only", "DB Only"],
+        index=0
+    )
     
-    # 탭 생성
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Overview", 
-        "📍 Active Positions", 
-        "🤖 AI Monitoring", 
-        "📈 Charts", 
-        "📋 Trades"
+    auto_refresh = st.sidebar.checkbox("Auto Refresh (10s)", value=False)
+    
+    # 데이터 로드
+    exchange_positions = pd.DataFrame()
+    db_positions = pd.DataFrame()
+    
+    if data_source in ["Exchange + DB", "Exchange Only"]:
+        exchange_positions = get_exchange_positions()
+    
+    if data_source in ["Exchange + DB", "DB Only"]:
+        db_positions = get_db_positions()
+    
+    # 메인 컨텐츠
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Overview",
+        "🔄 Sync Status", 
+        "📈 Performance",
+        "🤖 AI Monitor"
     ])
     
     with tab1:
-        # 거래 통계
-        stats = get_trading_statistics()
+        # 잔고 정보
+        if not exchange_positions.empty or not db_positions.empty:
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                total_positions = len(exchange_positions) if not exchange_positions.empty else len(db_positions)
+                st.metric("Active Positions", total_positions)
+            
+            with col2:
+                if not exchange_positions.empty:
+                    total_pnl = exchange_positions['unrealized_pnl'].sum()
+                elif not db_positions.empty:
+                    total_pnl = db_positions['unrealized_pnl'].sum()
+                else:
+                    total_pnl = 0
+                color = "green" if total_pnl >= 0 else "red"
+                st.metric("Total PnL", f"${total_pnl:.2f}", delta_color="normal")
+            
+            with col3:
+                if not exchange_positions.empty:
+                    total_margin = exchange_positions['margin'].sum()
+                elif not db_positions.empty:
+                    total_margin = db_positions['margin'].sum()
+                else:
+                    total_margin = 0
+                st.metric("Total Margin", f"${total_margin:.2f}")
+            
+            with col4:
+                source_text = data_source.upper()
+                st.metric("Data Source", source_text)
         
-        if stats:
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Total Trades", stats['total_trades'])
-            
-            with col2:
-                win_rate = stats['win_rate']
-                st.metric("Win Rate", f"{win_rate:.1f}%", 
-                         delta=f"{win_rate-50:.1f}%" if win_rate != 0 else None)
-            
-            with col3:
-                st.metric("Total PnL", f"${stats['total_pnl']:,.2f}")
-            
-            with col4:
-                st.metric("Profit Factor", f"{stats['profit_factor']:.2f}")
-            
-            # 추가 통계
-            st.markdown("---")
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Best Trade", f"${stats['best_trade']:,.2f}")
-            
-            with col2:
-                st.metric("Worst Trade", f"${stats['worst_trade']:,.2f}")
-            
-            with col3:
-                st.metric("Avg Win", f"${stats['avg_win']:,.2f}")
-            
-            with col4:
-                st.metric("Avg Loss", f"${stats['avg_loss']:,.2f}")
+        # 포지션 표시
+        st.markdown("---")
+        display_combined_positions(exchange_positions, db_positions)
     
     with tab2:
-        # 실시간 활성 포지션
-        st.header("Active Positions")
+        st.header("🔄 Exchange-DB Synchronization")
         
-        # 새로고침 버튼
-        if st.button("🔄 Refresh Positions"):
-            st.cache_data.clear()
-        
-        positions_df = get_active_positions_realtime()
-        display_active_positions(positions_df)
-        
-        if not positions_df.empty:
-            # 포지션 요약
-            st.markdown("---")
-            st.subheader("Position Summary")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                total_value = positions_df['position_value'].sum() if 'position_value' in positions_df.columns else 0
-                st.metric("Total Position Value", f"${total_value:,.2f}")
-            
-            with col2:
-                total_pnl = positions_df['pnl_usdt'].sum() if 'pnl_usdt' in positions_df.columns else 0
-                st.metric("Total Unrealized PnL", f"${total_pnl:,.2f}")
-            
-            with col3:
-                avg_pnl_pct = positions_df['pnl_percent'].mean() if 'pnl_percent' in positions_df.columns else 0
-                st.metric("Avg PnL %", f"{avg_pnl_pct:.2f}%")
+        if st.button("🔍 Check Sync Status"):
+            with st.spinner("Comparing positions..."):
+                exchange_pos = get_exchange_positions()
+                db_pos = get_db_positions()
+                comparison = compare_positions(exchange_pos, db_pos)
+                
+                display_sync_status(comparison)
+                
+                # 상세 비교 표시
+                if comparison['matched']:
+                    st.subheader("✅ Matched Positions")
+                    matched_df = pd.DataFrame(comparison['matched'])
+                    st.dataframe(matched_df, use_container_width=True)
+                
+                if comparison['exchange_only']:
+                    st.subheader("🆕 Exchange Only (Need DB Update)")
+                    ex_only_df = pd.DataFrame(comparison['exchange_only'])
+                    st.dataframe(ex_only_df, use_container_width=True)
+                
+                if comparison['db_only']:
+                    st.subheader("❌ DB Only (Already Closed)")
+                    db_only_df = pd.DataFrame(comparison['db_only'])
+                    st.dataframe(db_only_df, use_container_width=True)
     
     with tab3:
-        # AI 모니터링 기록
-        st.header("AI Monitoring Dashboard")
+        st.header("📈 Performance Analysis")
         
-        # 기간 선택
-        days = st.slider("Days to show", 1, 30, 7)
-        
-        ai_history = get_ai_monitoring_history(days)
-        
-        # AI 모니터링 표시
-        display_ai_monitoring(ai_history)
-        
-        # AI 모니터링 차트
-        if not ai_history.empty:
-            st.markdown("---")
-            plot_ai_monitoring_chart(ai_history)
+        # 거래 통계는 DB에서만 가져옴
+        try:
+            conn = sqlite3.connect('integrated_trades.db')
+            
+            # 완료된 거래 통계
+            stats_query = """
+            SELECT 
+                COUNT(*) as total_trades,
+                SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+                SUM(pnl_usdt) as total_pnl,
+                AVG(pnl_percent) as avg_pnl_percent
+            FROM completed_trades
+            WHERE close_timestamp >= date('now', '-30 days')
+            """
+            
+            stats = pd.read_sql_query(stats_query, conn).iloc[0]
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Trades (30d)", int(stats['total_trades']))
+            
+            with col2:
+                win_rate = (stats['wins'] / stats['total_trades'] * 100) if stats['total_trades'] > 0 else 0
+                st.metric("Win Rate", f"{win_rate:.1f}%")
+            
+            with col3:
+                st.metric("Total PnL (30d)", f"${stats['total_pnl']:.2f}")
+            
+            with col4:
+                st.metric("Avg PnL %", f"{stats['avg_pnl_percent']:.2f}%")
+            
+            conn.close()
+            
+        except Exception as e:
+            st.error(f"통계 조회 오류: {e}")
     
     with tab4:
-        # 차트 (기존 코드 활용)
-        st.header("Performance Charts")
-        # ... 기존 차트 코드 ...
+        st.header("🤖 AI Monitoring Status")
+        
+        try:
+            conn = sqlite3.connect('integrated_trades.db')
+            
+            # AI 모니터링 기록
+            ai_query = """
+            SELECT 
+                timestamp,
+                symbol,
+                ai_decision,
+                confidence,
+                urgency,
+                reason
+            FROM trades
+            WHERE trade_type = 'AI_MONITOR'
+            ORDER BY timestamp DESC
+            LIMIT 20
+            """
+            
+            ai_df = pd.read_sql_query(ai_query, conn)
+            
+            if not ai_df.empty:
+                ai_df['timestamp'] = pd.to_datetime(ai_df['timestamp'])
+                ai_df['confidence'] = ai_df['confidence'] * 100
+                
+                st.dataframe(
+                    ai_df.style.format({'confidence': '{:.1f}%'}),
+                    use_container_width=True
+                )
+            else:
+                st.info("No AI monitoring records found")
+            
+            conn.close()
+            
+        except Exception as e:
+            st.error(f"AI 모니터링 조회 오류: {e}")
     
-    with tab5:
-        # 거래 내역 (기존 코드 활용)
-        st.header("Trade History")
-        # ... 기존 거래 내역 코드 ...
+    # 자동 새로고침
+    if auto_refresh:
+        import time
+        time.sleep(10)
+        st.experimental_rerun()
     
     # Footer
     st.markdown("---")
-    st.caption(f"Dashboard Enhanced v5 | Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    # 자동 새로고침 (선택사항)
-    if st.sidebar.checkbox("Auto-refresh (10s)", value=False):
-        st.experimental_rerun()
+    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data: {data_source}")
 
 if __name__ == "__main__":
     main()
