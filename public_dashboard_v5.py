@@ -386,6 +386,21 @@ def main():
     )
     
     auto_refresh = st.sidebar.checkbox("Auto Refresh (10s)", value=False)
+    auto_sync = st.sidebar.checkbox("Auto Sync DB (30s)", value=True, help="자동으로 DB와 거래소 불일치 포지션 정리")
+    
+    # 자동 동기화 실행
+    if auto_sync:
+        try:
+            exchange_pos = get_exchange_positions()
+            db_pos = get_db_positions()
+            comparison = compare_positions(exchange_pos, db_pos)
+            
+            # DB에만 있는 포지션이 있으면 자동 삭제
+            if comparison['db_only']:
+                sync_positions_to_db(comparison)
+                st.sidebar.success(f"✅ {len(comparison['db_only'])}개 포지션 정리됨")
+        except Exception as e:
+            st.sidebar.error(f"자동 동기화 오류: {e}")
     
     # 데이터 로드
     exchange_positions = pd.DataFrame()
@@ -486,22 +501,33 @@ def main():
             WHERE close_timestamp >= date('now', '-30 days')
             """
             
-            stats = pd.read_sql_query(stats_query, conn).iloc[0]
+            stats_df = pd.read_sql_query(stats_query, conn)
             
-            col1, col2, col3, col4 = st.columns(4)
-            
-            with col1:
-                st.metric("Total Trades (30d)", int(stats['total_trades']))
-            
-            with col2:
-                win_rate = (stats['wins'] / stats['total_trades'] * 100) if stats['total_trades'] > 0 else 0
-                st.metric("Win Rate", f"{win_rate:.1f}%")
-            
-            with col3:
-                st.metric("Total PnL (30d)", f"${stats['total_pnl']:.2f}")
-            
-            with col4:
-                st.metric("Avg PnL %", f"{stats['avg_pnl_percent']:.2f}%")
+            if not stats_df.empty:
+                stats = stats_df.iloc[0]
+                
+                # None 값 처리
+                total_trades = int(stats['total_trades']) if pd.notna(stats['total_trades']) else 0
+                wins = int(stats['wins']) if pd.notna(stats['wins']) else 0
+                total_pnl = float(stats['total_pnl']) if pd.notna(stats['total_pnl']) else 0.0
+                avg_pnl_percent = float(stats['avg_pnl_percent']) if pd.notna(stats['avg_pnl_percent']) else 0.0
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total Trades (30d)", total_trades)
+                
+                with col2:
+                    win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
+                    st.metric("Win Rate", f"{win_rate:.1f}%")
+                
+                with col3:
+                    st.metric("Total PnL (30d)", f"${total_pnl:.2f}")
+                
+                with col4:
+                    st.metric("Avg PnL %", f"{avg_pnl_percent:.2f}%")
+            else:
+                st.info("최근 30일간 완료된 거래가 없습니다.")
             
             conn.close()
             
