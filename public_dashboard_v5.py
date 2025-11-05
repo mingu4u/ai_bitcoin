@@ -501,53 +501,360 @@ def main():
     with tab3:
         st.header("📈 Performance Analysis")
         
-        # 거래 통계는 DB에서만 가져옴
         try:
             conn = sqlite3.connect('integrated_trades.db')
             
-            # 완료된 거래 통계
+            # =========================
+            # 1. 전체 통계 요약
+            # =========================
             stats_query = """
             SELECT 
                 COUNT(*) as total_trades,
                 SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN is_win = 0 THEN 1 ELSE 0 END) as losses,
                 SUM(pnl_usdt) as total_pnl,
-                AVG(pnl_percent) as avg_pnl_percent
+                AVG(pnl_percent) as avg_pnl_percent,
+                MAX(pnl_usdt) as max_profit,
+                MIN(pnl_usdt) as max_loss,
+                AVG(CASE WHEN is_win = 1 THEN pnl_usdt END) as avg_win,
+                AVG(CASE WHEN is_win = 0 THEN pnl_usdt END) as avg_loss
             FROM completed_trades
             WHERE close_timestamp >= date('now', '-30 days')
             """
             
             stats_df = pd.read_sql_query(stats_query, conn)
             
-            if not stats_df.empty:
+            if not stats_df.empty and stats_df.iloc[0]['total_trades'] > 0:
                 stats = stats_df.iloc[0]
                 
                 # None 값 처리
                 total_trades = int(stats['total_trades']) if pd.notna(stats['total_trades']) else 0
                 wins = int(stats['wins']) if pd.notna(stats['wins']) else 0
+                losses = int(stats['losses']) if pd.notna(stats['losses']) else 0
                 total_pnl = float(stats['total_pnl']) if pd.notna(stats['total_pnl']) else 0.0
                 avg_pnl_percent = float(stats['avg_pnl_percent']) if pd.notna(stats['avg_pnl_percent']) else 0.0
+                max_profit = float(stats['max_profit']) if pd.notna(stats['max_profit']) else 0.0
+                max_loss = float(stats['max_loss']) if pd.notna(stats['max_loss']) else 0.0
+                avg_win = float(stats['avg_win']) if pd.notna(stats['avg_win']) else 0.0
+                avg_loss = float(stats['avg_loss']) if pd.notna(stats['avg_loss']) else 0.0
                 
-                col1, col2, col3, col4 = st.columns(4)
+                col1, col2, col3, col4, col5 = st.columns(5)
                 
                 with col1:
-                    st.metric("Total Trades (30d)", total_trades)
+                    st.metric("Total Trades", total_trades)
                 
                 with col2:
                     win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
-                    st.metric("Win Rate", f"{win_rate:.1f}%")
+                    st.metric("Win Rate", f"{win_rate:.1f}%", 
+                             delta=f"{wins}W / {losses}L")
                 
                 with col3:
-                    st.metric("Total PnL (30d)", f"${total_pnl:.2f}")
+                    st.metric("Total PnL", f"${total_pnl:.2f}",
+                             delta=f"{avg_pnl_percent:.2f}%")
                 
                 with col4:
-                    st.metric("Avg PnL %", f"{avg_pnl_percent:.2f}%")
+                    st.metric("Best Trade", f"${max_profit:.2f}")
+                
+                with col5:
+                    st.metric("Worst Trade", f"${max_loss:.2f}")
+                
+                st.markdown("---")
+                
+                # =========================
+                # 2. 자산 증감 시계열 그래프
+                # =========================
+                st.subheader("💰 Cumulative PnL Over Time")
+                
+                equity_query = """
+                SELECT 
+                    date(close_timestamp) as date,
+                    close_timestamp,
+                    symbol,
+                    pnl_usdt,
+                    SUM(pnl_usdt) OVER (ORDER BY close_timestamp) as cumulative_pnl
+                FROM completed_trades
+                WHERE close_timestamp >= date('now', '-30 days')
+                ORDER BY close_timestamp
+                """
+                
+                equity_df = pd.read_sql_query(equity_query, conn)
+                
+                if not equity_df.empty:
+                    equity_df['close_timestamp'] = pd.to_datetime(equity_df['close_timestamp'])
+                    
+                    fig_equity = go.Figure()
+                    
+                    # 누적 PnL 라인
+                    fig_equity.add_trace(go.Scatter(
+                        x=equity_df['close_timestamp'],
+                        y=equity_df['cumulative_pnl'],
+                        mode='lines+markers',
+                        name='Cumulative PnL',
+                        line=dict(color='#2ca02c', width=3),
+                        fill='tozeroy',
+                        fillcolor='rgba(44, 160, 44, 0.1)'
+                    ))
+                    
+                    # 0 기준선
+                    fig_equity.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5)
+                    
+                    fig_equity.update_layout(
+                        title="Cumulative Profit/Loss Timeline",
+                        xaxis_title="Date",
+                        yaxis_title="PnL (USDT)",
+                        hovermode='x unified',
+                        height=400
+                    )
+                    
+                    st.plotly_chart(fig_equity, use_container_width=True)
+                else:
+                    st.info("충분한 거래 데이터가 없습니다.")
+                
+                # =========================
+                # 3. 심볼별 성과 분석
+                # =========================
+                col_left, col_right = st.columns(2)
+                
+                with col_left:
+                    st.subheader("🎯 Symbol Performance")
+                    
+                    symbol_query = """
+                    SELECT 
+                        symbol,
+                        COUNT(*) as trades,
+                        SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
+                        ROUND(AVG(CASE WHEN is_win = 1 THEN 1.0 ELSE 0.0 END) * 100, 1) as win_rate,
+                        ROUND(SUM(pnl_usdt), 2) as total_pnl,
+                        ROUND(AVG(pnl_percent), 2) as avg_pnl_pct
+                    FROM completed_trades
+                    WHERE close_timestamp >= date('now', '-30 days')
+                    GROUP BY symbol
+                    ORDER BY total_pnl DESC
+                    """
+                    
+                    symbol_df = pd.read_sql_query(symbol_query, conn)
+                    
+                    if not symbol_df.empty:
+                        # 컬러 매핑
+                        symbol_df['color'] = symbol_df['total_pnl'].apply(
+                            lambda x: '🟢' if x > 0 else '🔴'
+                        )
+                        
+                        # 표시용 데이터프레임
+                        display_df = symbol_df[['color', 'symbol', 'trades', 'win_rate', 'total_pnl', 'avg_pnl_pct']].copy()
+                        display_df.columns = ['', 'Symbol', 'Trades', 'Win Rate %', 'Total PnL', 'Avg %']
+                        
+                        st.dataframe(
+                            display_df,
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    else:
+                        st.info("심볼별 데이터가 없습니다.")
+                
+                with col_right:
+                    st.subheader("📊 Win Rate Distribution")
+                    
+                    if not symbol_df.empty:
+                        fig_winrate = go.Figure(data=[
+                            go.Bar(
+                                x=symbol_df['symbol'],
+                                y=symbol_df['win_rate'],
+                                marker_color=symbol_df['win_rate'].apply(
+                                    lambda x: '#2ca02c' if x >= 50 else '#d62728'
+                                ),
+                                text=symbol_df['win_rate'].apply(lambda x: f"{x:.1f}%"),
+                                textposition='outside'
+                            )
+                        ])
+                        
+                        fig_winrate.add_hline(y=50, line_dash="dash", line_color="gray", 
+                                             annotation_text="50% Break-even")
+                        
+                        fig_winrate.update_layout(
+                            title="Win Rate by Symbol",
+                            xaxis_title="Symbol",
+                            yaxis_title="Win Rate (%)",
+                            showlegend=False,
+                            height=300
+                        )
+                        
+                        st.plotly_chart(fig_winrate, use_container_width=True)
+                
+                st.markdown("---")
+                
+                # =========================
+                # 4. Best & Worst 거래 리더보드
+                # =========================
+                col_best, col_worst = st.columns(2)
+                
+                with col_best:
+                    st.subheader("🏆 Top 5 Best Trades")
+                    
+                    best_query = """
+                    SELECT 
+                        symbol,
+                        ROUND(pnl_usdt, 2) as pnl,
+                        ROUND(pnl_percent, 2) as pnl_pct,
+                        close_timestamp
+                    FROM completed_trades
+                    WHERE close_timestamp >= date('now', '-30 days')
+                    ORDER BY pnl_usdt DESC
+                    LIMIT 5
+                    """
+                    
+                    best_df = pd.read_sql_query(best_query, conn)
+                    
+                    if not best_df.empty:
+                        best_df['close_timestamp'] = pd.to_datetime(best_df['close_timestamp']).dt.strftime('%m-%d %H:%M')
+                        best_df.insert(0, '', ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'][:len(best_df)])
+                        st.dataframe(best_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("데이터 없음")
+                
+                with col_worst:
+                    st.subheader("💔 Top 5 Worst Trades")
+                    
+                    worst_query = """
+                    SELECT 
+                        symbol,
+                        ROUND(pnl_usdt, 2) as pnl,
+                        ROUND(pnl_percent, 2) as pnl_pct,
+                        close_timestamp
+                    FROM completed_trades
+                    WHERE close_timestamp >= date('now', '-30 days')
+                    ORDER BY pnl_usdt ASC
+                    LIMIT 5
+                    """
+                    
+                    worst_df = pd.read_sql_query(worst_query, conn)
+                    
+                    if not worst_df.empty:
+                        worst_df['close_timestamp'] = pd.to_datetime(worst_df['close_timestamp']).dt.strftime('%m-%d %H:%M')
+                        worst_df.insert(0, '', ['💀', '😱', '😢', '😕', '😐'][:len(worst_df)])
+                        st.dataframe(worst_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("데이터 없음")
+                
+                st.markdown("---")
+                
+                # =========================
+                # 5. 추가 통계 분석
+                # =========================
+                col_stats1, col_stats2, col_stats3 = st.columns(3)
+                
+                with col_stats1:
+                    st.subheader("📉 PnL Distribution")
+                    
+                    pnl_query = """
+                    SELECT pnl_usdt
+                    FROM completed_trades
+                    WHERE close_timestamp >= date('now', '-30 days')
+                    """
+                    
+                    pnl_dist_df = pd.read_sql_query(pnl_query, conn)
+                    
+                    if not pnl_dist_df.empty:
+                        fig_dist = go.Figure(data=[
+                            go.Histogram(
+                                x=pnl_dist_df['pnl_usdt'],
+                                nbinsx=20,
+                                marker_color='lightblue',
+                                marker_line_color='darkblue',
+                                marker_line_width=1
+                            )
+                        ])
+                        
+                        fig_dist.update_layout(
+                            title="Profit/Loss Distribution",
+                            xaxis_title="PnL (USDT)",
+                            yaxis_title="Frequency",
+                            showlegend=False,
+                            height=250
+                        )
+                        
+                        st.plotly_chart(fig_dist, use_container_width=True)
+                
+                with col_stats2:
+                    st.subheader("⏱️ Trade Duration")
+                    
+                    duration_query = """
+                    SELECT 
+                        ROUND((julianday(close_timestamp) - julianday(open_timestamp)) * 24, 1) as hours,
+                        pnl_usdt
+                    FROM completed_trades
+                    WHERE close_timestamp >= date('now', '-30 days')
+                        AND open_timestamp IS NOT NULL
+                    """
+                    
+                    duration_df = pd.read_sql_query(duration_query, conn)
+                    
+                    if not duration_df.empty:
+                        fig_duration = go.Figure(data=[
+                            go.Scatter(
+                                x=duration_df['hours'],
+                                y=duration_df['pnl_usdt'],
+                                mode='markers',
+                                marker=dict(
+                                    size=8,
+                                    color=duration_df['pnl_usdt'],
+                                    colorscale='RdYlGn',
+                                    showscale=True,
+                                    colorbar=dict(title="PnL")
+                                )
+                            )
+                        ])
+                        
+                        fig_duration.update_layout(
+                            title="Duration vs PnL",
+                            xaxis_title="Duration (hours)",
+                            yaxis_title="PnL (USDT)",
+                            showlegend=False,
+                            height=250
+                        )
+                        
+                        st.plotly_chart(fig_duration, use_container_width=True)
+                    else:
+                        st.info("보유 시간 데이터 없음")
+                
+                with col_stats3:
+                    st.subheader("🎲 Risk/Reward")
+                    
+                    if avg_win != 0 and avg_loss != 0:
+                        risk_reward_ratio = abs(avg_win / avg_loss)
+                        
+                        # 도넛 차트
+                        fig_rr = go.Figure(data=[
+                            go.Pie(
+                                labels=['Avg Win', 'Avg Loss'],
+                                values=[abs(avg_win), abs(avg_loss)],
+                                hole=0.5,
+                                marker_colors=['#2ca02c', '#d62728']
+                            )
+                        ])
+                        
+                        fig_rr.update_layout(
+                            title=f"Risk/Reward: {risk_reward_ratio:.2f}",
+                            showlegend=True,
+                            height=250
+                        )
+                        
+                        st.plotly_chart(fig_rr, use_container_width=True)
+                        
+                        st.metric("Avg Win", f"${avg_win:.2f}")
+                        st.metric("Avg Loss", f"${avg_loss:.2f}")
+                    else:
+                        st.info("Risk/Reward 비율 계산 불가")
+            
             else:
-                st.info("최근 30일간 완료된 거래가 없습니다.")
+                st.info("⚠️ 최근 30일간 완료된 거래가 없습니다.")
             
             conn.close()
             
         except Exception as e:
             st.error(f"통계 조회 오류: {e}")
+            import traceback
+            st.text(traceback.format_exc())
     
     with tab4:
         st.header("🤖 AI Monitoring Status")
