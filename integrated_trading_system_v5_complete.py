@@ -368,6 +368,15 @@ SYMBOL_CONFIG = {
         'enabled': True,
         'ai_validation': True,
         'ai_monitoring': True
+    },
+    'DASH/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
     }
 }
 
@@ -2510,7 +2519,9 @@ def webhook():
             'TRXUSDT': 'TRX/USDT',
             'TRXUSDT.P': 'TRX/USDT',
             'ASTERUSDT': 'ASTER/USDT',            
-            'ASTERUSDT.P': 'ASTER/USDT'         
+            'ASTERUSDT.P': 'ASTER/USDT',
+            'DASHUSDT': 'DASH/USDT',
+            'DASHUSDT.P': 'DASH/USDT'
         }
         
         # 심볼 매핑 적용
