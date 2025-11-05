@@ -183,6 +183,21 @@ def get_db_positions():
         st.error(f"DB 조회 오류: {e}")
         return pd.DataFrame()
 
+@st.cache_data(ttl=60)
+def get_account_balance():
+    """거래소에서 현재 USDT 잔고 조회"""
+    exchange = get_exchange()
+    if not exchange:
+        return None
+    
+    try:
+        balance = exchange.fetch_balance()
+        usdt_balance = balance['USDT']['total'] if 'USDT' in balance else 0
+        return usdt_balance
+    except Exception as e:
+        st.error(f"잔고 조회 오류: {e}")
+        return None
+
 def compare_positions(exchange_df, db_df):
     """거래소와 DB 포지션 비교"""
     comparison = {
@@ -503,6 +518,107 @@ def main():
         
         try:
             conn = sqlite3.connect('integrated_trades.db')
+            
+            # =========================
+            # 0. 전체 자산 추이 그래프 (최상단)
+            # =========================
+            st.subheader("💎 Total Equity Over Time")
+            
+            # 현재 거래소 잔고 조회
+            current_balance = get_account_balance()
+            
+            if current_balance is not None:
+                col_balance1, col_balance2, col_balance3 = st.columns(3)
+                
+                with col_balance1:
+                    st.metric("Current Balance", f"${current_balance:.2f}", 
+                             help="거래소 현재 USDT 잔고")
+                
+                # 과거 자산 추이 계산 (현재 잔고 - 누적 PnL 역산)
+                equity_history_query = """
+                SELECT 
+                    close_timestamp,
+                    symbol,
+                    pnl_usdt,
+                    SUM(pnl_usdt) OVER (ORDER BY close_timestamp DESC) as reverse_cumulative_pnl
+                FROM completed_trades
+                WHERE close_timestamp >= date('now', '-30 days')
+                ORDER BY close_timestamp ASC
+                """
+                
+                equity_hist_df = pd.read_sql_query(equity_history_query, conn)
+                
+                if not equity_hist_df.empty:
+                    equity_hist_df['close_timestamp'] = pd.to_datetime(equity_hist_df['close_timestamp'])
+                    
+                    # 각 시점의 추정 자산 = 현재 잔고 - (미래 거래들의 PnL 합)
+                    equity_hist_df['estimated_balance'] = current_balance - equity_hist_df['reverse_cumulative_pnl']
+                    
+                    # 현재 시점 추가
+                    current_row = pd.DataFrame({
+                        'close_timestamp': [datetime.now()],
+                        'estimated_balance': [current_balance]
+                    })
+                    
+                    equity_hist_df = pd.concat([
+                        equity_hist_df[['close_timestamp', 'estimated_balance']], 
+                        current_row
+                    ]).sort_values('close_timestamp')
+                    
+                    # 초기 자산과 현재 자산 비교
+                    initial_balance = equity_hist_df['estimated_balance'].iloc[0]
+                    total_gain = current_balance - initial_balance
+                    total_gain_pct = (total_gain / initial_balance * 100) if initial_balance > 0 else 0
+                    
+                    with col_balance2:
+                        st.metric("Starting Balance (30d)", f"${initial_balance:.2f}")
+                    
+                    with col_balance3:
+                        st.metric("Total Gain (30d)", f"${total_gain:.2f}", 
+                                 delta=f"{total_gain_pct:+.2f}%",
+                                 delta_color="normal")
+                    
+                    # 자산 추이 그래프
+                    fig_total_equity = go.Figure()
+                    
+                    # 자산 곡선
+                    fig_total_equity.add_trace(go.Scatter(
+                        x=equity_hist_df['close_timestamp'],
+                        y=equity_hist_df['estimated_balance'],
+                        mode='lines+markers',
+                        name='Total Equity',
+                        line=dict(color='#1f77b4', width=3),
+                        fill='tozeroy',
+                        fillcolor='rgba(31, 119, 180, 0.1)',
+                        marker=dict(size=6)
+                    ))
+                    
+                    # 초기 잔고 기준선
+                    fig_total_equity.add_hline(
+                        y=initial_balance, 
+                        line_dash="dash", 
+                        line_color="gray", 
+                        opacity=0.5,
+                        annotation_text=f"Start: ${initial_balance:.2f}",
+                        annotation_position="right"
+                    )
+                    
+                    fig_total_equity.update_layout(
+                        title="Account Equity Growth",
+                        xaxis_title="Date",
+                        yaxis_title="Balance (USDT)",
+                        hovermode='x unified',
+                        height=450,
+                        showlegend=False
+                    )
+                    
+                    st.plotly_chart(fig_total_equity, use_container_width=True)
+                else:
+                    st.info("자산 추이를 계산할 거래 데이터가 없습니다.")
+            else:
+                st.warning("⚠️ 거래소 잔고를 조회할 수 없습니다. API 키를 확인해주세요.")
+            
+            st.markdown("---")
             
             # =========================
             # 1. 전체 통계 요약
