@@ -2412,10 +2412,38 @@ def webhook():
         if not data:
             return jsonify({'error': 'No data received'}), 400
         
+        # null 안전 파싱 - 모든 필드에 대해 null/None 처리
+        def safe_get_float(data, key, default=None):
+            """null, 'null', '', None을 안전하게 처리"""
+            value = data.get(key)
+            if value is None or value == 'null' or value == '':
+                return default
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return default
+        
         action = data.get('action')
         original_action = action  # 원래 액션 저장 (modify 케이스를 위해)
         symbol = data.get('symbol', 'BTC/USDT')
+        
+        # 숫자 필드 안전 파싱 (null 허용)
+        entry_price = safe_get_float(data, 'entry_price')
+        stop_loss = safe_get_float(data, 'stop_loss')
+        take_profit = safe_get_float(data, 'take_profit')
+        exit_price = safe_get_float(data, 'exit_price')
+        profit_percent = safe_get_float(data, 'profit_percent', 0)
+        trailing_stop_percent = safe_get_float(data, 'trailing_stop_percent')
+        trailing_activation_percent = safe_get_float(data, 'trailing_activation_percent')
+        
+        # 문자열 필드 안전 파싱
+        position_type = data.get('position_type', 'normal')
+        exit_reason = data.get('exit_reason', 'manual')
+        
         message = data if data else json.dumps(data, ensure_ascii=False)
+        
+        logger.info(f"웹훅 수신 - 심볼: {symbol}, 액션: {action}")
+        logger.debug(f"파싱된 가격: entry={entry_price}, sl={stop_loss}, tp={take_profit}")
         
         # 심볼 매핑 테이블 (정규화 전에 수행!)
         symbol_mapping = {
@@ -2703,15 +2731,18 @@ def webhook():
             ticker = exchange.fetch_ticker(symbol)
             current_price = ticker['last']
             
+            # 웹훅 데이터 우선 사용, null이면 기본값 적용
             if action == 'buy':
-                stop_loss_price = current_price * 0.98  # -2%
-                take_profit_price = current_price * 1.04  # +4%
+                stop_loss_price = stop_loss if stop_loss is not None else (current_price * 0.98)  # -2%
+                take_profit_price = take_profit if take_profit is not None else (current_price * 1.04)  # +4%
             else:
-                stop_loss_price = current_price * 1.02  # +2%
-                take_profit_price = current_price * 0.96  # -4%
+                stop_loss_price = stop_loss if stop_loss is not None else (current_price * 1.02)  # +2%
+                take_profit_price = take_profit if take_profit is not None else (current_price * 0.96)  # -4%
             
             pl_ratio = 2.0
             position_percent = SYMBOL_CONFIG[symbol].get('position_size_percent', 10)
+            
+            logger.info(f"기본값 사용 - SL: {stop_loss_price:.4f}, TP: {take_profit_price:.4f}")
         
         # 거래 실행 (buy/sell만)
         if action in ['buy', 'sell']:
@@ -2739,9 +2770,9 @@ def webhook():
             current_price = ticker['last']
             amount = (position_size * leverage) / current_price
             
-            # 트레일링 스탑 설정
-            trailing_stop = DEFAULT_TRAILING_STOP_PERCENT
-            trailing_activation = DEFAULT_TRAILING_ACTIVATION_PERCENT
+            # 트레일링 스탑 설정 (null 안전 처리)
+            trailing_stop = trailing_stop_percent if trailing_stop_percent is not None else DEFAULT_TRAILING_STOP_PERCENT
+            trailing_activation = trailing_activation_percent if trailing_activation_percent is not None else DEFAULT_TRAILING_ACTIVATION_PERCENT
             
             # 주문 실행
             orders = place_orders_with_sl_tp(
