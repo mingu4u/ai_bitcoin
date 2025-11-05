@@ -2383,13 +2383,37 @@ def format_position_entry_message(symbol, action, amount, entry_price, sl, tp, p
 def webhook():
     """TradingView 웹훅 수신 및 처리 - 개선 버전"""
     try:
-        data = request.get_json()
+        # JSON 데이터 파싱 (개선된 에러 처리)
+        try:
+            # 일반적인 방법 시도
+            data = request.get_json()
+        except:
+            # 실패하면 raw 데이터를 직접 파싱
+            raw_data = request.get_data(as_text=True)
+            logger.info(f"Raw webhook data (first 500 chars): {raw_data[:500]}")
+            
+            try:
+                # JSON 파싱 재시도
+                data = json.loads(raw_data)
+            except json.JSONDecodeError:
+                # Pine Script 형식(key=value) 파싱 시도
+                try:
+                    data = {}
+                    for line in raw_data.split('\n'):
+                        if '=' in line:
+                            key, value = line.split('=', 1)
+                            data[key.strip()] = value.strip()
+                    logger.info(f"Parsed Pine Script format data: {data}")
+                except:
+                    logger.error(f"Failed to parse webhook data: {raw_data[:200]}")
+                    return jsonify({'error': 'Invalid data format'}), 400
         
         # 기본 검증
         if not data:
             return jsonify({'error': 'No data received'}), 400
         
         action = data.get('action')
+        original_action = action  # 원래 액션 저장 (modify 케이스를 위해)
         symbol = data.get('symbol', 'BTC/USDT')
         message = data if data else json.dumps(data, ensure_ascii=False)
         
@@ -2643,6 +2667,28 @@ def webhook():
             elif ai_decision['decision'] == 'modify':
                 # AI가 수정한 매매 신호 사용
                 action = ai_decision['modified_action']
+                
+                # 텔레그램 알림 전송 (modify 케이스 추가)
+                message = f"""
+🔄 <b>AI 신호 수정</b>
+
+<b>심볼:</b> {symbol}
+<b>원래 신호:</b> {original_action.upper()}
+<b>수정된 신호:</b> {action.upper()}
+<b>AI 결정:</b> MODIFY
+<b>신뢰도:</b> {ai_decision['confidence']:.1%}
+<b>포지션 크기:</b> {ai_decision['percentage']}%
+<b>이유:</b> {ai_decision['reason']}
+
+<b>수정된 가격:</b>
+• 손절가: ${ai_decision['stop_loss_price']:.4f}
+• 목표가: ${ai_decision['take_profit_price']:.4f}
+• P/L 비율: {ai_decision['pl_ratio']:.1f}
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                """.strip()
+                send_telegram_notification(message, 'info')
+                
                 if action == 'hold':
                     return jsonify({'status': 'hold', 'reason': ai_decision['reason']}), 200
             
