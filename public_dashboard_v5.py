@@ -248,11 +248,13 @@ def sync_positions_to_db(comparison):
         conn = sqlite3.connect('integrated_trades.db')
         cursor = conn.cursor()
         
+        synced_count = 0
+        
         # DB에만 있는 포지션 종료 처리
         for pos in comparison['db_only']:
             symbol = pos['symbol']
             
-            # position_history에 종료 기록 (amount = 0)
+            # position_history에 종료 기록 (amount = 0으로 포지션 종료 표시)
             cursor.execute("""
                 INSERT INTO position_history 
                 (timestamp, symbol, side, amount, entry_price, current_price,
@@ -263,15 +265,13 @@ def sync_positions_to_db(comparison):
                 0, 0, 0, 0, 0
             ))
             
-            # trades 테이블 업데이트
-            cursor.execute("""
-                UPDATE trades 
-                SET status = 'closed_by_sync'
-                WHERE symbol = ? AND status = 'active'
-            """, (symbol,))
+            synced_count += 1
         
         conn.commit()
         conn.close()
+        
+        if synced_count > 0:
+            st.sidebar.info(f"🔄 {synced_count}개 포지션 동기화됨")
         
         return True
         
@@ -386,21 +386,36 @@ def main():
     )
     
     auto_refresh = st.sidebar.checkbox("Auto Refresh (10s)", value=False)
-    auto_sync = st.sidebar.checkbox("Auto Sync DB (30s)", value=True, help="자동으로 DB와 거래소 불일치 포지션 정리")
+    auto_sync = st.sidebar.checkbox("Auto Sync DB", value=True, help="자동으로 DB와 거래소 불일치 포지션 정리 (30초마다)")
     
-    # 자동 동기화 실행
+    # 자동 동기화 실행 (session_state로 주기 관리)
     if auto_sync:
-        try:
-            exchange_pos = get_exchange_positions()
-            db_pos = get_db_positions()
-            comparison = compare_positions(exchange_pos, db_pos)
-            
-            # DB에만 있는 포지션이 있으면 자동 삭제
-            if comparison['db_only']:
-                sync_positions_to_db(comparison)
-                st.sidebar.success(f"✅ {len(comparison['db_only'])}개 포지션 정리됨")
-        except Exception as e:
-            st.sidebar.error(f"자동 동기화 오류: {e}")
+        if 'last_sync_time' not in st.session_state:
+            st.session_state.last_sync_time = datetime.now() - timedelta(seconds=31)
+        
+        time_since_sync = (datetime.now() - st.session_state.last_sync_time).total_seconds()
+        
+        # 30초마다 한 번씩만 실행
+        if time_since_sync > 30:
+            try:
+                exchange_pos = get_exchange_positions()
+                db_pos = get_db_positions()
+                comparison = compare_positions(exchange_pos, db_pos)
+                
+                # DB에만 있는 포지션이 있으면 자동 삭제
+                if comparison['db_only']:
+                    if sync_positions_to_db(comparison):
+                        st.session_state.last_sync_time = datetime.now()
+                else:
+                    st.session_state.last_sync_time = datetime.now()
+                    
+            except Exception as e:
+                st.sidebar.error(f"자동 동기화 오류: {e}")
+        
+        # 다음 동기화까지 남은 시간 표시
+        next_sync = 30 - time_since_sync
+        if next_sync > 0:
+            st.sidebar.caption(f"다음 동기화: {int(next_sync)}초 후")
     
     # 데이터 로드
     exchange_positions = pd.DataFrame()
