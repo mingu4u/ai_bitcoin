@@ -1404,9 +1404,12 @@ def ai_monitoring_cycle():
     global current_positions
     
     logger.info("=== AI Position Monitoring Cycle Start ===")
+    logger.info(f"⏰ Monitoring interval: {AI_MONITOR_INTERVAL} minutes")
+    logger.info(f"📊 Current positions in memory: {len(current_positions)}")
     
     # 🔄 실제 거래소 포지션과 동기화 (중요!)
-    sync_positions_from_exchange()
+    sync_count = sync_positions_from_exchange()
+    logger.info(f"🔄 Synchronized positions: {sync_count}")
     
     if not current_positions:
         logger.info("No positions to monitor after sync")
@@ -2546,8 +2549,11 @@ def webhook():
         
         logger.info(f"웹훅 수신 - 심볼: {symbol}, 액션: {action}, 메시지: {message}")
         
+        # 심볼 설정 가져오기 (symbol_config 에러 방지)
+        symbol_config = SYMBOL_CONFIG.get(symbol, {})
+        
         # AI 검증이 활성화되어 있는지 확인
-        use_ai = SYMBOL_CONFIG[symbol].get('ai_validation', True)
+        use_ai = symbol_config.get('ai_validation', True)
         
         if use_ai:
             # 시장 데이터 수집
@@ -2806,6 +2812,29 @@ def webhook():
                     'leverage': symbol_config.get('leverage', 10),  # 레버리지 추가
                     'position_size_usdt': position_size  # 포지션 크기 추가
                 }
+                
+                # 🔥 포지션 진입 즉시 DB 기록 (대시보드 표시용)
+                try:
+                    conn = get_db_connection()
+                    c = conn.cursor()
+                    
+                    # position_history에 진입 기록
+                    c.execute("""INSERT INTO position_history 
+                                (timestamp, symbol, side, amount, entry_price, current_price,
+                                 pnl_usdt, pnl_percent, position_value, required_margin, liquidation_price)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              (datetime.now().isoformat(), symbol, action, orders['adjusted_amount'], 
+                               orders['actual_entry'], orders['actual_entry'],
+                               0, 0,  # 진입 시점 PnL은 0
+                               position_size, position_size / symbol_config.get('leverage', 10),
+                               stop_loss_price))  # 청산가 대신 스탑로스 사용
+                    
+                    conn.commit()
+                    conn.close()
+                    logger.info(f"✅ Position entry recorded to DB: {symbol} {action}")
+                except Exception as db_error:
+                    logger.error(f"❌ DB 기록 실패 (포지션은 정상 진입됨): {db_error}")
+                    # DB 실패해도 포지션 추적은 계속
                 
                 # 알림 전송
                 entry_message = format_position_entry_message(
