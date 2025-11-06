@@ -1,7 +1,20 @@
 #!/usr/bin/env python3
 """
-Public Dashboard v5 - Exchange Direct Version
-거래소 직접 조회와 DB 동기화 기능이 있는 최종 버전
+Public Dashboard v5 - Complete Edition
+거래소 직접 조회, DB 동기화, AI 모니터링 즉시 실행 기능 통합 버전
+
+주요 기능:
+1. 실시간 거래소 포지션 조회
+2. DB 자동 동기화
+3. Performance Analysis (자산 추이, 심볼별 성과, Best/Worst 거래)
+4. AI 모니터링 즉시 실행 버튼
+5. 자동 새로고침
+
+사용 방법:
+    streamlit run public_dashboard_v5.py
+
+작성일: 2025-11-06
+버전: v5.0 Complete
 """
 
 import streamlit as st
@@ -975,6 +988,36 @@ def main():
     with tab4:
         st.header("🤖 AI Monitoring Status")
         
+        # 즉시 AI 모니터링 실행 버튼
+        col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
+        
+        with col_btn1:
+            if st.button("🚀 즉시 AI 모니터링 실행", type="primary", help="현재 포지션에 대해 즉시 AI 모니터링 실행 및 DB 기록"):
+                try:
+                    import requests
+                    response = requests.post('http://localhost:5000/ai-monitor/force', timeout=30)
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        st.success(f"✅ AI 모니터링 완료: {result.get('positions_monitored', 0)}개 포지션 분석")
+                        if result.get('exit_decisions'):
+                            st.warning(f"⚠️ {len(result['exit_decisions'])}개 청산 결정 발생")
+                        st.rerun()
+                    else:
+                        result = response.json()
+                        st.error(f"❌ {result.get('message', 'Unknown error')}")
+                        
+                except requests.exceptions.ConnectionError:
+                    st.error("❌ 봇 서버에 연결할 수 없습니다. 봇이 실행 중인지 확인하세요.")
+                except Exception as e:
+                    st.error(f"❌ 에러 발생: {str(e)}")
+        
+        with col_btn2:
+            if st.button("🔄 새로고침", help="AI 모니터링 기록 새로고침"):
+                st.rerun()
+        
+        st.markdown("---")
+        
         try:
             conn = sqlite3.connect('integrated_trades.db')
             
@@ -999,12 +1042,16 @@ def main():
                 ai_df['timestamp'] = pd.to_datetime(ai_df['timestamp'])
                 ai_df['confidence'] = ai_df['confidence'] * 100
                 
+                # 최근 기록 표시
+                latest_time = ai_df['timestamp'].max()
+                st.info(f"📊 최근 AI 모니터링: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                
                 st.dataframe(
                     ai_df.style.format({'confidence': '{:.1f}%'}),
                     use_container_width=True
                 )
             else:
-                st.info("No AI monitoring records found")
+                st.warning("⚠️ AI 모니터링 기록이 없습니다. 위 버튼을 클릭하여 즉시 실행하세요.")
             
             conn.close()
             
