@@ -377,7 +377,43 @@ SYMBOL_CONFIG = {
         'enabled': True,
         'ai_validation': True,
         'ai_monitoring': True
-    }
+    },
+    'TRUMP/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'SUI/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'WLD/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'GIGGLE/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }  
 }
 
 # 기본 설정
@@ -2524,7 +2560,15 @@ def webhook():
             'ASTERUSDT': 'ASTER/USDT',            
             'ASTERUSDT.P': 'ASTER/USDT',
             'DASHUSDT': 'DASH/USDT',
-            'DASHUSDT.P': 'DASH/USDT'
+            'DASHUSDT.P': 'DASH/USDT',
+            'TRUMPUSDT': 'TRUMP/USDT',
+            'TRUMPUSDT.P': 'TRUMP/USDT',
+            'SUIUSDT': 'SUI/USDT',
+            'SUIUSDT.P': 'SUI/USDT',
+            'WLDUSDT': 'WLD/USDT',
+            'WLDUSDT.P': 'WLD/USDT',
+            'GIGGLEUSDT': 'GIGGLE/USDT',
+            'GIGGLEUSDT.P': 'GIGGLE/USDT'
         }
         
         # 심볼 매핑 적용
