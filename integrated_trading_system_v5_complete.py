@@ -1531,7 +1531,7 @@ def stop_ai_monitoring():
     logger.info("AI position monitoring stopped")
 
 # ============ AI Decision Making (개선 버전) ============
-def ai_validate_signal(symbol, action, market_data, recent_trades_df):
+def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_data=None):
     """
     AI를 사용하여 거래 신호를 검증 - 개선 버전
     Pydantic 검증 및 에러 처리 강화
@@ -1553,6 +1553,14 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df):
 
         # close_position 액션 처리 (별도 로직)
         if action in ['close', 'close_position']:
+            # message_data 문자열 변환
+            message_str = ""
+            if message_data:
+                if isinstance(message_data, dict):
+                    message_str = f"\n**ADDITIONAL SIGNAL DATA:**\n{json.dumps(message_data, ensure_ascii=False, indent=2)}\n"
+                else:
+                    message_str = f"\n**ADDITIONAL SIGNAL DATA:**\n{str(message_data)}\n"
+            
             json_template = """
 {
     "decision": "approve",
@@ -1568,6 +1576,7 @@ You are an expert crypto trading AI validator. Analyze whether to approve closin
 - Symbol: {symbol}
 - Current Price: {market_data['current_price']:.2f}
 - Action: Close Position
+{message_str}
 
 **TECHNICAL INDICATORS:**
 
@@ -1727,6 +1736,14 @@ Your response must be a single JSON object."""
     "confidence": 0.75
 }"""
 
+        # message_data 문자열 변환
+        message_str = ""
+        if message_data:
+            if isinstance(message_data, dict):
+                message_str = f"\n**ADDITIONAL SIGNAL DATA:**\n{json.dumps(message_data, ensure_ascii=False, indent=2)}\n"
+            else:
+                message_str = f"\n**ADDITIONAL SIGNAL DATA:**\n{str(message_data)}\n"
+        
         # 프롬프트 구성
         prompt = f"""
 You are an expert crypto trading AI validator. You need to validate trading signals using technical analysis and return ONLY valid JSON.
@@ -1735,6 +1752,7 @@ You are an expert crypto trading AI validator. You need to validate trading sign
 - Symbol: {symbol}
 - Proposed Action: {action}
 - Current Price: {market_data['current_price']:.2f}
+{message_str}
 
 **TECHNICAL INDICATORS:**
 
@@ -2432,33 +2450,77 @@ def webhook():
     """TradingView 웹훅 수신 및 처리 - 개선 버전"""
     try:
         # JSON 데이터 파싱 (개선된 에러 처리)
-        try:
-            # 일반적인 방법 시도
-            data = request.get_json()
-        except:
-            # 실패하면 raw 데이터를 직접 파싱
+        data = None
+        raw_data = ""
+        
+        # Content-Type 확인
+        content_type = request.headers.get('Content-Type', '')
+        
+        # JSON 파싱 시도
+        if 'application/json' in content_type:
+            try:
+                data = request.get_json(force=True)
+                logger.info(f"JSON 데이터 성공적으로 파싱됨")
+            except Exception as e:
+                logger.warning(f"JSON 파싱 실패, raw 데이터로 재시도: {e}")
+        
+        # JSON 파싱 실패 시 raw 데이터로 처리
+        if data is None:
             raw_data = request.get_data(as_text=True)
             logger.info(f"Raw webhook data (first 500 chars): {raw_data[:500]}")
             
+            # JSON 파싱 재시도
             try:
-                # JSON 파싱 재시도
                 data = json.loads(raw_data)
-            except json.JSONDecodeError:
+                logger.info(f"Raw 데이터에서 JSON 파싱 성공")
+            except json.JSONDecodeError as e:
+                logger.warning(f"JSON 파싱 실패: {e}")
+                
                 # Pine Script 형식(key=value) 파싱 시도
                 try:
-                    data = {}
-                    for line in raw_data.split('\n'):
+                    parsed_data = {}
+                    lines = raw_data.strip().split('\n')
+                    
+                    for line in lines:
+                        line = line.strip()
                         if '=' in line:
                             key, value = line.split('=', 1)
-                            data[key.strip()] = value.strip()
-                    logger.info(f"Parsed Pine Script format data: {data}")
-                except:
-                    logger.error(f"Failed to parse webhook data: {raw_data[:200]}")
+                            key = key.strip()
+                            value = value.strip()
+                            
+                            # 값 타입 변환
+                            if value.lower() in ['true', 'false']:
+                                parsed_data[key] = value.lower() == 'true'
+                            elif value.lower() in ['null', 'none']:
+                                parsed_data[key] = None
+                            else:
+                                try:
+                                    # 숫자 변환 시도
+                                    if '.' in value:
+                                        parsed_data[key] = float(value)
+                                    else:
+                                        parsed_data[key] = int(value)
+                                except ValueError:
+                                    # 문자열로 저장
+                                    parsed_data[key] = value.strip('"').strip("'")
+                    
+                    if parsed_data:
+                        data = parsed_data
+                        logger.info(f"Pine Script format 파싱 성공: {list(data.keys())}")
+                    else:
+                        logger.error(f"Pine Script 파싱 실패 - 빈 데이터")
+                        return jsonify({'error': 'Failed to parse webhook data'}), 400
+                        
+                except Exception as pe:
+                    logger.error(f"Pine Script 파싱 오류: {pe}")
                     return jsonify({'error': 'Invalid data format'}), 400
         
         # 기본 검증
         if not data:
+            logger.error("No data received in webhook")
             return jsonify({'error': 'No data received'}), 400
+        
+        logger.info(f"최종 파싱된 데이터 키: {list(data.keys())}")
         
         # null 안전 파싱 - 모든 필드에 대해 null/None 처리
         def safe_get_float(data, key, default=None):
@@ -2488,7 +2550,7 @@ def webhook():
         position_type = data.get('position_type', 'normal')
         exit_reason = data.get('exit_reason', 'manual')
         
-        message = data if data else json.dumps(data, ensure_ascii=False)
+        message = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
         
         logger.info(f"웹훅 수신 - 심볼: {symbol}, 액션: {action}")
         logger.debug(f"파싱된 가격: entry={entry_price}, sl={stop_loss}, tp={take_profit}")
@@ -2611,7 +2673,7 @@ def webhook():
             conn.close()
             
             # AI 검증 (close_position 포함)
-            ai_decision = ai_validate_signal(symbol, action, market_data, recent_trades)
+            ai_decision = ai_validate_signal(symbol, action, market_data, recent_trades, message_data=data)
             
             if not ai_decision:
                 return jsonify({'error': 'AI validation failed'}), 500
