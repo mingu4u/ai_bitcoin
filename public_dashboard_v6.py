@@ -828,7 +828,7 @@ def calculate_lifetime_performance(current_balance, lifetime_start_balance):
             'win_rate': 0.0
         }
 
-def get_equity_history(current_balance, days=None):
+def get_equity_history(current_balance, days=None, lifetime_start_balance=None):
     """자산 추이 데이터 생성"""
     try:
         conn = sqlite3.connect('integrated_trades.db')
@@ -849,21 +849,57 @@ def get_equity_history(current_balance, days=None):
         conn.close()
         
         if df.empty:
+            # 거래 데이터가 없는 경우
+            if days is None and lifetime_start_balance is not None:
+                # 전체 기간인데 거래가 없으면 lifetime_start_balance부터 시작
+                return pd.DataFrame({
+                    'close_timestamp': [datetime.now()],
+                    'balance': [current_balance]
+                })
             return pd.DataFrame()
         
         df['close_timestamp'] = pd.to_datetime(df['close_timestamp'])
-        df['balance'] = current_balance - df['reverse_cumulative_pnl']
         
-        # 현재 시점 추가
-        current_row = pd.DataFrame({
-            'close_timestamp': [datetime.now()],
-            'balance': [current_balance]
-        })
-        
-        result_df = pd.concat([
-            df[['close_timestamp', 'balance']], 
-            current_row
-        ]).sort_values('close_timestamp')
+        # 전체 기간이고 lifetime_start_balance가 제공된 경우
+        if days is None and lifetime_start_balance is not None:
+            # 모든 거래의 PnL 합계
+            total_pnl_from_trades = df['pnl_usdt'].sum()
+            # 시작 잔고 = lifetime_start_balance
+            df['balance'] = lifetime_start_balance + df['pnl_usdt'].cumsum()
+            
+            # 시작점 추가 (첫 거래 이전)
+            first_trade_time = df['close_timestamp'].min()
+            start_row = pd.DataFrame({
+                'close_timestamp': [first_trade_time - timedelta(minutes=1)],
+                'balance': [lifetime_start_balance]
+            })
+            
+            # 현재 시점 추가
+            current_row = pd.DataFrame({
+                'close_timestamp': [datetime.now()],
+                'balance': [current_balance]
+            })
+            
+            result_df = pd.concat([
+                start_row,
+                df[['close_timestamp', 'balance']], 
+                current_row
+            ]).sort_values('close_timestamp').reset_index(drop=True)
+            
+        else:
+            # 특정 기간인 경우 (기존 로직)
+            df['balance'] = current_balance - df['reverse_cumulative_pnl']
+            
+            # 현재 시점 추가
+            current_row = pd.DataFrame({
+                'close_timestamp': [datetime.now()],
+                'balance': [current_balance]
+            })
+            
+            result_df = pd.concat([
+                df[['close_timestamp', 'balance']], 
+                current_row
+            ]).sort_values('close_timestamp').reset_index(drop=True)
         
         return result_df
         
@@ -1156,7 +1192,12 @@ def main():
             }
             
             selected_days = period_days_map[period_selector]
-            equity_df = get_equity_history(current_balance, selected_days)
+            
+            # 전체 기간 선택 시 lifetime_start_balance 전달
+            if selected_days is None:
+                equity_df = get_equity_history(current_balance, selected_days, lifetime_start_balance)
+            else:
+                equity_df = get_equity_history(current_balance, selected_days)
             
             if not equity_df.empty:
                 # 메트릭 표시
@@ -1170,7 +1211,11 @@ def main():
                     st.metric("💰 Current Balance", f"${current_balance:.2f}")
                 
                 with col_m2:
-                    st.metric("🎯 Initial Balance", f"${initial_balance:.2f}")
+                    # 전체 기간일 때는 Lifetime 시작 잔고 표시, 아니면 초기 잔고
+                    if selected_days is None:
+                        st.metric("🎯 Lifetime Start Balance", f"${lifetime_start_balance:.2f}")
+                    else:
+                        st.metric("🎯 Initial Balance", f"${initial_balance:.2f}")
                 
                 with col_m3:
                     st.metric("📅 Period Start", f"${start_balance:.2f}")
@@ -1196,26 +1241,37 @@ def main():
                     marker=dict(size=6)
                 ))
                 
-                # 초기 잔고 기준선
-                fig_equity.add_hline(
-                    y=initial_balance,
-                    line_dash="dash",
-                    line_color="purple",
-                    opacity=0.7,
-                    annotation_text=f"Initial: ${initial_balance:.2f}",
-                    annotation_position="right"
-                )
-                
-                # 기간 시작 기준선
-                if start_balance != initial_balance:
+                # 전체 기간일 때는 Lifetime 시작 잔고 기준선 표시
+                if selected_days is None:
                     fig_equity.add_hline(
-                        y=start_balance,
-                        line_dash="dot",
-                        line_color="gray",
-                        opacity=0.5,
-                        annotation_text=f"Period Start: ${start_balance:.2f}",
-                        annotation_position="left"
+                        y=lifetime_start_balance,
+                        line_dash="dash",
+                        line_color="purple",
+                        opacity=0.7,
+                        annotation_text=f"Lifetime Start: ${lifetime_start_balance:.2f}",
+                        annotation_position="right"
                     )
+                else:
+                    # 특정 기간일 때는 초기 잔고 기준선 표시
+                    fig_equity.add_hline(
+                        y=initial_balance,
+                        line_dash="dash",
+                        line_color="purple",
+                        opacity=0.7,
+                        annotation_text=f"Initial: ${initial_balance:.2f}",
+                        annotation_position="right"
+                    )
+                    
+                    # 기간 시작 기준선 (초기 잔고와 다른 경우만)
+                    if abs(start_balance - initial_balance) > 1:
+                        fig_equity.add_hline(
+                            y=start_balance,
+                            line_dash="dot",
+                            line_color="gray",
+                            opacity=0.5,
+                            annotation_text=f"Period Start: ${start_balance:.2f}",
+                            annotation_position="left"
+                        )
                 
                 fig_equity.update_layout(
                     title=f"Account Equity Growth - {period_selector}",
