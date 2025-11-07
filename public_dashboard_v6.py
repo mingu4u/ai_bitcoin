@@ -205,6 +205,68 @@ def get_or_set_initial_balance(balance=None):
         st.error(f"초기 잔고 조회/설정 오류: {e}")
         return None
 
+def get_or_set_lifetime_start_balance(balance=None):
+    """Lifetime 시작 잔고 가져오기 또는 설정"""
+    try:
+        conn = sqlite3.connect('integrated_trades.db')
+        cursor = conn.cursor()
+        
+        # 기존 lifetime 시작 잔고 조회
+        cursor.execute("""
+            SELECT config_value FROM account_config 
+            WHERE config_key = 'lifetime_start_balance'
+        """)
+        
+        result = cursor.fetchone()
+        
+        if result:
+            conn.close()
+            return float(result[0])
+        elif balance is not None:
+            # 새로 설정
+            cursor.execute("""
+                INSERT INTO account_config (config_key, config_value, updated_at)
+                VALUES ('lifetime_start_balance', ?, ?)
+            """, (str(balance), datetime.now().isoformat()))
+            
+            conn.commit()
+            conn.close()
+            return balance
+        else:
+            conn.close()
+            return None
+            
+    except Exception as e:
+        st.error(f"Lifetime 시작 잔고 조회/설정 오류: {e}")
+        return None
+
+def reset_lifetime_start_balance(new_balance):
+    """Lifetime 시작 잔고 리셋"""
+    try:
+        conn = sqlite3.connect('integrated_trades.db')
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            UPDATE account_config 
+            SET config_value = ?, updated_at = ?
+            WHERE config_key = 'lifetime_start_balance'
+        """, (str(new_balance), datetime.now().isoformat()))
+        
+        if cursor.rowcount == 0:
+            # 없으면 새로 삽입
+            cursor.execute("""
+                INSERT INTO account_config (config_key, config_value, updated_at)
+                VALUES ('lifetime_start_balance', ?, ?)
+            """, (str(new_balance), datetime.now().isoformat()))
+        
+        conn.commit()
+        conn.close()
+        return True
+        
+    except Exception as e:
+        st.error(f"Lifetime 시작 잔고 리셋 오류: {e}")
+        return False
+
 def reset_initial_balance(new_balance):
     """초기 잔고 리셋"""
     try:
@@ -714,7 +776,7 @@ def calculate_period_performance(current_balance, initial_balance, days):
             'win_rate': 0.0
         }
 
-def calculate_lifetime_performance(current_balance, initial_balance):
+def calculate_lifetime_performance(current_balance, lifetime_start_balance):
     """전체 기간 성과 계산"""
     try:
         conn = sqlite3.connect('integrated_trades.db')
@@ -731,9 +793,12 @@ def calculate_lifetime_performance(current_balance, initial_balance):
         conn.close()
         
         if df.empty or df.iloc[0]['total_pnl'] is None:
+            # DB에 거래 기록이 없으면 current_balance - lifetime_start_balance로 계산
+            total_pnl = current_balance - lifetime_start_balance
+            lifetime_pct = (total_pnl / lifetime_start_balance * 100) if lifetime_start_balance > 0 else 0.0
             return {
-                'lifetime_pnl': 0.0,
-                'lifetime_pct': 0.0,
+                'lifetime_pnl': total_pnl,
+                'lifetime_pct': lifetime_pct,
                 'trades': 0,
                 'win_rate': 0.0
             }
@@ -742,11 +807,13 @@ def calculate_lifetime_performance(current_balance, initial_balance):
         trades = int(df.iloc[0]['trades'])
         wins = int(df.iloc[0]['wins'])
         
-        lifetime_pct = ((current_balance - initial_balance) / initial_balance * 100) if initial_balance > 0 else 0.0
+        # Lifetime 수익률 = (현재 잔고 - Lifetime 시작 잔고) / Lifetime 시작 잔고 * 100
+        lifetime_gain = current_balance - lifetime_start_balance
+        lifetime_pct = (lifetime_gain / lifetime_start_balance * 100) if lifetime_start_balance > 0 else 0.0
         win_rate = (wins / trades * 100) if trades > 0 else 0.0
         
         return {
-            'lifetime_pnl': total_pnl,
+            'lifetime_pnl': lifetime_gain,  # 실제 총 수익 (현재 잔고 - 시작 잔고)
             'lifetime_pct': lifetime_pct,
             'trades': trades,
             'win_rate': win_rate
@@ -819,31 +886,58 @@ def main():
     st.sidebar.header("⚙️ Settings")
     
     # 초기 잔고 설정
-    st.sidebar.subheader("💰 Initial Balance")
+    st.sidebar.subheader("💰 Account Balance")
     
     current_balance = get_account_balance()
     initial_balance = get_or_set_initial_balance()
+    lifetime_start_balance = get_or_set_lifetime_start_balance()
     
     if initial_balance is None and current_balance is not None:
         # 처음 실행 시 현재 잔고를 초기 잔고로 설정
         initial_balance = get_or_set_initial_balance(current_balance)
         st.sidebar.success(f"초기 잔고 설정: ${initial_balance:.2f}")
     
+    if lifetime_start_balance is None and current_balance is not None:
+        # Lifetime 시작 잔고도 처음에는 현재 잔고로 설정
+        lifetime_start_balance = get_or_set_lifetime_start_balance(current_balance)
+        st.sidebar.success(f"Lifetime 시작 잔고 설정: ${lifetime_start_balance:.2f}")
+    
     if initial_balance:
         st.sidebar.info(f"💎 초기 잔고: ${initial_balance:.2f}")
+    
+    if lifetime_start_balance:
+        st.sidebar.info(f"🌟 Lifetime 시작 잔고: ${lifetime_start_balance:.2f}")
         
-        # 초기 잔고 리셋 옵션
-        with st.sidebar.expander("🔧 초기 잔고 재설정"):
-            new_balance = st.number_input(
+        # 잔고 설정 옵션
+        with st.sidebar.expander("🔧 잔고 재설정"):
+            st.markdown("**초기 잔고 (기본 기준)**")
+            new_initial = st.number_input(
                 "새 초기 잔고",
                 min_value=0.0,
                 value=float(initial_balance),
-                step=100.0
+                step=100.0,
+                key="new_initial"
             )
             
-            if st.button("💾 저장"):
-                if reset_initial_balance(new_balance):
+            if st.button("💾 초기 잔고 저장", key="save_initial"):
+                if reset_initial_balance(new_initial):
                     st.success("✅ 초기 잔고가 업데이트되었습니다!")
+                    st.rerun()
+            
+            st.markdown("---")
+            st.markdown("**Lifetime 시작 잔고** (전체 수익률 계산용)")
+            new_lifetime = st.number_input(
+                "Lifetime 시작 잔고",
+                min_value=0.0,
+                value=float(lifetime_start_balance),
+                step=100.0,
+                key="new_lifetime",
+                help="트레이딩을 시작했을 때의 잔고를 입력하세요"
+            )
+            
+            if st.button("💾 Lifetime 시작 잔고 저장", key="save_lifetime"):
+                if reset_lifetime_start_balance(new_lifetime):
+                    st.success("✅ Lifetime 시작 잔고가 업데이트되었습니다!")
                     st.rerun()
     
     st.sidebar.markdown("---")
@@ -986,7 +1080,7 @@ def main():
     with tab3:
         st.header("📈 Performance Analysis")
         
-        if current_balance is None or initial_balance is None:
+        if current_balance is None or initial_balance is None or lifetime_start_balance is None:
             st.error("⚠️ 잔고 정보를 가져올 수 없습니다. API 키를 확인해주세요.")
             return
         
@@ -1007,7 +1101,7 @@ def main():
             
             # Lifetime 성과
             with cols[0]:
-                lifetime_perf = calculate_lifetime_performance(current_balance, initial_balance)
+                lifetime_perf = calculate_lifetime_performance(current_balance, lifetime_start_balance)
                 
                 st.markdown(f"""
                 <div class="period-card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
