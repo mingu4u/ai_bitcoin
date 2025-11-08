@@ -451,6 +451,30 @@ def get_exchange():
         return None
 
 @st.cache_data(ttl=10)
+def normalize_symbol(symbol):
+    """심볼 정규화 - BTC/USDT/USDT → BTC/USDT, BTCUSDT → BTC/USDT 등"""
+    if not symbol:
+        return symbol
+    
+    # :USDT → /USDT 변환
+    if symbol.endswith(':USDT'):
+        symbol = symbol.replace(':USDT', '/USDT')
+    
+    # /USDT/USDT → /USDT (중복 제거)
+    if symbol.endswith('/USDT/USDT'):
+        symbol = symbol.replace('/USDT/USDT', '/USDT')
+    
+    # 이미 정상적인 형태면 그대로 반환
+    if '/' in symbol and symbol.count('/') == 1:
+        return symbol
+    
+    # BTCUSDT → BTC/USDT 형식 변환
+    if 'USDT' in symbol and '/' not in symbol:
+        base = symbol.replace('USDT', '').replace('.P', '').replace('.p', '')
+        return f"{base}/USDT"
+    
+    return symbol
+
 def get_exchange_positions():
     """거래소에서 직접 포지션 조회"""
     exchange = get_exchange()
@@ -463,9 +487,8 @@ def get_exchange_positions():
         
         for pos in positions:
             if pos['contracts'] > 0:
-                symbol = pos['symbol']
-                if symbol.endswith(':USDT'):
-                    symbol = symbol.replace(':USDT', '/USDT')
+                # 심볼 정규화
+                symbol = normalize_symbol(pos['symbol'])
                 
                 active_positions.append({
                     'symbol': symbol,
@@ -545,7 +568,7 @@ def get_account_balance():
 # ==========================================
 
 def compare_positions(exchange_df, db_df):
-    """거래소와 DB 포지션 비교"""
+    """거래소와 DB 포지션 비교 - 심볼 정규화 적용"""
     comparison = {
         'matched': [],
         'exchange_only': [],
@@ -556,43 +579,74 @@ def compare_positions(exchange_df, db_df):
     if exchange_df.empty and db_df.empty:
         return comparison
     
-    exchange_symbols = set(exchange_df['symbol'].tolist()) if not exchange_df.empty else set()
-    db_symbols = set(db_df['symbol'].tolist()) if not db_df.empty else set()
+    # 심볼 정규화 적용
+    exchange_symbols = set()
+    if not exchange_df.empty:
+        exchange_symbols = set(normalize_symbol(s) for s in exchange_df['symbol'].tolist())
+    
+    db_symbols = set()
+    if not db_df.empty:
+        db_symbols = set(normalize_symbol(s) for s in db_df['symbol'].tolist())
     
     matched_symbols = exchange_symbols & db_symbols
     for symbol in matched_symbols:
-        ex_pos = exchange_df[exchange_df['symbol'] == symbol].iloc[0]
-        db_pos = db_df[db_df['symbol'] == symbol].iloc[0]
+        # 정규화된 심볼로 검색
+        ex_pos = None
+        for _, row in exchange_df.iterrows():
+            if normalize_symbol(row['symbol']) == symbol:
+                ex_pos = row
+                break
         
-        amount_match = abs(ex_pos['contracts'] - db_pos['contracts']) < 0.0001
+        db_pos = None
+        for _, row in db_df.iterrows():
+            if normalize_symbol(row['symbol']) == symbol:
+                db_pos = row
+                break
         
-        comparison['matched'].append({
-            'symbol': symbol,
-            'exchange_amount': ex_pos['contracts'],
-            'db_amount': db_pos['contracts'],
-            'amount_match': amount_match,
-            'exchange_pnl': ex_pos['unrealized_pnl'],
-            'db_pnl': db_pos['unrealized_pnl']
-        })
-        
-        if not amount_match:
-            comparison['mismatched'].append(symbol)
+        if ex_pos is not None and db_pos is not None:
+            amount_match = abs(ex_pos['contracts'] - db_pos['contracts']) < 0.0001
+            
+            comparison['matched'].append({
+                'symbol': symbol,
+                'exchange_amount': ex_pos['contracts'],
+                'db_amount': db_pos['contracts'],
+                'amount_match': amount_match,
+                'exchange_pnl': ex_pos['unrealized_pnl'],
+                'db_pnl': db_pos['unrealized_pnl']
+            })
+            
+            if not amount_match:
+                comparison['mismatched'].append(symbol)
     
     for symbol in exchange_symbols - db_symbols:
-        ex_pos = exchange_df[exchange_df['symbol'] == symbol].iloc[0]
-        comparison['exchange_only'].append({
-            'symbol': symbol,
-            'amount': ex_pos['contracts'],
-            'pnl': ex_pos['unrealized_pnl']
-        })
+        # 정규화된 심볼로 검색
+        ex_pos = None
+        for _, row in exchange_df.iterrows():
+            if normalize_symbol(row['symbol']) == symbol:
+                ex_pos = row
+                break
+        
+        if ex_pos is not None:
+            comparison['exchange_only'].append({
+                'symbol': symbol,
+                'amount': ex_pos['contracts'],
+                'pnl': ex_pos['unrealized_pnl']
+            })
     
     for symbol in db_symbols - exchange_symbols:
-        db_pos = db_df[db_df['symbol'] == symbol].iloc[0]
-        comparison['db_only'].append({
-            'symbol': symbol,
-            'amount': db_pos['contracts'],
-            'last_update': db_pos.get('timestamp', 'Unknown')
-        })
+        # 정규화된 심볼로 검색
+        db_pos = None
+        for _, row in db_df.iterrows():
+            if normalize_symbol(row['symbol']) == symbol:
+                db_pos = row
+                break
+        
+        if db_pos is not None:
+            comparison['db_only'].append({
+                'symbol': symbol,
+                'amount': db_pos['contracts'],
+                'last_update': db_pos.get('timestamp', 'Unknown')
+            })
     
     return comparison
 
@@ -674,30 +728,47 @@ def display_sync_status(comparison):
                 st.rerun()
 
 def display_combined_positions(exchange_df, db_df):
-    """통합 포지션 표시"""
+    """통합 포지션 표시 - 중복 제거 (LIVE 우선)"""
     st.subheader("📍 Active Positions")
     
     if exchange_df.empty and db_df.empty:
         st.info("활성 포지션이 없습니다")
         return
     
-    all_symbols = set()
-    if not exchange_df.empty:
-        all_symbols.update(exchange_df['symbol'].tolist())
-    if not db_df.empty:
-        all_symbols.update(db_df['symbol'].tolist())
+    # 심볼별로 포지션 통합 (LIVE 우선)
+    positions_dict = {}
     
-    for symbol in sorted(all_symbols):
+    # 1. DB 포지션 먼저 추가
+    if not db_df.empty:
+        for _, row in db_df.iterrows():
+            symbol = normalize_symbol(row['symbol'])
+            positions_dict[symbol] = {
+                'data': row,
+                'source': 'DB'
+            }
+    
+    # 2. Exchange 포지션으로 덮어쓰기 (우선순위 높음)
+    if not exchange_df.empty:
+        for _, row in exchange_df.iterrows():
+            symbol = normalize_symbol(row['symbol'])
+            positions_dict[symbol] = {
+                'data': row,
+                'source': 'LIVE'
+            }
+    
+    # 3. 통합된 포지션 표시
+    for symbol in sorted(positions_dict.keys()):
+        pos_info = positions_dict[symbol]
+        pos = pos_info['data']
+        source = pos_info['source']
+        
         col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 1])
         
-        if not exchange_df.empty and symbol in exchange_df['symbol'].values:
-            pos = exchange_df[exchange_df['symbol'] == symbol].iloc[0]
+        # 소스 배지 설정
+        if source == 'LIVE':
             source_badge = '<span class="exchange-badge">LIVE</span>'
-        elif not db_df.empty and symbol in db_df['symbol'].values:
-            pos = db_df[db_df['symbol'] == symbol].iloc[0]
-            source_badge = '<span class="db-badge">DB</span>'
         else:
-            continue
+            source_badge = '<span class="db-badge">DB</span>'
         
         with col1:
             side_emoji = "🟢" if pos['side'] in ['buy', 'long'] else "🔴"
