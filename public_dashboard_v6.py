@@ -728,7 +728,7 @@ def display_sync_status(comparison):
                 st.rerun()
 
 def display_combined_positions(exchange_df, db_df):
-    """통합 포지션 표시 - 중복 제거 (LIVE 우선)"""
+    """통합 포지션 표시 - 개선된 UI (명확한 레이블)"""
     st.subheader("📍 Active Positions")
     
     if exchange_df.empty and db_df.empty:
@@ -757,41 +757,91 @@ def display_combined_positions(exchange_df, db_df):
             }
     
     # 3. 통합된 포지션 표시
-    for symbol in sorted(positions_dict.keys()):
+    for idx, symbol in enumerate(sorted(positions_dict.keys())):
         pos_info = positions_dict[symbol]
         pos = pos_info['data']
         source = pos_info['source']
         
-        col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1, 1, 1])
+        # 포지션 카드 스타일
+        st.markdown(f"""
+        <div style="background: #f8f9fa; border-radius: 10px; padding: 15px; margin: 10px 0; border-left: 4px solid {'#28a745' if pos['side'] in ['buy', 'long'] else '#dc3545'};">
+        """, unsafe_allow_html=True)
         
-        # 소스 배지 설정
+        col1, col2, col3, col4, col5, col6 = st.columns([2, 1, 1, 1.2, 1, 1])
+        
+        # uczęśćSOURCE 배지 설정
         if source == 'LIVE':
-            source_badge = '<span class="exchange-badge">LIVE</span>'
+            source_badge = '<span style="background: #007bff; color: white; padding: 2px 8px; border-radius: 3px; font-size: 0.75em;">LIVE</span>'
         else:
-            source_badge = '<span class="db-badge">DB</span>'
+            source_badge = '<span style="background: #6c757d; color: white; padding: 2px 8px; border-radius: 3px; font-size: 0.75em;">DB</span>'
         
         with col1:
+            st.markdown("**Symbol / Direction**")
             side_emoji = "🟢" if pos['side'] in ['buy', 'long'] else "🔴"
+            side_text = "LONG" if pos['side'] in ['buy', 'long'] else "SHORT"
             st.markdown(f"{side_emoji} **{symbol}** {source_badge}", unsafe_allow_html=True)
+            st.caption(f"Direction: {side_text}")
         
         with col2:
-            st.metric("Entry", f"${pos['entry_price']:.2f}", label_visibility="collapsed")
+            st.markdown("**Entry Price**")
+            st.markdown(f"<span style='font-size: 1.2em; font-weight: bold;'>${pos['entry_price']:,.2f}</span>", unsafe_allow_html=True)
         
         with col3:
-            st.metric("Current", f"${pos['mark_price']:.2f}", label_visibility="collapsed")
+            st.markdown("**Current Price**")
+            current_price = pos['mark_price']
+            price_change = current_price - pos['entry_price']
+            price_change_pct = (price_change / pos['entry_price'] * 100) if pos['entry_price'] > 0 else 0
+            
+            price_color = "green" if price_change >= 0 else "red"
+            st.markdown(f"<span style='font-size: 1.2em; font-weight: bold;'>${current_price:,.2f}</span>", unsafe_allow_html=True)
+            st.markdown(f"<span style='color: {price_color}; font-size: 0.85em;'>({price_change_pct:+.2f}%)</span>", unsafe_allow_html=True)
         
         with col4:
+            st.markdown("**Unrealized PnL**")
             pnl = pos['unrealized_pnl']
             pnl_pct = pos['pnl_percent']
-            color = "green" if pnl >= 0 else "red"
-            st.markdown(f'<span style="color:{color}">${pnl:.2f} ({pnl_pct:.2f}%)</span>', unsafe_allow_html=True)
+            
+            # PnL 색상 및 이모지
+            if pnl >= 0:
+                pnl_color = "#28a745"
+                pnl_emoji = "📈"
+            else:
+                pnl_color = "#dc3545"
+                pnl_emoji = "📉"
+            
+            st.markdown(f"""
+                <div>
+                    {pnl_emoji} <span style="color:{pnl_color}; font-weight: bold; font-size: 1.2em;">
+                        ${pnl:+,.2f}
+                    </span>
+                    <br>
+                    <span style="color:{pnl_color}; font-size: 0.85em;">
+                        ({pnl_pct:+.2f}%)
+                    </span>
+                </div>
+            """, unsafe_allow_html=True)
         
         with col5:
-            st.metric("Size", f"{pos['contracts']:.4f}", label_visibility="collapsed")
+            st.markdown("**Position Size**")
+            st.markdown(f"<span style='font-size: 1.1em; font-weight: bold;'>{pos['contracts']:.4f}</span>", unsafe_allow_html=True)
+            # 포지션 가치 표시
+            position_value = pos['contracts'] * pos['mark_price']
+            st.caption(f"Value: ${position_value:,.2f}")
         
         with col6:
-            if 'margin' in pos:
-                st.metric("Margin", f"${pos['margin']:.2f}", label_visibility="collapsed")
+            st.markdown("**Margin Used**")
+            if 'margin' in pos and pos['margin'] > 0:
+                margin = pos['margin']
+                st.markdown(f"<span style='font-size: 1.1em; font-weight: bold;'>${margin:,.2f}</span>", unsafe_allow_html=True)
+                # 레버리지 계산 및 표시
+                if margin > 0:
+                    position_value = pos['contracts'] * pos['mark_price']
+                    leverage = position_value / margin
+                    st.caption(f"Leverage: {leverage:.1f}x")
+            else:
+                st.markdown("—")
+        
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # ==========================================
 # 다중 기간 성과 분석 함수
