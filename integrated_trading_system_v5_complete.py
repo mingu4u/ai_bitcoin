@@ -2447,7 +2447,7 @@ def format_position_entry_message(symbol, action, amount, entry_price, sl, tp, p
 # ============ Flask Routes ============
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """TradingView 웹훅 수신 및 처리 - 개선 버전"""
+    """TradingView 웹훅 수신 및 처리 - 개선 버전 (강력한 파싱)"""
     try:
         # JSON 데이터 파싱 (개선된 에러 처리)
         data = None
@@ -2460,67 +2460,129 @@ def webhook():
         if 'application/json' in content_type:
             try:
                 data = request.get_json(force=True)
-                logger.info(f"JSON 데이터 성공적으로 파싱됨")
+                logger.info(f"✅ JSON 데이터 성공적으로 파싱됨")
             except Exception as e:
-                logger.warning(f"JSON 파싱 실패, raw 데이터로 재시도: {e}")
+                logger.warning(f"⚠️ JSON 파싱 실패, raw 데이터로 재시도: {e}")
         
         # JSON 파싱 실패 시 raw 데이터로 처리
         if data is None:
             raw_data = request.get_data(as_text=True)
-            logger.info(f"Raw webhook data (first 500 chars): {raw_data[:500]}")
+            logger.info(f"📥 Raw webhook data (first 500 chars): {raw_data[:500]}")
             
-            # JSON 파싱 재시도
+            # === 1단계: JSON 정리 및 파싱 ===
             try:
-                data = json.loads(raw_data)
-                logger.info(f"Raw 데이터에서 JSON 파싱 성공")
-            except json.JSONDecodeError as e:
-                logger.warning(f"JSON 파싱 실패: {e}")
+                # TradingView Pine Script에서 생성된 잘못된 JSON 수정
+                # 예: "value":-0.2294" → "value":-0.2294
+                cleaned_data = re.sub(r'":(-?\d+\.?\d*)"', r'":\1', raw_data)
+                # 숫자 뒤의 불필요한 따옴표 제거
+                cleaned_data = re.sub(r'(\d)"([,}])', r'\1\2', cleaned_data)
                 
-                # Pine Script 형식(key=value) 파싱 시도
+                data = json.loads(cleaned_data)
+                logger.info(f"✅ 정리된 데이터에서 JSON 파싱 성공")
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️ 정리 후에도 JSON 파싱 실패: {e}")
+                
+                # === 2단계: 정규식으로 필수 필드 추출 ===
                 try:
+                    logger.info(f"🔍 정규식 기반 필수 필드 추출 시도...")
                     parsed_data = {}
-                    lines = raw_data.strip().split('\n')
                     
-                    for line in lines:
-                        line = line.strip()
-                        if '=' in line:
-                            key, value = line.split('=', 1)
-                            key = key.strip()
-                            value = value.strip()
-                            
-                            # 값 타입 변환
-                            if value.lower() in ['true', 'false']:
-                                parsed_data[key] = value.lower() == 'true'
-                            elif value.lower() in ['null', 'none']:
-                                parsed_data[key] = None
-                            else:
+                    # 필수 필드 패턴 정의
+                    patterns = {
+                        'action': r'"action"\s*:\s*"([^"]+)"',
+                        'symbol': r'"symbol"\s*:\s*"([^"]+)"',
+                        'entry_price': r'"entry_price"\s*:\s*(-?\d+\.?\d*)',
+                        'stop_loss': r'"stop_loss"\s*:\s*(-?\d+\.?\d*)',
+                        'take_profit': r'"take_profit"\s*:\s*(-?\d+\.?\d*)',
+                        'position_type': r'"position_type"\s*:\s*"([^"]+)"',
+                        'exit_price': r'"exit_price"\s*:\s*(-?\d+\.?\d*)',
+                        'profit_percent': r'"profit_percent"\s*:\s*(-?\d+\.?\d*)',
+                        'exit_reason': r'"exit_reason"\s*:\s*"([^"]+)"',
+                        'trailing_stop_percent': r'"trailing_stop_percent"\s*:\s*(null|"null"|-?\d+\.?\d*)',
+                        'trailing_activation_percent': r'"trailing_activation_percent"\s*:\s*(null|"null"|-?\d+\.?\d*)'
+                    }
+                    
+                    # 각 필드 추출
+                    for key, pattern in patterns.items():
+                        match = re.search(pattern, raw_data, re.IGNORECASE)
+                        if match:
+                            value = match.group(1)
+                            # 숫자 필드 변환
+                            if key in ['entry_price', 'stop_loss', 'take_profit', 'exit_price', 'profit_percent']:
                                 try:
-                                    # 숫자 변환 시도
-                                    if '.' in value:
+                                    parsed_data[key] = float(value)
+                                except:
+                                    parsed_data[key] = None
+                            elif key in ['trailing_stop_percent', 'trailing_activation_percent']:
+                                if value in ['null', '"null"']:
+                                    parsed_data[key] = None
+                                else:
+                                    try:
                                         parsed_data[key] = float(value)
-                                    else:
-                                        parsed_data[key] = int(value)
-                                except ValueError:
-                                    # 문자열로 저장
-                                    parsed_data[key] = value.strip('"').strip("'")
+                                    except:
+                                        parsed_data[key] = None
+                            else:
+                                parsed_data[key] = value
                     
-                    if parsed_data:
+                    # 필수 필드 검증
+                    required_fields = ['action', 'symbol']
+                    if all(field in parsed_data for field in required_fields):
                         data = parsed_data
-                        logger.info(f"Pine Script format 파싱 성공: {list(data.keys())}")
+                        logger.info(f"✅ 정규식 파싱 성공! 추출된 필드: {list(data.keys())}")
                     else:
-                        logger.error(f"Pine Script 파싱 실패 - 빈 데이터")
-                        return jsonify({'error': 'Failed to parse webhook data'}), 400
+                        missing = [f for f in required_fields if f not in parsed_data]
+                        logger.error(f"❌ 필수 필드 누락: {missing}")
                         
-                except Exception as pe:
-                    logger.error(f"Pine Script 파싱 오류: {pe}")
-                    return jsonify({'error': 'Invalid data format'}), 400
+                        # === 3단계: Pine Script 형식(key=value) 파싱 시도 ===
+                        try:
+                            logger.info(f"🔍 Pine Script format 파싱 시도...")
+                            parsed_data = {}
+                            lines = raw_data.strip().split('\n')
+                            
+                            for line in lines:
+                                line = line.strip()
+                                if '=' in line:
+                                    key, value = line.split('=', 1)
+                                    key = key.strip()
+                                    value = value.strip()
+                                    
+                                    # 값 타입 변환
+                                    if value.lower() in ['true', 'false']:
+                                        parsed_data[key] = value.lower() == 'true'
+                                    elif value.lower() in ['null', 'none', '']:
+                                        parsed_data[key] = None
+                                    else:
+                                        try:
+                                            # 숫자 변환 시도
+                                            if '.' in value:
+                                                parsed_data[key] = float(value)
+                                            else:
+                                                parsed_data[key] = int(value)
+                                        except ValueError:
+                                            # 문자열로 저장
+                                            parsed_data[key] = value.strip('"').strip("'")
+                            
+                            if parsed_data and all(field in parsed_data for field in required_fields):
+                                data = parsed_data
+                                logger.info(f"✅ Pine Script format 파싱 성공: {list(data.keys())}")
+                            else:
+                                logger.error(f"❌ Pine Script 파싱 실패 - 필수 필드 없음")
+                                return jsonify({'error': 'Failed to parse webhook data - missing required fields'}), 400
+                                
+                        except Exception as pe:
+                            logger.error(f"❌ Pine Script 파싱 오류: {pe}")
+                            return jsonify({'error': 'Invalid data format'}), 400
+                        
+                except Exception as regex_error:
+                    logger.error(f"❌ 정규식 파싱 오류: {regex_error}")
+                    return jsonify({'error': 'Failed to extract required fields'}), 400
         
         # 기본 검증
         if not data:
-            logger.error("No data received in webhook")
+            logger.error("❌ No data received in webhook")
             return jsonify({'error': 'No data received'}), 400
         
-        logger.info(f"최종 파싱된 데이터 키: {list(data.keys())}")
+        logger.info(f"📋 최종 파싱된 데이터 키: {list(data.keys())}")
         
         # null 안전 파싱 - 모든 필드에 대해 null/None 처리
         def safe_get_float(data, key, default=None):
@@ -2531,6 +2593,7 @@ def webhook():
             try:
                 return float(value)
             except (ValueError, TypeError):
+                logger.warning(f"⚠️ {key} 변환 실패: {value} → {default} 사용")
                 return default
         
         action = data.get('action')
@@ -2552,8 +2615,18 @@ def webhook():
         
         message = json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else str(data)
         
-        logger.info(f"웹훅 수신 - 심볼: {symbol}, 액션: {action}")
-        logger.debug(f"파싱된 가격: entry={entry_price}, sl={stop_loss}, tp={take_profit}")
+        logger.info(f"📊 웹훅 수신 - 심볼: {symbol}, 액션: {action}")
+        logger.info(f"💰 파싱된 가격 정보:")
+        logger.info(f"   - Entry: {entry_price}")
+        logger.info(f"   - Stop Loss: {stop_loss}")
+        logger.info(f"   - Take Profit: {take_profit}")
+        logger.info(f"   - Exit: {exit_price}")
+        
+        # 필수 필드 검증 (action과 symbol은 필수)
+        if not action or not symbol:
+            error_msg = f"필수 필드 누락 - action: {action}, symbol: {symbol}"
+            logger.error(f"❌ {error_msg}")
+            return jsonify({'error': error_msg}), 400
         
         # 심볼 매핑 테이블 (정규화 전에 수행!)
         symbol_mapping = {
@@ -2633,9 +2706,11 @@ def webhook():
             'GIGGLEUSDT.P': 'GIGGLE/USDT'
         }
         
+        original_symbol = symbol
         # 심볼 매핑 적용
         if symbol in symbol_mapping:
             symbol = symbol_mapping[symbol]
+            logger.info(f"🔄 심볼 매핑: {original_symbol} → {symbol}")
         # 매핑이 없는 경우만 정규화
         elif not symbol.endswith('/USDT'):
             # .P 제거 후 정규화
@@ -2643,17 +2718,39 @@ def webhook():
             if 'USDT' in clean_symbol:
                 base = clean_symbol.replace('USDT', '')
                 symbol = f"{base}/USDT"
+                logger.info(f"🔄 심볼 정규화: {original_symbol} → {symbol}")
             else:
                 symbol = f"{clean_symbol}/USDT"
+                logger.info(f"🔄 심볼 정규화: {original_symbol} → {symbol}")
         
         # 심볼 설정 확인
         if symbol not in SYMBOL_CONFIG:
-            return jsonify({'error': f'Symbol {symbol} not configured'}), 400
+            error_msg = f'심볼 {symbol}이(가) 설정되지 않음 (원본: {original_symbol})'
+            logger.error(f"❌ {error_msg}")
+            
+            # 텔레그램 알림
+            if ENABLE_TELEGRAM:
+                notify_msg = f"""
+❌ <b>미등록 심볼 감지</b>
+
+<b>원본 심볼:</b> {original_symbol}
+<b>변환 심볼:</b> {symbol}
+<b>액션:</b> {action}
+
+⚠️ SYMBOL_CONFIG에 해당 심볼을 추가해주세요.
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                """.strip()
+                send_telegram_notification(notify_msg, 'error')
+            
+            return jsonify({'error': error_msg}), 400
         
         if not SYMBOL_CONFIG[symbol].get('enabled', True):
-            return jsonify({'error': f'Symbol {symbol} is disabled'}), 400
+            error_msg = f'심볼 {symbol}이(가) 비활성화됨'
+            logger.warning(f"⚠️ {error_msg}")
+            return jsonify({'error': error_msg}), 400
         
-        logger.info(f"웹훅 수신 - 심볼: {symbol}, 액션: {action}, 메시지: {message}")
+        logger.info(f"✅ 심볼 검증 완료: {symbol}")
         
         # 심볼 설정 가져오기 (symbol_config 에러 방지)
         symbol_config = SYMBOL_CONFIG.get(symbol, {})
