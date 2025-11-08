@@ -1147,6 +1147,23 @@ def ai_monitor_position(symbol, position_info):
             logger.error(f"Failed to get market data for {symbol}")
             return create_default_hold_decision("시장 데이터 조회 실패")
         
+        # 심볼 설정 정보 가져오기
+        symbol_config = SYMBOL_CONFIG.get(symbol, {})
+        leverage = symbol_config.get('leverage', 10)
+        position_size_percent = symbol_config.get('position_size_percent', 30)
+        
+        # 계좌 잔고 정보 가져오기
+        try:
+            balance_info = exchange.fetch_balance()
+            total_margin = balance_info['USDT']['total']
+            free_margin = balance_info['USDT']['free']
+            used_margin = balance_info['USDT']['used']
+        except Exception as e:
+            logger.warning(f"잔고 정보 조회 실패: {e}")
+            total_margin = 0
+            free_margin = 0
+            used_margin = 0
+        
         # 포지션 정보
         entry_price = position_info['entry_price']
         current_price = market_data['current_price']
@@ -1186,6 +1203,15 @@ def ai_monitor_position(symbol, position_info):
 
         prompt = f"""
 You are an expert AI position manager monitoring an open {side} position for {symbol}.
+
+**ACCOUNT & TRADING CONFIGURATION (REFERENCE ONLY):**
+- Leverage: {leverage}x
+- Position Size Target: {position_size_percent}% of total balance
+- Total Balance: ${total_margin:,.2f} USDT
+- Free Balance: ${free_margin:,.2f} USDT
+- Used Margin: ${used_margin:,.2f} USDT
+
+Note: These are fixed trading parameters for your reference. Focus on monitoring the position and deciding whether to hold, close, or partially close.
 
 **POSITION DETAILS:**
 - Entry Price: ${entry_price:.2f}
@@ -1553,6 +1579,23 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
 
         # close_position 액션 처리 (별도 로직)
         if action in ['close', 'close_position']:
+            # 심볼 설정 정보 가져오기
+            symbol_config = SYMBOL_CONFIG.get(symbol, {})
+            leverage = symbol_config.get('leverage', 10)
+            position_size_percent = symbol_config.get('position_size_percent', 30)
+            
+            # 계좌 잔고 정보 가져오기
+            try:
+                balance_info = exchange.fetch_balance()
+                total_margin = balance_info['USDT']['total']
+                free_margin = balance_info['USDT']['free']
+                used_margin = balance_info['USDT']['used']
+            except Exception as e:
+                logger.warning(f"잔고 정보 조회 실패: {e}")
+                total_margin = 0
+                free_margin = 0
+                used_margin = 0
+            
             # message_data 문자열 변환
             message_str = ""
             if message_data:
@@ -1571,6 +1614,16 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
 
             prompt = f"""
 You are an expert crypto trading AI validator. Analyze whether to approve closing the position for {symbol}.
+
+**ACCOUNT & TRADING CONFIGURATION (REFERENCE ONLY - DO NOT VALIDATE):**
+- Leverage: {leverage}x
+- Position Size Target: {position_size_percent}% of total balance
+- Total Balance: ${total_margin:,.2f} USDT
+- Free Balance: ${free_margin:,.2f} USDT
+- Used Margin: ${used_margin:,.2f} USDT
+- Available for New Positions: ${free_margin:,.2f} USDT
+
+Note: These are fixed trading parameters for your reference. Your job is to validate the exit signal, not these settings.
 
 **CURRENT MARKET CONDITIONS:**
 - Symbol: {symbol}
@@ -1723,6 +1776,23 @@ Your response must be a single JSON object."""
                 }
 
         # 일반 buy/sell 액션 처리
+        # 심볼 설정 정보 가져오기
+        symbol_config = SYMBOL_CONFIG.get(symbol, {})
+        leverage = symbol_config.get('leverage', 10)
+        position_size_percent = symbol_config.get('position_size_percent', 30)
+        
+        # 계좌 잔고 정보 가져오기
+        try:
+            balance_info = exchange.fetch_balance()
+            total_margin = balance_info['USDT']['total']
+            free_margin = balance_info['USDT']['free']
+            used_margin = balance_info['USDT']['used']
+        except Exception as e:
+            logger.warning(f"잔고 정보 조회 실패: {e}")
+            total_margin = 0
+            free_margin = 0
+            used_margin = 0
+        
         # JSON 템플릿을 프롬프트에 명시
         json_template = """
 {
@@ -1747,6 +1817,17 @@ Your response must be a single JSON object."""
         # 프롬프트 구성
         prompt = f"""
 You are an expert crypto trading AI validator. You need to validate trading signals using technical analysis and return ONLY valid JSON.
+
+**ACCOUNT & TRADING CONFIGURATION (REFERENCE ONLY - DO NOT VALIDATE):**
+- Leverage: {leverage}x
+- Position Size Target: {position_size_percent}% of total balance per trade
+- Total Balance: ${total_margin:,.2f} USDT
+- Free Balance: ${free_margin:,.2f} USDT
+- Used Margin: ${used_margin:,.2f} USDT
+- Available for New Positions: ${free_margin:,.2f} USDT
+- Max Position Size (based on config): ${total_margin * (position_size_percent / 100):,.2f} USDT
+
+Note: These are fixed trading parameters for your reference. Your job is to validate entry/exit signals and suggest optimal stop-loss/take-profit levels, not to validate these settings.
 
 **SIGNAL TO VALIDATE:**
 - Symbol: {symbol}
