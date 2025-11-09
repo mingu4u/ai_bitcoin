@@ -413,7 +413,88 @@ SYMBOL_CONFIG = {
         'enabled': True,
         'ai_validation': True,
         'ai_monitoring': True
-    }  
+    },
+    'LTC/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'DUSK/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'FET/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'PENDLE/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'FIL/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'AR/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'OG/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'F/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'TAO/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }
 }
 
 # 기본 설정
@@ -2421,11 +2502,12 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 params={
                     'stopPrice': stop_loss_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True
+                    'reduceOnly': True,
+                    'closePosition': True  # 모든 포지션 정리
                 }
             )
             
-            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${stop_loss_price:.2f}")
+            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${stop_loss_price:.2f} (closePosition=True)")
         except Exception as sl_error:
             logger.error(f"⚠️ 스탑로스 설정 실패: {str(sl_error)}")
             sl_order = None
@@ -2441,11 +2523,12 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 params={
                     'stopPrice': take_profit_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True
+                    'reduceOnly': True,
+                    'closePosition': True  # 모든 포지션 정리
                 }
             )
             
-            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${take_profit_price:.2f}")
+            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${take_profit_price:.2f} (closePosition=True)")
         except Exception as tp_error:
             logger.error(f"⚠️ 테이크프로핏 설정 실패: {str(tp_error)}")
             tp_order = None
@@ -2553,11 +2636,12 @@ def update_stop_loss(symbol, new_sl_price, amount):
                 params={
                     'stopPrice': new_sl_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True
+                    'reduceOnly': True,
+                    'closePosition': True  # 모든 포지션 정리
                 }
             )
 
-            logger.info(f"{symbol} 스탑로스 업데이트: {new_sl_price}")
+            logger.info(f"{symbol} 스탑로스 업데이트: {new_sl_price} (closePosition=True)")
             
     except Exception as e:
         logger.error(f"스탑로스 업데이트 오류 ({symbol}): {str(e)}")
@@ -2864,7 +2948,25 @@ def webhook():
             'WLDUSDT': 'WLD/USDT',
             'WLDUSDT.P': 'WLD/USDT',
             'GIGGLEUSDT': 'GIGGLE/USDT',
-            'GIGGLEUSDT.P': 'GIGGLE/USDT'
+            'GIGGLEUSDT.P': 'GIGGLE/USDT',
+            'LTCUSDT': 'LTC/USDT',
+            'LTCUSDT.P': 'LTC/USDT',
+            'DUSKUSDT': 'DUSK/USDT',
+            'DUSKUSDT.P': 'DUSK/USDT',
+            'FETUSDT': 'FET/USDT',
+            'FETUSDT.P': 'FET/USDT',
+            'PENDLEUSDT': 'PENDLE/USDT',
+            'PENDLEUSDT.P': 'PENDLE/USDT',
+            'FILUSDT': 'FIL/USDT',
+            'FILUSDT.P': 'FIL/USDT',
+            'ARUSDT': 'AR/USDT',
+            'ARUSDT.P': 'AR/USDT',
+            'OGUSDT': 'OG/USDT',
+            'OGUSDT.P': 'OG/USDT',
+            'FUSDT': 'F/USDT',
+            'FUSDT.P': 'F/USDT',
+            'TAOUSDT': 'TAO/USDT',
+            'TAOUSDT.P': 'TAO/USDT'
         }
         
         original_symbol = symbol

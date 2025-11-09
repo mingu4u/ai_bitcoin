@@ -21,7 +21,7 @@ import re
 load_dotenv()
 
 # ============ 서버별 하드코딩 설정 ============
-SERVER_PORT = 5001  # 여기서 포트 변경 (5000 : mingu, 5001 : Hyun, 5002 : Hyuk)
+SERVER_PORT = 5001  # 여기서 포트 변경 (5000, 5001, 5002)
 ENABLE_TELEGRAM = True if SERVER_PORT == 5000 else False  # 5000번 포트만 텔레그램 활성화
 AI_MONITOR_INTERVAL = 5 # AI 포지션 모니터링 간격 (분)
 
@@ -413,7 +413,88 @@ SYMBOL_CONFIG = {
         'enabled': True,
         'ai_validation': True,
         'ai_monitoring': True
-    }  
+    },
+    'LTC/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'DUSK/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'FET/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'PENDLE/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'FIL/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'AR/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'OG/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'F/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'TAO/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }
 }
 
 # 기본 설정
@@ -431,14 +512,18 @@ ai_monitor_running = False
 
 # ============ Position Sync Functions ============
 def sync_positions_from_exchange():
-    """거래소의 실제 포지션을 current_positions와 동기화"""
+    """
+    거래소의 실제 포지션을 current_positions와 동기화
+    🆕 개선: 수동 포지션 감지 및 position_type 필드 추가
+    """
     global current_positions
     
     try:
-        logger.info("=== 거래소 포지션 동기화 시작 ===")
+        logger.info("=== 거래소 포지션 동기화 시작 (수동 포지션 감지 포함) ===")
         
         # 모든 활성 심볼에 대해 포지션 조회
         synced_count = 0
+        manual_count = 0  # 🆕 수동 포지션 카운트
         new_positions = {}
         
         for symbol in SYMBOL_CONFIG.keys():
@@ -458,14 +543,14 @@ def sync_positions_from_exchange():
                         
                         # 기존 포지션 정보가 있으면 유지, 없으면 새로 생성
                         if symbol in current_positions:
-                            # 기존 정보 유지 (SL/TP 등)
+                            # 기존 정보 유지 (SL/TP, position_type 등)
                             new_positions[symbol] = current_positions[symbol]
                             # 수량과 진입가는 거래소 기준으로 업데이트
                             new_positions[symbol]['amount'] = abs(contracts)
                             new_positions[symbol]['entry_price'] = entry_price
-                            logger.info(f"✓ {symbol} 포지션 업데이트: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
+                            logger.info(f"✓ {symbol} 포지션 업데이트: {side} {abs(contracts):.4f} @ ${entry_price:.2f} (타입: {new_positions[symbol].get('position_type', 'auto')})")
                         else:
-                            # 새로운 포지션 발견
+                            # 🆕 새로운 포지션 발견 → 수동 포지션으로 간주
                             new_positions[symbol] = {
                                 'side': side,
                                 'entry_price': entry_price,
@@ -474,10 +559,28 @@ def sync_positions_from_exchange():
                                 'take_profit': 0,
                                 'trailing_stop_percent': DEFAULT_TRAILING_STOP_PERCENT,
                                 'trailing_activation_percent': DEFAULT_TRAILING_ACTIVATION_PERCENT,
-                                'entry_time': datetime.now()  # 동기화 시점을 진입 시간으로
+                                'entry_time': datetime.now(),  # 동기화 시점을 진입 시간으로
+                                'position_type': 'manual',  # 🆕 수동 포지션으로 표시
+                                'leverage': SYMBOL_CONFIG[symbol].get('leverage', 10)
                             }
-                            logger.info(f"🆕 {symbol} 새 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
+                            logger.info(f"🆕🔧 {symbol} 수동 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
+                            logger.info(f"   → AI 모니터링 대상에 자동 추가됨")
                             synced_count += 1
+                            manual_count += 1
+                            
+                            # 🆕 텔레그램 알림 (수동 포지션 감지)
+                            if ENABLE_TELEGRAM:
+                                send_telegram_notification(
+                                    f"🔧 <b>수동 포지션 감지</b>\n\n"
+                                    f"<b>심볼:</b> {symbol}\n"
+                                    f"<b>방향:</b> {side.upper()}\n"
+                                    f"<b>진입가:</b> ${entry_price:,.2f}\n"
+                                    f"<b>수량:</b> {abs(contracts):.4f}\n"
+                                    f"<b>타입:</b> MANUAL\n\n"
+                                    f"✅ AI 모니터링이 자동으로 시작됩니다.\n"
+                                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                                    'info'
+                                )
                         
             except Exception as e:
                 logger.error(f"{symbol} 포지션 조회 오류: {str(e)}")
@@ -492,7 +595,7 @@ def sync_positions_from_exchange():
         removed_symbols = []
         for symbol in list(current_positions.keys()):
             if symbol not in new_positions:
-                # 🔥 추가: 종료된 포지션을 completed_trades에 기록
+                # 종료된 포지션을 completed_trades에 기록
                 try:
                     ticker = exchange.fetch_ticker(symbol)
                     exit_price = ticker['last']
@@ -506,7 +609,16 @@ def sync_positions_from_exchange():
                 del current_positions[symbol]
                 logger.warning(f"⚠️ {symbol} 포지션이 거래소에 없어 메모리에서 제거 및 DB 기록")
         
-        logger.info(f"=== 동기화 완료: 총 {len(current_positions)}개 포지션 (새로 발견: {synced_count}개, 제거: {len(removed_symbols)}개) ===")
+        # 🆕 수동 포지션 감지 결과 로깅
+        auto_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'auto')
+        manual_total = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'manual')
+        
+        logger.info(f"=== 동기화 완료 ===")
+        logger.info(f"총 포지션: {len(current_positions)}개")
+        logger.info(f"  - 자동(AI) 포지션: {auto_count}개")
+        logger.info(f"  - 수동 포지션: {manual_total}개 (이번 사이클: {manual_count}개)")
+        logger.info(f"  - 새로 발견: {synced_count}개")
+        logger.info(f"  - 제거: {len(removed_symbols)}개")
         
         return len(current_positions)
         
@@ -515,19 +627,21 @@ def sync_positions_from_exchange():
         return 0
 
 def get_position_summary():
-    """현재 포지션 요약 정보"""
+    """현재 포지션 요약 정보 (position_type 포함)"""
     if not current_positions:
         return "현재 보유 포지션 없음"
     
     summary = []
     for symbol, pos in current_positions.items():
-        summary.append(f"• {symbol}: {pos['side'].upper()} {pos['amount']:.4f} @ ${pos['entry_price']:.2f}")
+        pos_type = pos.get('position_type', 'auto')
+        type_emoji = "🤖" if pos_type == 'auto' else "🔧"
+        summary.append(f"{type_emoji} {symbol}: {pos['side'].upper()} {pos['amount']:.4f} @ ${pos['entry_price']:.2f} ({pos_type.upper()})")
     
     return "\n".join(summary)
 
 # ============ SQLite 데이터베이스 초기화 ============
 def record_completed_trade(symbol, position_info, exit_price, close_reason='manual'):
-    """완료된 거래를 DB에 기록"""
+    """완료된 거래를 DB에 기록 (🆕 position_type 포함)"""
     try:
         conn = get_db_connection()
         c = conn.cursor()
@@ -537,6 +651,7 @@ def record_completed_trade(symbol, position_info, exit_price, close_reason='manu
         amount = position_info.get('amount', 0)
         side = position_info.get('side', 'buy')
         leverage = position_info.get('leverage', 10)
+        position_type = position_info.get('position_type', 'auto')  # 🆕
         
         if side == 'buy':
             pnl_percent = ((exit_price - entry_price) / entry_price) * 100
@@ -555,20 +670,20 @@ def record_completed_trade(symbol, position_info, exit_price, close_reason='manu
         # is_win 판단
         is_win = 1 if pnl_percent > 0 else 0
         
-        # DB에 저장
+        # DB에 저장 (🆕 position_type 컬럼 추가)
         c.execute("""INSERT INTO completed_trades 
                     (open_timestamp, close_timestamp, symbol, side, entry_price, exit_price,
                      amount, pnl_usdt, pnl_percent, position_size_usdt, holding_time_minutes,
-                     close_reason, leverage, is_win)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                     close_reason, leverage, is_win, position_type)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                   (entry_time.isoformat(), datetime.now().isoformat(), symbol, side, 
                    entry_price, exit_price, amount, pnl_usdt, pnl_percent, position_size_usdt,
-                   holding_time_minutes, close_reason, leverage, is_win))
+                   holding_time_minutes, close_reason, leverage, is_win, position_type))
         
         conn.commit()
         conn.close()
         
-        logger.info(f"✅ 완료된 거래 기록: {symbol} - PnL: ${pnl_usdt:,.2f} ({pnl_percent:.2f}%)")
+        logger.info(f"✅ 완료된 거래 기록: {symbol} ({position_type.upper()}) - PnL: ${pnl_usdt:,.2f} ({pnl_percent:.2f}%)")
         
         return True
         
@@ -682,7 +797,7 @@ def get_db_connection():
     return sqlite3.connect('integrated_trades.db')
 
 def init_db_once():
-    """DB 초기화 - 프로그램 시작 시 1회만 실행"""
+    """DB 초기화 - 프로그램 시작 시 1회만 실행 (🆕 position_type 지원)"""
     conn = sqlite3.connect('integrated_trades.db')
     c = conn.cursor()
     
@@ -691,6 +806,15 @@ def init_db_once():
     table_count = c.fetchone()[0]
     
     if table_count >= 4:  # 이미 초기화됨
+        # 🆕 기존 테이블에 position_type 컬럼이 없으면 추가 (마이그레이션)
+        try:
+            c.execute("SELECT position_type FROM completed_trades LIMIT 1")
+        except sqlite3.OperationalError:
+            logger.info("🔧 completed_trades 테이블에 position_type 컬럼 추가 중...")
+            c.execute("ALTER TABLE completed_trades ADD COLUMN position_type TEXT DEFAULT 'auto'")
+            conn.commit()
+            logger.info("✅ position_type 컬럼 추가 완료")
+        
         conn.close()
         return
     
@@ -720,7 +844,7 @@ def init_db_once():
                   required_margin REAL,
                   leverage INTEGER)''')
     
-    # 2. 완료된 거래 테이블 (대시보드용)
+    # 2. 완료된 거래 테이블 (대시보드용, 🆕 position_type 컬럼 추가)
     c.execute('''CREATE TABLE IF NOT EXISTS completed_trades
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   open_timestamp TEXT NOT NULL,
@@ -739,7 +863,8 @@ def init_db_once():
                   max_loss_percent REAL,
                   leverage INTEGER,
                   is_win INTEGER DEFAULT 0,
-                  commission REAL DEFAULT 0)''')
+                  commission REAL DEFAULT 0,
+                  position_type TEXT DEFAULT 'auto')''')
     
     # 3. 잔고 히스토리 (대시보드용)
     c.execute('''CREATE TABLE IF NOT EXISTS balance_history
@@ -776,7 +901,7 @@ def init_db_once():
                  ON balance_history(timestamp DESC)''')
     
     conn.commit()
-    logger.info("✅ DB 초기화 완료 (프로그램 시작)")
+    logger.info("✅ DB 초기화 완료 (프로그램 시작, position_type 지원)")
     return conn
 
 # ============ Technical Indicators 추가 ============
@@ -1132,8 +1257,15 @@ def create_default_reject_decision(reason: str) -> dict:
 def ai_monitor_position(symbol, position_info):
     """
     AI가 포지션을 모니터링하고 종료 여부 결정 - 개선 버전
+    🆕 자동/수동 포지션 모두 모니터링
     Pydantic 검증 및 에러 처리 강화
     """
+    
+    # 🆕 포지션 타입 확인
+    position_type = position_info.get('position_type', 'auto')
+    type_indicator = "🤖" if position_type == 'auto' else "🔧"
+    
+    logger.info(f"{type_indicator} AI 모니터링 시작: {symbol} ({position_type.upper()} 포지션)")
     
     client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
     if not client.api_key:
@@ -1385,12 +1517,21 @@ Your response must be a single JSON object."""
         return create_default_hold_decision(f"시스템 오류: {str(e)}")
 
 def execute_position_exit(symbol, decision):
-    """포지션 종료 실행"""
+    """
+    포지션 종료 실행
+    🆕 자동/수동 포지션 모두 지원
+    """
     try:
         position = current_positions.get(symbol)
         if not position:
             logger.warning(f"No position found for {symbol}")
             return False
+        
+        # 🆕 포지션 타입 확인
+        position_type = position.get('position_type', 'auto')
+        type_indicator = "🤖" if position_type == 'auto' else "🔧"
+        
+        logger.info(f"{type_indicator} {symbol} 포지션 종료 실행 중... ({position_type.upper()})")
         
         # 현재 포지션 정보
         side = position['side']
@@ -1410,9 +1551,9 @@ def execute_position_exit(symbol, decision):
         else:  # sell
             order = exchange.create_market_buy_order(symbol, exit_amount)
         
-        logger.info(f"Position exit executed for {symbol}: {decision['decision']}")
+        logger.info(f"{type_indicator} Position exit executed for {symbol} ({position_type.upper()}): {decision['decision']}")
         
-        # 🔥 추가: 완료된 거래 DB 기록
+        # 완료된 거래 DB 기록
         try:
             ticker = exchange.fetch_ticker(symbol)
             exit_price = ticker['last']
@@ -1420,14 +1561,14 @@ def execute_position_exit(symbol, decision):
             if decision['decision'] == 'close':
                 # 전체 종료인 경우
                 record_completed_trade(symbol, position, exit_price, decision.get('exit_type', 'ai_exit'))
-                logger.info(f"✅ Completed trade recorded for {symbol}")
+                logger.info(f"✅ Completed trade recorded for {symbol} ({position_type.upper()})")
                 del current_positions[symbol]
             else:
                 # 부분 종료인 경우
                 partial_position = position.copy()
                 partial_position['amount'] = exit_amount
                 record_completed_trade(symbol, partial_position, exit_price, 'partial_' + decision.get('exit_type', 'exit'))
-                logger.info(f"✅ Partial trade recorded for {symbol}")
+                logger.info(f"✅ Partial trade recorded for {symbol} ({position_type.upper()})")
                 current_positions[symbol]['amount'] -= exit_amount
                 
         except Exception as e:
@@ -1441,8 +1582,9 @@ def execute_position_exit(symbol, decision):
         # 텔레그램 알림
         if ENABLE_TELEGRAM:
             message = f"""
-🤖 <b>AI Position Exit</b>
+{type_indicator} <b>AI Position Exit</b>
 
+<b>Type:</b> {position_type.upper()} 포지션
 <b>Symbol:</b> {symbol}
 <b>Decision:</b> {decision['decision'].upper()}
 <b>Exit Type:</b> {decision['exit_type']}
@@ -1462,7 +1604,10 @@ def execute_position_exit(symbol, decision):
         return False
 
 def ai_monitoring_cycle():
-    """AI 모니터링 주기 실행"""
+    """
+    AI 모니터링 주기 실행
+    🆕 개선: 자동/수동 포지션 모두 모니터링
+    """
     global current_positions
     
     logger.info("=== AI Position Monitoring Cycle Start ===")
@@ -1477,6 +1622,13 @@ def ai_monitoring_cycle():
         logger.info("No positions to monitor after sync")
         return 0, []
     
+    # 🆕 포지션 타입별 카운트
+    auto_positions = {k: v for k, v in current_positions.items() if v.get('position_type', 'auto') == 'auto'}
+    manual_positions = {k: v for k, v in current_positions.items() if v.get('position_type', 'auto') == 'manual'}
+    
+    logger.info(f"  - 자동(AI) 포지션: {len(auto_positions)}개")
+    logger.info(f"  - 수동 포지션: {len(manual_positions)}개")
+    
     monitored_count = 0
     exit_decisions = []
     
@@ -1485,7 +1637,10 @@ def ai_monitoring_cycle():
         if not SYMBOL_CONFIG.get(symbol, {}).get('ai_monitoring', True):
             continue
         
-        logger.info(f"Monitoring position: {symbol}")
+        position_type = position.get('position_type', 'auto')
+        type_indicator = "🤖" if position_type == 'auto' else "🔧"
+        
+        logger.info(f"{type_indicator} Monitoring position: {symbol} ({position_type.upper()})")
         
         # AI 모니터링 실행
         decision = ai_monitor_position(symbol, position)
@@ -1501,11 +1656,12 @@ def ai_monitoring_cycle():
                     if success:
                         exit_decisions.append({
                             'symbol': symbol,
+                            'position_type': position_type,  # 🆕
                             'decision': decision['decision'],
                             'reason': decision['reason']
                         })
                 else:
-                    logger.info(f"Exit decision for {symbol} not executed due to low confidence ({decision['confidence']:.1%})")
+                    logger.info(f"{type_indicator} Exit decision for {symbol} ({position_type.upper()}) not executed due to low confidence ({decision['confidence']:.1%})")
         
         # API 제한을 위한 짧은 대기
         time.sleep(2)
@@ -1514,7 +1670,11 @@ def ai_monitoring_cycle():
     if monitored_count > 0:
         logger.info(f"✅ AI monitoring cycle completed: {monitored_count} positions monitored")
         if exit_decisions:
-            logger.info(f"Exit decisions executed: {exit_decisions}")
+            logger.info(f"Exit decisions executed:")
+            for exit_dec in exit_decisions:
+                pos_type = exit_dec['position_type']
+                type_emoji = "🤖" if pos_type == 'auto' else "🔧"
+                logger.info(f"  {type_emoji} {exit_dec['symbol']} ({pos_type.upper()}): {exit_dec['decision']} - {exit_dec['reason']}")
     else:
         logger.info("No positions monitored (all disabled or no active positions)")
     
@@ -1549,6 +1709,7 @@ def start_ai_monitoring():
         ai_monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
         ai_monitor_thread.start()
         logger.info(f"✅ AI position monitoring started ({AI_MONITOR_INTERVAL}-minute intervals)")
+        logger.info(f"   🤖 자동 포지션 및 🔧 수동 포지션 모두 모니터링됩니다")
 
 def stop_ai_monitoring():
     """AI 모니터링 중지"""
@@ -2341,11 +2502,12 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 params={
                     'stopPrice': stop_loss_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True
+                    'reduceOnly': True,
+                    'closePosition': True  # 모든 포지션 정리
                 }
             )
             
-            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${stop_loss_price:.2f}")
+            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${stop_loss_price:.2f} (closePosition=True)")
         except Exception as sl_error:
             logger.error(f"⚠️ 스탑로스 설정 실패: {str(sl_error)}")
             sl_order = None
@@ -2361,11 +2523,12 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 params={
                     'stopPrice': take_profit_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True
+                    'reduceOnly': True,
+                    'closePosition': True  # 모든 포지션 정리
                 }
             )
             
-            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${take_profit_price:.2f}")
+            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${take_profit_price:.2f} (closePosition=True)")
         except Exception as tp_error:
             logger.error(f"⚠️ 테이크프로핏 설정 실패: {str(tp_error)}")
             tp_order = None
@@ -2473,11 +2636,12 @@ def update_stop_loss(symbol, new_sl_price, amount):
                 params={
                     'stopPrice': new_sl_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True
+                    'reduceOnly': True,
+                    'closePosition': True  # 모든 포지션 정리
                 }
             )
 
-            logger.info(f"{symbol} 스탑로스 업데이트: {new_sl_price}")
+            logger.info(f"{symbol} 스탑로스 업데이트: {new_sl_price} (closePosition=True)")
             
     except Exception as e:
         logger.error(f"스탑로스 업데이트 오류 ({symbol}): {str(e)}")
@@ -2784,7 +2948,25 @@ def webhook():
             'WLDUSDT': 'WLD/USDT',
             'WLDUSDT.P': 'WLD/USDT',
             'GIGGLEUSDT': 'GIGGLE/USDT',
-            'GIGGLEUSDT.P': 'GIGGLE/USDT'
+            'GIGGLEUSDT.P': 'GIGGLE/USDT',
+            'LTCUSDT': 'LTC/USDT',
+            'LTCUSDT.P': 'LTC/USDT',
+            'DUSKUSDT': 'DUSK/USDT',
+            'DUSKUSDT.P': 'DUSK/USDT',
+            'FETUSDT': 'FET/USDT',
+            'FETUSDT.P': 'FET/USDT',
+            'PENDLEUSDT': 'PENDLE/USDT',
+            'PENDLEUSDT.P': 'PENDLE/USDT',
+            'FILUSDT': 'FIL/USDT',
+            'FILUSDT.P': 'FIL/USDT',
+            'ARUSDT': 'AR/USDT',
+            'ARUSDT.P': 'AR/USDT',
+            'OGUSDT': 'OG/USDT',
+            'OGUSDT.P': 'OG/USDT',
+            'FUSDT': 'F/USDT',
+            'FUSDT.P': 'F/USDT',
+            'TAOUSDT': 'TAO/USDT',
+            'TAOUSDT.P': 'TAO/USDT'
         }
         
         original_symbol = symbol
@@ -3217,18 +3399,23 @@ def force_monitor():
 
 @app.route('/status', methods=['GET'])
 def status():
-    """시스템 상태 확인"""
+    """시스템 상태 확인 (🆕 자동/수동 포지션 구분)"""
     enabled_symbols = [s for s, c in SYMBOL_CONFIG.items() if c.get('enabled', True)]
     ai_enabled_symbols = [s for s, c in SYMBOL_CONFIG.items() if c.get('ai_validation', True)]
     ai_monitored_symbols = [s for s, c in SYMBOL_CONFIG.items() if c.get('ai_monitoring', True)]
     
-    # 포지션 상세 정보
+    # 🆕 포지션 타입별 카운트
+    auto_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'auto')
+    manual_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'manual')
+    
+    # 포지션 상세 정보 (🆕 position_type 포함)
     positions_detail = {}
     for symbol, pos in current_positions.items():
         positions_detail[symbol] = {
             'side': pos['side'],
             'entry_price': pos['entry_price'],
             'amount': pos['amount'],
+            'position_type': pos.get('position_type', 'auto'),  # 🆕
             'entry_time': pos.get('entry_time', datetime.now()).isoformat() if isinstance(pos.get('entry_time'), datetime) else str(pos.get('entry_time', 'N/A'))
         }
     
@@ -3237,6 +3424,8 @@ def status():
         'server_port': SERVER_PORT,
         'current_positions': positions_detail,
         'position_count': len(current_positions),
+        'auto_position_count': auto_count,  # 🆕
+        'manual_position_count': manual_count,  # 🆕
         'telegram_enabled': ENABLE_TELEGRAM,
         'total_symbols': len(enabled_symbols),
         'ai_enabled_symbols': len(ai_enabled_symbols),
@@ -3685,12 +3874,22 @@ def initialize_bot():
     logger.info("📊 주기적 데이터 기록 스레드 시작 (5분 간격)")
     
     if ENABLE_TELEGRAM:
+        # 🆕 포지션 타입별 카운트
+        auto_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'auto')
+        manual_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'manual')
+        
         position_info = ""
         if len(current_positions) > 0:
             position_info = f"\n\n<b>복구된 포지션:</b>\n{get_position_summary()}"
         
         startup_message = f"""
-🚀 <b>통합 트레이딩 시스템 v5.0 시작</b>
+🚀 <b>통합 트레이딩 시스템 v5.1 시작</b>
+
+<b>🆕 신규 기능:</b>
+✨ 수동 포지션 자동 감지
+✨ 수동 포지션 AI 모니터링
+✨ 포지션 타입 구분 (자동/수동)
+✨ DB 기록 개선 (position_type)
 
 <b>주요 개선사항:</b>
 ✅ 마진 부족 100% 방지
@@ -3703,10 +3902,13 @@ def initialize_bot():
 <b>AI 검증:</b> {len(ai_symbols)}개 심볼
 <b>AI 모니터링:</b> {len(ai_monitor_symbols)}개 심볼
 <b>모니터링 주기:</b> {AI_MONITOR_INTERVAL}분
-<b>현재 포지션:</b> {len(current_positions)}개{position_info}
+<b>현재 포지션:</b> {len(current_positions)}개
+  - 🤖 자동: {auto_count}개
+  - 🔧 수동: {manual_count}개{position_info}
 
 ✅ 시스템이 정상적으로 시작되었습니다.
 🤖 AI 포지션 모니터링이 활성화되었습니다.
+🔧 수동 포지션 자동 감지가 활성화되었습니다.
 🔄 거래소 포지션 자동 동기화 활성화
 📊 서버 재시작 시 포지션 자동 복구
 💾 주기적 데이터 기록 활성화 (5분)
