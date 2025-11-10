@@ -2502,7 +2502,7 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 params={
                     'stopPrice': stop_loss_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True,
+                    # 'reduceOnly': True,
                     'closePosition': True  # 모든 포지션 정리
                 }
             )
@@ -2523,7 +2523,7 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 params={
                     'stopPrice': take_profit_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True,
+                    # 'reduceOnly': True,
                     'closePosition': True  # 모든 포지션 정리
                 }
             )
@@ -2636,7 +2636,7 @@ def update_stop_loss(symbol, new_sl_price, amount):
                 params={
                     'stopPrice': new_sl_price,
                     'workingType': 'MARK_PRICE',
-                    'reduceOnly': True,
+                    # 'reduceOnly': True,
                     'closePosition': True  # 모든 포지션 정리
                 }
             )
