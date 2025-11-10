@@ -1093,21 +1093,122 @@ def get_recent_trades(conn, symbol, num_trades=20):
         return pd.DataFrame()
 
 def calculate_performance(trades_df):
-    """투자 성과 계산"""
+    """투자 성과 계산 - 개선 버전 (풍부한 통계 데이터 제공)"""
     if trades_df.empty:
-        return 0
+        return {
+            'total_trades': 0,
+            'win_rate': 0,
+            'avg_pnl_percent': 0,
+            'total_pnl': 0,
+            'best_trade': 0,
+            'worst_trade': 0,
+            'avg_holding_time': 0,
+            'recent_trend': 'neutral',
+            'risk_reward_ratio': 0
+        }
     
-    # 수익률 계산 로직
-    total_trades = len(trades_df)
-    successful_trades = len(trades_df[trades_df['ai_decision'] == 'approve'])
-    
-    if total_trades > 0:
-        success_rate = (successful_trades / total_trades) * 100
-        return success_rate
-    return 0
+    # completed_trades에서 실제 거래 성과 데이터 조회
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # 최근 완료된 거래 조회 (최대 50건)
+        c.execute("""
+            SELECT 
+                pnl_usdt,
+                pnl_percent,
+                is_win,
+                holding_time_minutes,
+                entry_price,
+                exit_price,
+                timestamp
+            FROM completed_trades 
+            WHERE symbol IN (SELECT DISTINCT symbol FROM trades WHERE timestamp >= datetime('now', '-7 days'))
+            ORDER BY timestamp DESC
+            LIMIT 50
+        """)
+        
+        completed_trades = c.fetchall()
+        conn.close()
+        
+        if not completed_trades:
+            return {
+                'total_trades': len(trades_df),
+                'win_rate': 0,
+                'avg_pnl_percent': 0,
+                'total_pnl': 0,
+                'best_trade': 0,
+                'worst_trade': 0,
+                'avg_holding_time': 0,
+                'recent_trend': 'no_data',
+                'risk_reward_ratio': 0
+            }
+        
+        # 통계 계산
+        total_completed = len(completed_trades)
+        winning_trades = sum(1 for t in completed_trades if t[2] == 1)
+        win_rate = (winning_trades / total_completed * 100) if total_completed > 0 else 0
+        
+        pnl_values = [t[0] for t in completed_trades if t[0] is not None]
+        pnl_percents = [t[1] for t in completed_trades if t[1] is not None]
+        
+        total_pnl = sum(pnl_values) if pnl_values else 0
+        avg_pnl_percent = sum(pnl_percents) / len(pnl_percents) if pnl_percents else 0
+        best_trade = max(pnl_values) if pnl_values else 0
+        worst_trade = min(pnl_values) if pnl_values else 0
+        
+        holding_times = [t[3] for t in completed_trades if t[3] is not None]
+        avg_holding_time = sum(holding_times) / len(holding_times) if holding_times else 0
+        
+        # 최근 추세 분석 (최근 10거래)
+        recent_10 = completed_trades[:10] if len(completed_trades) >= 10 else completed_trades
+        recent_wins = sum(1 for t in recent_10 if t[2] == 1)
+        recent_win_rate = (recent_wins / len(recent_10) * 100) if recent_10 else 0
+        
+        if recent_win_rate >= 60:
+            recent_trend = 'improving'
+        elif recent_win_rate <= 40:
+            recent_trend = 'declining'
+        else:
+            recent_trend = 'stable'
+        
+        # Risk/Reward Ratio 계산
+        winning_pnl = [t[0] for t in completed_trades if t[2] == 1 and t[0] is not None]
+        losing_pnl = [abs(t[0]) for t in completed_trades if t[2] == 0 and t[0] is not None]
+        
+        avg_win = sum(winning_pnl) / len(winning_pnl) if winning_pnl else 0
+        avg_loss = sum(losing_pnl) / len(losing_pnl) if losing_pnl else 1
+        risk_reward_ratio = avg_win / avg_loss if avg_loss > 0 else 0
+        
+        return {
+            'total_trades': total_completed,
+            'win_rate': win_rate,
+            'avg_pnl_percent': avg_pnl_percent,
+            'total_pnl': total_pnl,
+            'best_trade': best_trade,
+            'worst_trade': worst_trade,
+            'avg_holding_time': avg_holding_time,
+            'recent_trend': recent_trend,
+            'risk_reward_ratio': risk_reward_ratio,
+            'recent_win_rate': recent_win_rate
+        }
+        
+    except Exception as e:
+        logger.error(f"Error calculating performance: {e}")
+        return {
+            'total_trades': 0,
+            'win_rate': 0,
+            'avg_pnl_percent': 0,
+            'total_pnl': 0,
+            'best_trade': 0,
+            'worst_trade': 0,
+            'avg_holding_time': 0,
+            'recent_trend': 'error',
+            'risk_reward_ratio': 0
+        }
 
 def generate_reflection(trades_df, current_market_data):
-    """AI를 사용한 반성 및 개선 사항 생성"""
+    """AI를 사용한 심층 반성 및 개선 사항 생성 - 개선 버전"""
     performance = calculate_performance(trades_df)
     
     client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
@@ -1115,38 +1216,127 @@ def generate_reflection(trades_df, current_market_data):
         logger.error("OpenAI API key is missing or invalid.")
         return None
     
+    # 최근 거래 데이터를 더 구조화해서 준비
+    recent_trades_summary = "No recent trades"
+    if not trades_df.empty and len(trades_df) > 0:
+        try:
+            # 최근 거래 요약 정보 추출
+            recent_trades_list = []
+            for idx, trade in trades_df.head(10).iterrows():
+                trade_info = {
+                    'symbol': trade.get('symbol', 'N/A'),
+                    'action': trade.get('action', 'N/A'),
+                    'timestamp': trade.get('timestamp', 'N/A'),
+                    'ai_decision': trade.get('ai_decision', 'N/A')
+                }
+                recent_trades_list.append(trade_info)
+            recent_trades_summary = json.dumps(recent_trades_list, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"Error formatting recent trades: {e}")
+            recent_trades_summary = "Error formatting trades data"
+    
+    # 계좌 잔고 변화 추세 분석
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        # 최근 24시간 잔고 변화
+        c.execute("""
+            SELECT total_balance, timestamp 
+            FROM balance_history 
+            WHERE timestamp >= datetime('now', '-1 day')
+            ORDER BY timestamp ASC
+        """)
+        balance_history = c.fetchall()
+        
+        if len(balance_history) >= 2:
+            initial_balance = balance_history[0][0]
+            current_balance = balance_history[-1][0]
+            balance_change = ((current_balance - initial_balance) / initial_balance * 100) if initial_balance > 0 else 0
+            balance_trend = f"24h Balance Change: {balance_change:+.2f}% (${initial_balance:.2f} → ${current_balance:.2f})"
+        else:
+            balance_trend = "Insufficient balance history"
+        
+        conn.close()
+    except Exception as e:
+        logger.warning(f"Error fetching balance trend: {e}")
+        balance_trend = "Balance trend unavailable"
+    
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",  # Chat 모델 사용 - 자연어 응답에 더 효율적
+            model="deepseek-chat",
             messages=[
                 {
                     "role": "system",
-                    "content": """
-You are an advanced AI trading analyst assistant. Your role is to analyze recent trading performance including position monitoring decisions and current market conditions to generate specific, actionable insights.
+                    "content": """You are an elite crypto trading analyst AI with deep expertise in technical analysis, risk management, and pattern recognition.
 
-Provide clear, concise analysis in natural language.
-"""
+Your role is to provide ACTIONABLE, SPECIFIC, and INSIGHTFUL analysis that will help validate future trading signals. This reflection will be used as critical context for making real trading decisions.
+
+CRITICAL: Your analysis must be:
+1. SPECIFIC - Use exact numbers, percentages, and concrete observations
+2. ACTIONABLE - Provide clear guidance that can be applied to signal validation
+3. PATTERN-FOCUSED - Identify recurring mistakes or winning strategies
+4. RISK-AWARE - Highlight risk management issues and improvements
+5. MARKET-CONTEXTUAL - Consider current market conditions in your assessment"""
                 },
                 {
                     "role": "user",
-                    "content": f"""
-Please analyze the following trading performance data and provide a structured analysis.
+                    "content": f"""Analyze the recent trading performance and provide a comprehensive reflection for improving future trading decisions.
 
-**Recent Trades:** {trades_df.to_json(orient='records') if not trades_df.empty else 'No recent trades'}
-**Overall Performance:** {performance:.2f}%
+**PERFORMANCE STATISTICS:**
+- Total Completed Trades: {performance['total_trades']}
+- Overall Win Rate: {performance['win_rate']:.1f}%
+- Recent Win Rate (Last 10): {performance.get('recent_win_rate', 0):.1f}%
+- Performance Trend: {performance['recent_trend'].upper()}
+- Average PnL per Trade: {performance['avg_pnl_percent']:.2f}%
+- Total PnL: ${performance['total_pnl']:.2f}
+- Best Trade: ${performance['best_trade']:.2f}
+- Worst Trade: ${performance['worst_trade']:.2f}
+- Risk/Reward Ratio: {performance['risk_reward_ratio']:.2f}
+- Average Holding Time: {performance['avg_holding_time']:.1f} minutes
 
-Focus on:
-1. Entry timing effectiveness
-2. Exit timing optimization (including AI monitoring decisions)
-3. Risk management improvements
-4. Pattern recognition
+**BALANCE TREND:**
+{balance_trend}
 
-Keep the analysis concise and actionable.
-"""
+**RECENT TRADES DETAIL:**
+{recent_trades_summary}
+
+**CURRENT MARKET SNAPSHOT:**
+- Symbol: {current_market_data.get('symbol', 'N/A')}
+- Current Price: ${current_market_data.get('current_price', 0):.2f}
+
+Based on this data, provide a structured reflection with the following sections:
+
+1. **PERFORMANCE ASSESSMENT** (2-3 sentences):
+   - Is the win rate acceptable? Is there improvement or decline?
+   - Is the risk/reward ratio healthy (should be >1.5)?
+   - What does the PnL trend indicate?
+
+2. **KEY STRENGTHS** (2-3 bullet points):
+   - What trading patterns or strategies are working well?
+   - Which market conditions lead to successful trades?
+
+3. **CRITICAL WEAKNESSES** (2-3 bullet points):
+   - What mistakes are being repeated?
+   - Where is risk management failing?
+   - What entry/exit timing issues exist?
+
+4. **ACTIONABLE RECOMMENDATIONS** (3-4 specific points):
+   - For ENTRY signals: What should AI look for or avoid?
+   - For EXIT signals: When should positions be closed?
+   - Risk management: How should stop-loss and take-profit be adjusted?
+   - Market conditions: What conditions favor trading vs. holding?
+
+5. **SIGNAL VALIDATION GUIDANCE** (2-3 points):
+   - What technical indicators are most reliable in current conditions?
+   - What are red flags that should trigger rejection?
+   - What confluence of factors should increase confidence?
+
+Keep your response concise but packed with specific, actionable insights. Use data from the statistics to support your points."""
                 }
             ],
             temperature=0.3,
-            max_tokens=1500  # Chat 모델은 더 효율적
+            max_tokens=2000
         )
         
         # AI 응답 추출 - 개선된 버전
@@ -1813,6 +2003,15 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
 **RECENT PERFORMANCE REFLECTION:**
 {reflection if reflection else 'No previous trading data available'}
 
+**CRITICAL: USE THE REFLECTION ABOVE**
+The reflection contains insights from recent trading performance including:
+- Win rate trends and patterns
+- Successful strategies and common mistakes
+- Risk management issues
+- Entry/exit timing effectiveness
+
+Apply these insights when validating this exit signal. If the reflection indicates problems with premature exits or timing issues, factor that into your decision.
+
 **VALIDATION CRITERIA:**
 Consider if this is a good time to close the position based on:
 - Current market momentum
@@ -2026,6 +2225,16 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
 
 **RECENT PERFORMANCE REFLECTION:**
 {reflection if reflection else 'No previous trading data available'}
+
+**CRITICAL: APPLY INSIGHTS FROM REFLECTION**
+The reflection above provides:
+- Historical win rate and performance trends
+- Identified strengths and weaknesses in trading strategy
+- Specific patterns that lead to success or failure
+- Risk management insights from past trades
+- Actionable recommendations for entry/exit timing
+
+Use these insights to validate the current signal. If the reflection indicates that similar signals have failed, be more conservative. If certain patterns have succeeded, increase confidence accordingly.
 
 **VALIDATION CRITERIA:**
 

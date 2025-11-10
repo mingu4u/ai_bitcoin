@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """
-Public Dashboard v6 - Enhanced Performance Analysis
-고정 초기 잔고, 다중 기간 분석(7d/30d/90d/365d/lifetime), 수동 거래 감지 기능
+Public Dashboard v6.1 - Enhanced Performance Analysis + Reflection History
+고정 초기 잔고, 다중 기간 분석(7d/30d/90d/365d/lifetime), 수동 거래 감지 기능, Reflection 히스토리
 
 주요 개선사항:
 1. 고정 초기 잔고 관리 (DB 저장)
 2. 7d, 30d, 90d, 365d, lifetime 기간별 gain 분석
 3. 수동 포지션 진입/종료 자동 감지
 4. 향상된 성과 그래프 및 통계
+5. 🆕 AI Reflection 히스토리 탭 추가
 
 사용 방법:
     streamlit run public_dashboard_v6.py
 
 작성일: 2025-11-07
-버전: v6.0 Enhanced
+버전: v6.1 Enhanced + Reflection
 """
 
 import streamlit as st
@@ -33,7 +34,7 @@ load_dotenv()
 
 # 페이지 설정
 st.set_page_config(
-    page_title="Trading Dashboard v6 - Enhanced Analytics",
+    page_title="Trading Dashboard v6.1 - Enhanced Analytics + Reflection",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1166,12 +1167,13 @@ def main():
         db_positions = get_db_positions()
     
     # 탭 구성
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊 Overview",
         "🔄 Sync Status", 
         "📈 Performance Analysis",
         "🎯 Manual Trades",
-        "🤖 AI Monitor"
+        "🤖 AI Monitor",
+        "🧠 Reflection History"
     ])
     
     with tab1:
@@ -1878,6 +1880,192 @@ def main():
         except Exception as e:
             st.error(f"AI 모니터링 조회 오류: {e}")
     
+    with tab6:
+        st.header("🧠 AI Reflection History")
+        
+        st.info("""
+        📌 **Reflection이란?**
+        - AI가 최근 거래 성과를 분석하여 생성한 인사이트
+        - 승률, 손익, 리스크 관리 등을 평가
+        - 향후 거래 신호 검증에 활용되는 중요한 피드백
+        """)
+        
+        try:
+            conn = sqlite3.connect('integrated_trades.db')
+            
+            # 필터 옵션
+            col_filter1, col_filter2 = st.columns(2)
+            
+            with col_filter1:
+                # 심볼 필터
+                symbol_query = "SELECT DISTINCT symbol FROM trades WHERE reflection IS NOT NULL ORDER BY symbol"
+                symbols_df = pd.read_sql_query(symbol_query, conn)
+                
+                if not symbols_df.empty:
+                    all_symbols = ['전체'] + symbols_df['symbol'].tolist()
+                    selected_symbol = st.selectbox("🎯 심볼 선택", all_symbols)
+                else:
+                    selected_symbol = '전체'
+            
+            with col_filter2:
+                # 기간 필터
+                period_options = {
+                    '최근 24시간': 1,
+                    '최근 3일': 3,
+                    '최근 7일': 7,
+                    '최근 30일': 30,
+                    '전체': 999999
+                }
+                selected_period = st.selectbox("📅 조회 기간", list(period_options.keys()))
+                days = period_options[selected_period]
+            
+            # Reflection 조회 쿼리
+            base_query = """
+            SELECT 
+                timestamp,
+                symbol,
+                action,
+                ai_decision,
+                confidence,
+                reflection
+            FROM trades
+            WHERE reflection IS NOT NULL
+                AND reflection != ''
+                AND timestamp >= datetime('now', '-{days} days')
+            """
+            
+            if selected_symbol != '전체':
+                base_query += f" AND symbol = '{selected_symbol}'"
+            
+            base_query += " ORDER BY timestamp DESC LIMIT 50"
+            
+            reflection_query = base_query.format(days=days)
+            reflection_df = pd.read_sql_query(reflection_query, conn)
+            conn.close()
+            
+            if not reflection_df.empty:
+                reflection_df['timestamp'] = pd.to_datetime(reflection_df['timestamp'])
+                
+                # 통계 표시
+                st.markdown("### 📊 Reflection 통계")
+                col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+                
+                with col_stat1:
+                    st.metric("📝 총 Reflection", len(reflection_df))
+                
+                with col_stat2:
+                    approved = len(reflection_df[reflection_df['ai_decision'] == 'approve'])
+                    st.metric("✅ Approved", approved)
+                
+                with col_stat3:
+                    rejected = len(reflection_df[reflection_df['ai_decision'] == 'reject'])
+                    st.metric("❌ Rejected", rejected)
+                
+                with col_stat4:
+                    avg_confidence = reflection_df['confidence'].mean() * 100
+                    st.metric("🎯 평균 신뢰도", f"{avg_confidence:.1f}%")
+                
+                st.markdown("---")
+                
+                # Reflection 카드 형식으로 표시
+                st.markdown("### 📋 Reflection 상세 내역")
+                
+                for idx, row in reflection_df.iterrows():
+                    # 결정에 따른 색상
+                    if row['ai_decision'] == 'approve':
+                        decision_color = "🟢"
+                        bg_color = "#d4edda"
+                    elif row['ai_decision'] == 'reject':
+                        decision_color = "🔴"
+                        bg_color = "#f8d7da"
+                    else:
+                        decision_color = "🟡"
+                        bg_color = "#fff3cd"
+                    
+                    with st.expander(
+                        f"{decision_color} {row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')} | "
+                        f"{row['symbol']} | {row['action'].upper()} | "
+                        f"Confidence: {row['confidence']*100:.1f}%"
+                    ):
+                        # 메타 정보
+                        col_meta1, col_meta2, col_meta3, col_meta4 = st.columns(4)
+                        
+                        with col_meta1:
+                            st.markdown(f"**심볼:** `{row['symbol']}`")
+                        
+                        with col_meta2:
+                            st.markdown(f"**액션:** `{row['action'].upper()}`")
+                        
+                        with col_meta3:
+                            st.markdown(f"**결정:** `{row['ai_decision'].upper()}`")
+                        
+                        with col_meta4:
+                            st.markdown(f"**신뢰도:** `{row['confidence']*100:.1f}%`")
+                        
+                        st.markdown("---")
+                        
+                        # Reflection 내용
+                        st.markdown("**🧠 AI Reflection:**")
+                        
+                        # Reflection을 보기 좋게 포맷팅
+                        reflection_text = row['reflection']
+                        
+                        # 섹션별로 하이라이팅
+                        sections = {
+                            'PERFORMANCE ASSESSMENT': '📊',
+                            'KEY STRENGTHS': '💪',
+                            'CRITICAL WEAKNESSES': '⚠️',
+                            'ACTIONABLE RECOMMENDATIONS': '🎯',
+                            'SIGNAL VALIDATION GUIDANCE': '✅'
+                        }
+                        
+                        formatted_reflection = reflection_text
+                        for section, emoji in sections.items():
+                            if section in formatted_reflection:
+                                formatted_reflection = formatted_reflection.replace(
+                                    section, 
+                                    f"\n\n**{emoji} {section}**"
+                                )
+                        
+                        st.markdown(formatted_reflection)
+                        
+                        st.markdown("---")
+                        st.caption(f"생성 시간: {row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+                
+                # 최신 Reflection 하이라이트
+                if len(reflection_df) > 0:
+                    st.markdown("---")
+                    st.markdown("### ⭐ 최신 Reflection")
+                    
+                    latest = reflection_df.iloc[0]
+                    
+                    st.info(f"""
+                    **시간:** {latest['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}
+                    
+                    **심볼:** {latest['symbol']} | **액션:** {latest['action'].upper()}
+                    
+                    **AI 결정:** {latest['ai_decision'].upper()} (신뢰도: {latest['confidence']*100:.1f}%)
+                    """)
+                    
+                    with st.container():
+                        st.markdown("**🧠 Reflection 내용:**")
+                        st.text_area(
+                            "최신 분석",
+                            latest['reflection'],
+                            height=300,
+                            disabled=True,
+                            label_visibility="collapsed"
+                        )
+            
+            else:
+                st.warning("⚠️ 선택한 기간에 Reflection 기록이 없습니다.")
+                st.info("💡 거래 신호가 발생하면 AI가 자동으로 Reflection을 생성합니다.")
+            
+        except Exception as e:
+            st.error(f"Reflection 조회 오류: {e}")
+            import traceback
+            st.text(traceback.format_exc())
+    
     # 자동 새로고침
     if auto_refresh:
         import time
@@ -1886,7 +2074,7 @@ def main():
     
     # Footer
     st.markdown("---")
-    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | v6.0 Enhanced")
+    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | v6.1 Enhanced + Reflection")
 
 if __name__ == "__main__":
     main()
