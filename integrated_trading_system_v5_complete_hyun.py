@@ -2088,27 +2088,44 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
 
 **CURRENT MARKET CONDITIONS:**
 - Symbol: {symbol}
-- Current Price: {market_data['current_price']:.2f}
+- Current Price: ${market_data['current_price']:.2f} USDT
 - Action: Close Position
 {message_str}
 
-**TECHNICAL INDICATORS:**
+**MULTI-TIMEFRAME TECHNICAL ANALYSIS:**
 
-**5-Minute Chart (Latest):**
-- RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
-- MACD: {df_5min['macd'].iloc[-1]:.2f}
-- Bollinger: Middle={df_5min['bb_bbm'].iloc[-1]:.2f}, Upper={df_5min['bb_bbh'].iloc[-1]:.2f}, Lower={df_5min['bb_bbl'].iloc[-1]:.2f}
-- ADX: {df_5min['adx'].iloc[-1]:.2f}
-- CMF: {df_5min['cmf'].iloc[-1]:.2f}
+═══════════════════════════════════════════
+📊 **5-MINUTE CHART (Short-term Momentum)**
+═══════════════════════════════════════════
+→ Momentum:
+  • RSI(14): {df_5min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_5min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_5min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+  • MACD: {df_5min['macd'].iloc[-1]:.2f} (Signal: {df_5min['macd_signal'].iloc[-1]:.2f})
 
-**1-Hour Chart (Latest):**
-- RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
-- MACD: {df_hourly['macd'].iloc[-1]:.2f}
-- ADX: {df_hourly['adx'].iloc[-1]:.2f}
+→ Trend:
+  • Bollinger: Upper=${df_5min['bb_bbh'].iloc[-1]:.2f}, Mid=${df_5min['bb_bbm'].iloc[-1]:.2f}, Lower=${df_5min['bb_bbl'].iloc[-1]:.2f}
+  • ADX: {df_5min['adx'].iloc[-1]:.2f} {'[STRONG]' if df_5min['adx'].iloc[-1] > 25 else '[WEAK]'}
+  • DI+: {df_5min['di_plus'].iloc[-1]:.2f} vs DI-: {df_5min['di_minus'].iloc[-1]:.2f}
 
-**4-Hour Chart (Latest):**
-- RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
-- ADX: {df_4h['adx'].iloc[-1]:.2f}
+→ Volume:
+  • CMF: {df_5min['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_5min['cmf'].iloc[-1] > 0 else '[SELLING]'}
+
+═══════════════════════════════════════════
+📈 **1-HOUR CHART (Medium-term Trend)**
+═══════════════════════════════════════════
+  • RSI(14): {df_hourly['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_hourly['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_hourly['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+  • MACD: {df_hourly['macd'].iloc[-1]:.2f} (Signal: {df_hourly['macd_signal'].iloc[-1]:.2f})
+  • ADX: {df_hourly['adx'].iloc[-1]:.2f} {'[STRONG]' if df_hourly['adx'].iloc[-1] > 25 else '[WEAK]'}
+  • DI+: {df_hourly['di_plus'].iloc[-1]:.2f} vs DI-: {df_hourly['di_minus'].iloc[-1]:.2f}
+  • CMF: {df_hourly['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_hourly['cmf'].iloc[-1] > 0 else '[SELLING]'}
+
+═══════════════════════════════════════════
+📊 **4-HOUR CHART (Long-term Direction)**
+═══════════════════════════════════════════
+  • RSI(14): {df_4h['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_4h['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_4h['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+  • MACD: {df_4h['macd'].iloc[-1]:.2f}
+  • ADX: {df_4h['adx'].iloc[-1]:.2f} {'[STRONG]' if df_4h['adx'].iloc[-1] > 25 else '[WEAK]'}
+  • DI+: {df_4h['di_plus'].iloc[-1]:.2f} vs DI-: {df_4h['di_minus'].iloc[-1]:.2f}
+  • CMF: {df_4h['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_4h['cmf'].iloc[-1] > 0 else '[SELLING]'}
 
 **RECENT PERFORMANCE REFLECTION:**
 {reflection if reflection else 'No previous trading data available'}
@@ -2122,12 +2139,27 @@ The reflection contains insights from recent trading performance including:
 
 Apply these insights when validating this exit signal. If the reflection indicates problems with premature exits or timing issues, factor that into your decision.
 
+**ENHANCED EXIT VALIDATION:**
+
+⚠️ **APPROVE EXIT IF:**
+- Strong reversal signals across multiple timeframes
+- Momentum exhaustion (RSI extremes + divergence)
+- Trend weakening (ADX declining, DI crossover)
+- Volume flow reversing (CMF changing direction)
+- Profit target reached with reversal confirmation
+
+❌ **REJECT EXIT IF:**
+- Trend still strong on higher timeframes
+- No reversal confirmation
+- Premature exit (small profit, trend intact)
+- Temporary pullback in strong trend
+
 **VALIDATION CRITERIA:**
 Consider if this is a good time to close the position based on:
-- Current market momentum
-- Technical indicator signals
-- Recent price action
-- Risk management perspective
+- Multi-timeframe trend alignment or divergence
+- Momentum exhaustion vs healthy correction
+- Volume flow changes across timeframes
+- Risk management vs opportunity cost
 
 **CRITICAL INSTRUCTIONS:**
 1. You MUST respond with ONLY a valid JSON object
@@ -2139,7 +2171,7 @@ Consider if this is a good time to close the position based on:
 
 **Field Requirements:**
 - decision: must be "approve" or "reject"
-- reason: string explaining the decision
+- reason: string explaining WITH SPECIFIC TIMEFRAME ANALYSIS
 - confidence: number between 0.0 and 1.0
 - urgency: "immediate", "soon", "normal", or "low"
 
@@ -2293,7 +2325,7 @@ Your response must be a single JSON object."""
         
         # 프롬프트 구성
         prompt = f"""
-You are an expert crypto trading AI validator. You need to validate trading signals using technical analysis and return ONLY valid JSON.
+You are an elite crypto trading AI validator specializing in multi-timeframe technical analysis. Your mission is to prevent losses from late entries and reversal traps while capturing genuine opportunities.
 
 **ACCOUNT & TRADING CONFIGURATION (REFERENCE ONLY - DO NOT VALIDATE):**
 - Leverage: {leverage}x
@@ -2308,37 +2340,71 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
 
 **SIGNAL TO VALIDATE:**
 - Symbol: {symbol}
-- Proposed Action: {action}
-- Current Price: {market_data['current_price']:.2f}
+- Proposed Action: {action.upper()}
+- Current Price: ${market_data['current_price']:.2f} USDT
 {message_str}
 
-**TECHNICAL INDICATORS:**
+**MULTI-TIMEFRAME TECHNICAL ANALYSIS:**
 
-**5-Minute Chart (Latest):**
-- RSI(14): {df_5min['rsi'].iloc[-1]:.2f}
-- MACD: {df_5min['macd'].iloc[-1]:.2f}
-- Bollinger Bands: Middle={df_5min['bb_bbm'].iloc[-1]:.2f}, Upper={df_5min['bb_bbh'].iloc[-1]:.2f}, Lower={df_5min['bb_bbl'].iloc[-1]:.2f}
-- Stochastic: %K={df_5min['stoch_k'].iloc[-1]:.2f}, %D={df_5min['stoch_d'].iloc[-1]:.2f}
-- ATR: {df_5min['atr'].iloc[-1]:.2f}
-- Williams %R: {df_5min['williams_r'].iloc[-1]:.2f}
-- CMF: {df_5min['cmf'].iloc[-1]:.2f}
-- ADX: {df_5min['adx'].iloc[-1]:.2f}
-- DI+: {df_5min['di_plus'].iloc[-1]:.2f}, DI-: {df_5min['di_minus'].iloc[-1]:.2f}
-- PPO: {df_5min['ppo'].iloc[-1]:.2f}
+═══════════════════════════════════════════
+📊 **5-MINUTE CHART (Short-term Momentum)**
+═══════════════════════════════════════════
+→ Momentum Indicators:
+  • RSI(14): {df_5min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_5min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_5min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+  • Stochastic %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
+  • Williams %R: {df_5min['williams_r'].iloc[-1]:.2f}
+  • PPO: {df_5min['ppo'].iloc[-1]:.2f}
 
-**1-Hour Chart (Latest):**
-- RSI(14): {df_hourly['rsi'].iloc[-1]:.2f}
-- MACD: {df_hourly['macd'].iloc[-1]:.2f}
-- Bollinger Bands: Middle={df_hourly['bb_bbm'].iloc[-1]:.2f}
-- ATR: {df_hourly['atr'].iloc[-1]:.2f}
-- ADX: {df_hourly['adx'].iloc[-1]:.2f}
+→ Trend Indicators:
+  • MACD: {df_5min['macd'].iloc[-1]:.2f} (Signal: {df_5min['macd_signal'].iloc[-1]:.2f}, Diff: {df_5min['macd_diff'].iloc[-1]:.2f})
+  • ADX: {df_5min['adx'].iloc[-1]:.2f} {'[STRONG TREND]' if df_5min['adx'].iloc[-1] > 25 else '[WEAK TREND]'}
+  • DI+: {df_5min['di_plus'].iloc[-1]:.2f} vs DI-: {df_5min['di_minus'].iloc[-1]:.2f}
 
-**4-Hour Chart (Latest):**
-- RSI(14): {df_4h['rsi'].iloc[-1]:.2f}
-- MACD: {df_4h['macd'].iloc[-1]:.2f}
-- ADX: {df_4h['adx'].iloc[-1]:.2f}
+→ Volatility & Support/Resistance:
+  • Bollinger Bands:
+    * Upper: ${df_5min['bb_bbh'].iloc[-1]:.2f}
+    * Middle: ${df_5min['bb_bbm'].iloc[-1]:.2f}
+    * Lower: ${df_5min['bb_bbl'].iloc[-1]:.2f}
+    * Current Position: {'Near Upper' if market_data['current_price'] > df_5min['bb_bbm'].iloc[-1] else 'Near Lower'}
+  • ATR(14): {df_5min['atr'].iloc[-1]:.2f}
 
-{'**Fear & Greed Index:** ' + str(market_data["fear_greed_index"]["value"]) + ' (' + market_data["fear_greed_index"]["value_classification"] + ')' if market_data.get("fear_greed_index") else ''}
+→ Volume Flow:
+  • CMF(20): {df_5min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_5min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
+
+═══════════════════════════════════════════
+📈 **1-HOUR CHART (Medium-term Trend)**
+═══════════════════════════════════════════
+→ Momentum Indicators:
+  • RSI(14): {df_hourly['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_hourly['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_hourly['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+
+→ Trend Indicators:
+  • MACD: {df_hourly['macd'].iloc[-1]:.2f} (Signal: {df_hourly['macd_signal'].iloc[-1]:.2f})
+  • ADX: {df_hourly['adx'].iloc[-1]:.2f} {'[STRONG TREND]' if df_hourly['adx'].iloc[-1] > 25 else '[WEAK TREND]'}
+  • DI+: {df_hourly['di_plus'].iloc[-1]:.2f} vs DI-: {df_hourly['di_minus'].iloc[-1]:.2f}
+
+→ Volatility:
+  • Bollinger Middle: ${df_hourly['bb_bbm'].iloc[-1]:.2f}
+  • ATR(14): {df_hourly['atr'].iloc[-1]:.2f}
+
+→ Volume Flow:
+  • CMF(20): {df_hourly['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_hourly['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
+
+═══════════════════════════════════════════
+📊 **4-HOUR CHART (Long-term Direction)**
+═══════════════════════════════════════════
+→ Momentum Indicators:
+  • RSI(14): {df_4h['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_4h['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_4h['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+
+→ Trend Indicators:
+  • MACD: {df_4h['macd'].iloc[-1]:.2f} (Signal: {df_4h['macd_signal'].iloc[-1]:.2f})
+  • ADX: {df_4h['adx'].iloc[-1]:.2f} {'[STRONG TREND]' if df_4h['adx'].iloc[-1] > 25 else '[WEAK TREND]'}
+  • DI+: {df_4h['di_plus'].iloc[-1]:.2f} vs DI-: {df_4h['di_minus'].iloc[-1]:.2f}
+
+→ Volume Flow:
+  • CMF(20): {df_4h['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_4h['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
+
+═══════════════════════════════════════════
+{('🎭 **MARKET SENTIMENT:** Fear & Greed Index = ' + str(market_data["fear_greed_index"]["value"]) + ' (' + market_data["fear_greed_index"]["value_classification"] + ')') if market_data.get("fear_greed_index") else ''}
 
 **RECENT PERFORMANCE REFLECTION:**
 {reflection if reflection else 'No previous trading data available'}
@@ -2353,25 +2419,69 @@ The reflection above provides:
 
 Use these insights to validate the current signal. If the reflection indicates that similar signals have failed, be more conservative. If certain patterns have succeeded, increase confidence accordingly.
 
-**VALIDATION CRITERIA:**
+**ENHANCED VALIDATION FRAMEWORK:**
 
-For BUY signals, validate if:
-- RSI is not overbought (preferably < 80)
-- MACD shows bullish momentum or crossover
-- Price is near support levels or breaking resistance
-- Volume and momentum indicators confirm
+⚠️ **CRITICAL CHECKS - REJECT IF ANY ARE TRUE:**
 
-For SELL signals, validate if:  
-- RSI is not oversold (preferably > 20)
-- MACD shows bearish momentum or crossover
-- Price is near resistance levels or breaking support
-- Volume and momentum indicators confirm
+For BUY Signals:
+1. **Late Entry Detection:**
+   - 5m RSI > 75 AND 1h RSI > 70 → Likely already pumped, high reversal risk
+   - Price > 1h Bollinger Upper Band → Overextended
+   - 4h RSI > 80 → Major overbought on higher timeframe
 
-**DECISION REQUIRED:**
-Based on the technical indicators and market conditions, should this {action} signal be:
-1. APPROVED - Execute the trade as proposed
-2. REJECTED - Do not execute, conditions unfavorable
-3. MODIFIED - Execute with adjusted parameters
+2. **Reversal Warning Signs:**
+   - 5m MACD histogram declining while price rising → Bearish divergence
+   - DI- crossing above DI+ on 1h or 4h → Trend reversal
+   - CMF turning negative on multiple timeframes → Money flowing out
+
+3. **Weak Trend Confirmation:**
+   - 4h ADX < 20 → No clear trend, avoid entries
+   - All timeframes showing conflicting signals → High uncertainty
+
+For SELL Signals:
+1. **Late Entry Detection:**
+   - 5m RSI < 25 AND 1h RSI < 30 → Likely already dumped, bounce risk
+   - Price < 1h Bollinger Lower Band → Overextended downside
+   - 4h RSI < 20 → Major oversold on higher timeframe
+
+2. **Reversal Warning Signs:**
+   - 5m MACD histogram rising while price falling → Bullish divergence
+   - DI+ crossing above DI- on 1h or 4h → Trend reversal
+   - CMF turning positive on multiple timeframes → Money flowing in
+
+3. **Weak Trend Confirmation:**
+   - 4h ADX < 20 → No clear trend, avoid entries
+   - All timeframes showing conflicting signals → High uncertainty
+
+✅ **APPROVAL CRITERIA - ALL MUST ALIGN:**
+
+For BUY Signals:
+- 4h trend: DI+ > DI- (uptrend confirmed)
+- 1h momentum: RSI 40-70 (healthy range)
+- 5m entry: Recent bounce from support OR breakout with volume
+- CMF positive on at least 2 timeframes
+- ADX > 20 on 4h (trend strength)
+- No extreme overbought conditions
+
+For SELL Signals:
+- 4h trend: DI- > DI+ (downtrend confirmed)
+- 1h momentum: RSI 30-60 (healthy range)
+- 5m entry: Recent rejection from resistance OR breakdown with volume
+- CMF negative on at least 2 timeframes
+- ADX > 20 on 4h (trend strength)
+- No extreme oversold conditions
+
+🎯 **OPTIMAL ENTRY CONDITIONS (High Confidence):**
+- All 3 timeframes aligned in same direction
+- Strong ADX (>25) on 4h showing trend strength
+- Entry on pullback, not at extremes
+- Volume confirmation across timeframes
+- RSI in goldilocks zone (not too hot, not too cold)
+
+**DECISION FRAMEWORK:**
+1. **APPROVE:** All criteria met, low reversal risk, optimal entry
+2. **REJECT:** Critical checks failed, high reversal risk, or late entry
+3. **MODIFY:** Partial criteria met, suggest hold or reduced position
 
 **CRITICAL INSTRUCTIONS:**
 1. You MUST respond with ONLY a valid JSON object
@@ -2384,16 +2494,20 @@ Based on the technical indicators and market conditions, should this {action} si
 **Field Requirements:**
 - decision: must be "approve", "reject", or "modify"
 - modified_action: must be "buy", "sell", or "hold"
-- percentage: integer between 10 and 100
-- reason: string explaining the decision
-- stop_loss_price: number (price level)
-- take_profit_price: number (price level)
-- pl_ratio: number between 1.0 and 5.0
-- confidence: number between 0.0 and 1.0
+- percentage: integer between 10 and 100 (reduce if uncertain)
+- reason: string explaining the decision WITH SPECIFIC TIMEFRAME ANALYSIS
+- stop_loss_price: number (price level based on ATR and support/resistance)
+- take_profit_price: number (price level with realistic targets)
+- pl_ratio: number between 1.0 and 5.0 (risk/reward ratio)
+- confidence: number between 0.0 and 1.0 (lower if reversal risk detected)
 
 Return ONLY the JSON object. Start with {{ and end with }}
 
-Provide specific reasoning based on the indicators and suggest optimal entry, stop loss, and take profit levels.
+Your reason MUST include:
+- Which timeframes support/oppose the signal
+- Specific indicator values that drove your decision
+- Reversal risks identified (if any)
+- Why this is or isn't a late entry
 """
         
         # AI API 호출
