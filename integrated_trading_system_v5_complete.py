@@ -494,6 +494,24 @@ SYMBOL_CONFIG = {
         'enabled': True,
         'ai_validation': True,
         'ai_monitoring': True
+    },
+    'COTI/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'RAYSOL/USDT': {
+        'leverage': 10,
+        'position_size_percent': 30,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
     }
 }
 
@@ -3701,7 +3719,11 @@ def webhook():
             'FUSDT': 'F/USDT',
             'FUSDT.P': 'F/USDT',
             'TAOUSDT': 'TAO/USDT',
-            'TAOUSDT.P': 'TAO/USDT'
+            'TAOUSDT.P': 'TAO/USDT',
+            'RAYSOLUSDT': 'RAYSOL/USDT',
+            'RAYSOLUSDT.P': 'RAYSOL/USDT',
+            'COTIUSDT': 'COTI/USDT',
+            'COTIUSDT.P': 'COTI/USDT'
         }
         
         original_symbol = symbol
