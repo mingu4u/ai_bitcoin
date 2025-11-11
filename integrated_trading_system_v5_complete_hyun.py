@@ -944,21 +944,9 @@ def add_indicators(df):
     df['stoch_k'] = stoch.stoch()
     df['stoch_d'] = stoch.stoch_signal()
 
-    # Average True Range (ATR) 추가 - 개선된 버전
-    atr_indicator = ta.volatility.AverageTrueRange(
-        high=df['high'], low=df['low'], close=df['close'], window=14)
-    df['atr'] = atr_indicator.average_true_range()
-    
-    # ATR NaN 처리 및 최소값 보장
-    # 1. backward fill로 이전 값 사용
-    df['atr'] = df['atr'].fillna(method='bfill')
-    # 2. 그래도 NaN이면 가격의 0.5%를 기본값으로 사용
-    if df['atr'].isna().any():
-        default_atr = df['close'].mean() * 0.005  # 평균 가격의 0.5%
-        df['atr'] = df['atr'].fillna(default_atr)
-    # 3. ATR이 너무 작으면 최소값 적용
-    min_atr = df['close'].mean() * 0.001  # 최소 0.1%
-    df['atr'] = df['atr'].clip(lower=min_atr)
+    # Average True Range (ATR) 추가
+    df['atr'] = ta.volatility.AverageTrueRange(
+        high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
 
     # On-Balance Volume (OBV) 추가
     df['obv'] = ta.volume.OnBalanceVolumeIndicator(
@@ -1029,43 +1017,87 @@ def get_market_data(symbol):
         # 오더북 데이터
         orderbook = exchange.fetch_order_book(symbol, limit=10)
         
-        # 5분봉 데이터 (최근 2.5시간)
+        # 5분봉 데이터 (더 많이 가져오기 - ATR 계산 위해)
         df_5min = pd.DataFrame(
-            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=93),
+            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=150),  # 93 → 150으로 증가
             columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
         )
         df_5min['timestamp'] = pd.to_datetime(df_5min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
         df_5min = df_5min.set_index('timestamp')
-        df_5min = dropna(df_5min)
+        df_5min = df_5min.dropna()  # dropna(df) → df.dropna() 수정
         df_5min = add_indicators(df_5min)
+        
+        # ATR NaN 처리 (tail 전에 수행)
+        if 'atr' in df_5min.columns:
+            df_5min['atr'] = df_5min['atr'].fillna(method='bfill')
+            if df_5min['atr'].isna().any():
+                # 대체값: high-low 평균
+                default_atr = (df_5min['high'] - df_5min['low']).rolling(14).mean().iloc[-1]
+                if pd.isna(default_atr) or default_atr == 0:
+                    default_atr = current_price * 0.002  # 가격의 0.2%
+                df_5min['atr'] = df_5min['atr'].fillna(default_atr)
+            # ATR이 0인 경우 처리
+            df_5min.loc[df_5min['atr'] == 0, 'atr'] = current_price * 0.002
+        
         df_5min = df_5min.tail(60)
         
-        # 1시간봉 데이터 (최근 24시간)
+        # 1시간봉 데이터 (더 많이 가져오기)
         df_hourly = pd.DataFrame(
-            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=57),
+            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=100),  # 57 → 100
             columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
         )
         df_hourly['timestamp'] = pd.to_datetime(df_hourly['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
         df_hourly = df_hourly.set_index('timestamp')
-        df_hourly = dropna(df_hourly)
+        df_hourly = df_hourly.dropna()  # dropna(df) → df.dropna()
         df_hourly = add_indicators(df_hourly)
+        
+        # ATR NaN 처리
+        if 'atr' in df_hourly.columns:
+            df_hourly['atr'] = df_hourly['atr'].fillna(method='bfill')
+            if df_hourly['atr'].isna().any():
+                default_atr = (df_hourly['high'] - df_hourly['low']).rolling(14).mean().iloc[-1]
+                if pd.isna(default_atr) or default_atr == 0:
+                    default_atr = current_price * 0.003
+                df_hourly['atr'] = df_hourly['atr'].fillna(default_atr)
+            df_hourly.loc[df_hourly['atr'] == 0, 'atr'] = current_price * 0.003
+        
         df_hourly = df_hourly.tail(24)
         
-        # 4시간봉 데이터 (최근 3일)
+        # 4시간봉 데이터 (더 많이 가져오기)
         df_4h = pd.DataFrame(
-            exchange.fetch_ohlcv(symbol, timeframe='4h', limit=51),
+            exchange.fetch_ohlcv(symbol, timeframe='4h', limit=100),  # 51 → 100
             columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
         )
         df_4h['timestamp'] = pd.to_datetime(df_4h['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
         df_4h = df_4h.set_index('timestamp')
-        df_4h = dropna(df_4h)
+        df_4h = df_4h.dropna()  # dropna(df) → df.dropna()
         df_4h = add_indicators(df_4h)
+        
+        # ATR NaN 처리
+        if 'atr' in df_4h.columns:
+            df_4h['atr'] = df_4h['atr'].fillna(method='bfill')
+            if df_4h['atr'].isna().any():
+                default_atr = (df_4h['high'] - df_4h['low']).rolling(14).mean().iloc[-1]
+                if pd.isna(default_atr) or default_atr == 0:
+                    default_atr = current_price * 0.005
+                df_4h['atr'] = df_4h['atr'].fillna(default_atr)
+            df_4h.loc[df_4h['atr'] == 0, 'atr'] = current_price * 0.005
+        
         df_4h = df_4h.tail(18)
         
         # 공포 탐욕 지수 (BTC만 해당)
         fear_greed_index = None
         if 'BTC' in symbol:
             fear_greed_index = get_fear_and_greed_index()
+        
+        # ATR 값 로깅 (디버깅용)
+        try:
+            atr_5m = df_5min['atr'].iloc[-1] if 'atr' in df_5min.columns else 0
+            atr_1h = df_hourly['atr'].iloc[-1] if 'atr' in df_hourly.columns else 0
+            atr_4h = df_4h['atr'].iloc[-1] if 'atr' in df_4h.columns else 0
+            logger.debug(f"{symbol} ATR values - 5m: {atr_5m:.4f}, 1h: {atr_1h:.4f}, 4h: {atr_4h:.4f}")
+        except Exception as e:
+            logger.warning(f"Error logging ATR values: {e}")
         
         return {
             'current_price': current_price,
@@ -1645,17 +1677,42 @@ def ai_monitor_position(symbol, position_info):
         df_hourly = market_data['df_hourly']
         df_4h = market_data['df_4h']
         
-        # ATR 값 안전하게 추출 (NaN 체크)
-        atr_5min = df_5min['atr'].iloc[-1] if not df_5min['atr'].isna().all() else 0
-        atr_hourly = df_hourly['atr'].iloc[-1] if not df_hourly['atr'].isna().all() else 0
+        # ATR 값 안전하게 추출 (NaN, 0, undefined 체크)
+        def safe_get_atr(df, timeframe_name, current_price):
+            """ATR을 안전하게 추출하는 헬퍼 함수"""
+            try:
+                if 'atr' not in df.columns:
+                    logger.warning(f"⚠️ ATR column missing in {timeframe_name}")
+                    return current_price * 0.002
+                
+                atr_value = df['atr'].iloc[-1]
+                
+                # NaN, None, 0 체크
+                if pd.isna(atr_value) or atr_value is None or atr_value == 0:
+                    logger.warning(f"⚠️ {symbol} ATR({timeframe_name}) is invalid: {atr_value}")
+                    # 대체값: 최근 5개 캔들의 평균 범위
+                    if len(df) >= 5:
+                        recent_range = (df['high'].iloc[-5:] - df['low'].iloc[-5:]).mean()
+                        if recent_range > 0:
+                            logger.info(f"   → Using recent range as ATR: {recent_range:.4f}")
+                            return recent_range
+                    # 최종 대체값: 가격의 일정 비율
+                    default_atr = current_price * 0.002  # 0.2%
+                    logger.info(f"   → Using default ATR: {default_atr:.4f}")
+                    return default_atr
+                
+                return atr_value
+            except Exception as e:
+                logger.error(f"Error getting ATR for {timeframe_name}: {e}")
+                return current_price * 0.002
+        
+        # 각 타임프레임별 ATR 추출
+        atr_5min = safe_get_atr(df_5min, '5m', current_price)
+        atr_hourly = safe_get_atr(df_hourly, '1h', current_price)
+        atr_4h = safe_get_atr(df_4h, '4h', current_price)
         
         # ATR 로깅 (디버깅용)
-        if atr_5min == 0 or pd.isna(atr_5min):
-            logger.warning(f"⚠️ {symbol} ATR(5m) is 0 or NaN: {atr_5min}")
-            # 대체값 계산
-            price_volatility = df_5min['high'].iloc[-5:].max() - df_5min['low'].iloc[-5:].min()
-            atr_5min = price_volatility if price_volatility > 0 else current_price * 0.002
-            logger.info(f"   → 대체 ATR 사용: {atr_5min:.4f}")
+        logger.debug(f"{symbol} ATR values - 5m: {atr_5min:.4f}, 1h: {atr_hourly:.4f}, 4h: {atr_4h:.4f}")
         
         json_template = """
 {
@@ -2236,17 +2293,29 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
         df_hourly = market_data['df_hourly'] 
         df_4h = market_data['df_4h']
         
-        # ATR 값 안전하게 추출 (NaN 체크)
-        atr_5min_val = df_5min['atr'].iloc[-1] if not df_5min['atr'].isna().all() else 0
-        if atr_5min_val == 0 or pd.isna(atr_5min_val):
-            # 대체값: 최근 5개 캔들의 High-Low 평균
-            price_range = (df_5min['high'].iloc[-5:] - df_5min['low'].iloc[-5:]).mean()
-            atr_5min_val = price_range if price_range > 0 else market_data['current_price'] * 0.002
+        # ATR 값 안전하게 추출 (동일한 헬퍼 함수 사용)
+        def safe_get_atr(df, current_price):
+            """ATR을 안전하게 추출"""
+            try:
+                if 'atr' not in df.columns:
+                    return current_price * 0.002
+                
+                atr_value = df['atr'].iloc[-1]
+                if pd.isna(atr_value) or atr_value == 0:
+                    # 대체값 계산
+                    if len(df) >= 5:
+                        recent_range = (df['high'].iloc[-5:] - df['low'].iloc[-5:]).mean()
+                        if recent_range > 0:
+                            return recent_range
+                    return current_price * 0.002
+                
+                return atr_value
+            except:
+                return current_price * 0.002
         
-        atr_hourly_val = df_hourly['atr'].iloc[-1] if not df_hourly['atr'].isna().all() else 0
-        if atr_hourly_val == 0 or pd.isna(atr_hourly_val):
-            price_range = (df_hourly['high'].iloc[-5:] - df_hourly['low'].iloc[-5:]).mean()
-            atr_hourly_val = price_range if price_range > 0 else market_data['current_price'] * 0.003
+        # ATR 추출
+        atr_5min = safe_get_atr(df_5min, market_data['current_price'])
+        atr_hourly = safe_get_atr(df_hourly, market_data['current_price'])
 
         # close_position 액션 처리 (별도 로직)
         if action in ['close', 'close_position']:
@@ -2576,7 +2645,7 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
     * Middle: ${df_5min['bb_bbm'].iloc[-1]:.2f}
     * Lower: ${df_5min['bb_bbl'].iloc[-1]:.2f}
     * Current Position: {'Near Upper' if market_data['current_price'] > df_5min['bb_bbm'].iloc[-1] else 'Near Lower'}
-  • ATR(14): {atr_5min_val:.4f}
+  • ATR(14): {atr_5min:.4f}
 
 → Volume Flow:
   • CMF(20): {df_5min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_5min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
@@ -2594,7 +2663,7 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
 
 → Volatility:
   • Bollinger Middle: ${df_hourly['bb_bbm'].iloc[-1]:.2f}
-  • ATR(14): {atr_hourly_val:.4f}
+  • ATR(14): {atr_hourly:.4f}
 
 → Volume Flow:
   • CMF(20): {df_hourly['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_hourly['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
