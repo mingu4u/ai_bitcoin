@@ -1619,9 +1619,14 @@ def ai_monitor_position(symbol, position_info):
         # 레버리지 적용 - 실제 수익률
         pnl_percent = price_change_percent * leverage
         
+        # 포지션 크기 (USDT)
+        position_size_usdt = amount * entry_price
+        pnl_usdt = position_size_usdt * pnl_percent / 100
+        
         # 포지션 보유 시간
         entry_time = position_info.get('entry_time', datetime.now())
         holding_time = (datetime.now() - entry_time).total_seconds() / 60  # 분 단위
+        holding_hours = holding_time / 60
         
         # Technical Indicators
         df_5min = market_data['df_5min']
@@ -1632,50 +1637,194 @@ def ai_monitor_position(symbol, position_info):
 {
     "decision": "hold",
     "percentage": 0,
-    "reason": "Strong momentum continues",
+    "reason": "Strong momentum continues, no reversal signals detected",
     "exit_type": "none",
     "confidence": 0.85,
     "urgency": "none"
 }"""
 
         prompt = f"""
-You are an expert AI position manager monitoring an open {side} position for {symbol}.
+You are an elite AI position manager monitoring an active {side.upper()} position for {symbol}. Your mission is to protect profits, minimize losses, and identify optimal exit points using multi-timeframe analysis.
 
-**ACCOUNT & TRADING CONFIGURATION (REFERENCE ONLY):**
-- Leverage: {leverage}x
-- Position Size Target: {position_size_percent}% of total balance
-- Total Balance: ${total_margin:,.2f} USDT
-- Free Balance: ${free_margin:,.2f} USDT
-- Used Margin: ${used_margin:,.2f} USDT
+**CRITICAL CONTEXT:**
+This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIED impact on P&L.
 
-Note: These are fixed trading parameters for your reference. Focus on monitoring the position and deciding whether to hold, close, or partially close.
+═══════════════════════════════════════════
+💼 **POSITION STATUS**
+═══════════════════════════════════════════
+→ Position Details:
+  • Type: {position_type.upper()} ({type_indicator})
+  • Direction: {side.upper()}
+  • Entry Price: ${entry_price:,.2f}
+  • Current Price: ${current_price:,.2f}
+  • Position Size: {amount:.4f} ({position_size_usdt:,.2f} USDT)
+  • Leverage: {leverage}x
 
-**POSITION DETAILS:**
-- Entry Price: ${entry_price:.2f}
-- Current Price: ${current_price:.2f}
-- Position Size: {amount}
-- Current PnL: {pnl_percent:.2f}%
-- Holding Time: {holding_time:.0f} minutes
-- Distance to Stop Loss: {distance_to_sl:.2f}%
-- Distance to Take Profit: {distance_to_tp:.2f}%
+→ Performance Metrics:
+  • Price Change: {price_change_percent:+.2f}%
+  • **LEVERAGED P&L: {pnl_percent:+.2f}%** ({pnl_usdt:+,.2f} USDT)
+  • Holding Time: {holding_time:.0f} minutes ({holding_hours:.1f} hours)
 
-**TECHNICAL INDICATORS:**
+→ Risk Management:
+  • Stop Loss: {'$' + f'{stop_loss:,.2f}' if stop_loss else 'Not Set'} {'(' + f'{distance_to_sl:.2f}%' + ' away)' if stop_loss else ''}
+  • Take Profit: {'$' + f'{take_profit:,.2f}' if take_profit else 'Not Set'} {'(' + f'{distance_to_tp:.2f}%' + ' away)' if take_profit else ''}
 
-**5-Minute (Latest):**
-- RSI: {df_5min['rsi'].iloc[-1]:.2f}
-- MACD: {df_5min['macd'].iloc[-1]:.2f}
-- Bollinger: Price at {((current_price - df_5min['bb_bbl'].iloc[-1]) / (df_5min['bb_bbh'].iloc[-1] - df_5min['bb_bbl'].iloc[-1]) * 100):.0f}% of band
-- ADX: {df_5min['adx'].iloc[-1]:.2f}
-- CMF: {df_5min['cmf'].iloc[-1]:.2f}
+→ Account Context:
+  • Total Balance: ${total_margin:,.2f} USDT
+  • Free Balance: ${free_margin:,.2f} USDT
+  • Position Impact on Account: {(pnl_usdt / total_margin * 100) if total_margin > 0 else 0:+.2f}%
 
-**1-Hour (Latest):**
-- RSI: {df_hourly['rsi'].iloc[-1]:.2f}
-- MACD: {df_hourly['macd'].iloc[-1]:.2f}
-- ADX: {df_hourly['adx'].iloc[-1]:.2f}
+═══════════════════════════════════════════
+📊 **MULTI-TIMEFRAME TECHNICAL ANALYSIS**
+═══════════════════════════════════════════
 
-**4-Hour (Latest):**
-- RSI: {df_4h['rsi'].iloc[-1]:.2f}
-- ADX: {df_4h['adx'].iloc[-1]:.2f}
+→ **5-MINUTE CHART (Immediate Momentum)**
+═══════════════════════════════════════════
+  Momentum Indicators:
+  • RSI(14): {df_5min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_5min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_5min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+  • Stochastic %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
+  • Williams %R: {df_5min['williams_r'].iloc[-1]:.2f}
+  • PPO: {df_5min['ppo'].iloc[-1]:.2f}
+
+  Trend Analysis:
+  • MACD: {df_5min['macd'].iloc[-1]:.2f}
+  • MACD Signal: {df_5min['macd_signal'].iloc[-1]:.2f}
+  • MACD Diff: {df_5min['macd_diff'].iloc[-1]:.2f} {'[BULLISH]' if df_5min['macd_diff'].iloc[-1] > 0 else '[BEARISH]'}
+  • ADX: {df_5min['adx'].iloc[-1]:.2f} {'[STRONG TREND]' if df_5min['adx'].iloc[-1] > 25 else '[WEAK TREND]'}
+  • DI+: {df_5min['di_plus'].iloc[-1]:.2f} vs DI-: {df_5min['di_minus'].iloc[-1]:.2f}
+
+  Price Position:
+  • Bollinger Upper: ${df_5min['bb_bbh'].iloc[-1]:.2f}
+  • Bollinger Middle: ${df_5min['bb_bbm'].iloc[-1]:.2f}
+  • Bollinger Lower: ${df_5min['bb_bbl'].iloc[-1]:.2f}
+  • Current Position: {((current_price - df_5min['bb_bbl'].iloc[-1]) / (df_5min['bb_bbh'].iloc[-1] - df_5min['bb_bbl'].iloc[-1]) * 100):.0f}% of band
+  • ATR(14): {df_5min['atr'].iloc[-1]:.2f} (volatility)
+
+  Volume & Flow:
+  • CMF(20): {df_5min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_5min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
+
+→ **1-HOUR CHART (Medium-term Trend)**
+═══════════════════════════════════════════
+  Momentum:
+  • RSI(14): {df_hourly['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_hourly['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_hourly['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+
+  Trend:
+  • MACD: {df_hourly['macd'].iloc[-1]:.2f}
+  • MACD Signal: {df_hourly['macd_signal'].iloc[-1]:.2f}
+  • ADX: {df_hourly['adx'].iloc[-1]:.2f} {'[STRONG]' if df_hourly['adx'].iloc[-1] > 25 else '[WEAK]'}
+  • DI+: {df_hourly['di_plus'].iloc[-1]:.2f} vs DI-: {df_hourly['di_minus'].iloc[-1]:.2f}
+
+  Price:
+  • Bollinger Middle: ${df_hourly['bb_bbm'].iloc[-1]:.2f}
+  • ATR: {df_hourly['atr'].iloc[-1]:.2f}
+
+  Volume:
+  • CMF: {df_hourly['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_hourly['cmf'].iloc[-1] > 0 else '[SELLING]'}
+
+→ **4-HOUR CHART (Primary Trend)**
+═══════════════════════════════════════════
+  Momentum:
+  • RSI(14): {df_4h['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_4h['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_4h['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+
+  Trend:
+  • MACD: {df_4h['macd'].iloc[-1]:.2f}
+  • MACD Signal: {df_4h['macd_signal'].iloc[-1]:.2f}
+  • ADX: {df_4h['adx'].iloc[-1]:.2f} {'[STRONG]' if df_4h['adx'].iloc[-1] > 25 else '[WEAK]'}
+  • DI+: {df_4h['di_plus'].iloc[-1]:.2f} vs DI-: {df_4h['di_minus'].iloc[-1]:.2f}
+
+  Volume:
+  • CMF: {df_4h['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_4h['cmf'].iloc[-1] > 0 else '[SELLING]'}
+
+═══════════════════════════════════════════
+🎯 **EXIT DECISION FRAMEWORK**
+═══════════════════════════════════════════
+
+**For {'LONG' if side == 'buy' else 'SHORT'} Position:**
+
+**Context for Decision Making:**
+- Current ATR (5m): {df_5min['atr'].iloc[-1]:.2f} - Use this as volatility baseline
+- Price volatility is relative to this asset's normal movement
+- Consider timeframe alignment more than absolute profit percentages
+
+⚠️ **IMMEDIATE EXIT SIGNALS (Close 100%):**
+{'- 5m MACD bearish crossover + RSI declining from overbought zone' if side == 'buy' else '- 5m MACD bullish crossover + RSI rising from oversold zone'}
+{'- 1h DI- crosses above DI+ (definitive trend reversal)' if side == 'buy' else '- 1h DI+ crosses above DI- (definitive trend reversal)'}
+{'- CMF turning negative across 2+ timeframes (money flowing out)' if side == 'buy' else '- CMF turning positive across 2+ timeframes (money flowing in)'}
+{'- Price breaks below 1h Bollinger lower band with volume' if side == 'buy' else '- Price breaks above 1h Bollinger upper band with volume'}
+- Significant profit + multiple reversal confirmations across timeframes
+- Stop loss being approached with momentum clearly against position
+- Strong bearish/bullish divergence on multiple timeframes
+
+🔴 **STRONG EXIT SIGNALS (Close 75-100%):**
+{'- 5m RSI dropping sharply from overbought (>70) back below 50' if side == 'buy' else '- 5m RSI rising sharply from oversold (<30) back above 50'}
+- 4h trend weakening (ADX declining, was strong but now <25)
+- MACD histogram consistently shrinking for multiple bars
+- Substantial profit achieved + momentum showing fatigue
+- Extended holding time with diminishing momentum
+{'- Price struggling to break resistance despite multiple attempts' if side == 'buy' else '- Price struggling to break support despite multiple attempts'}
+
+🟡 **PARTIAL EXIT SIGNALS (Close 25-50%):**
+- Approaching take profit zone with early reversal indicators
+- Price consolidating at key resistance/support levels
+- Mixed signals: some timeframes bullish, others neutral/bearish
+- Reasonable profit secured + uncertain near-term direction
+- Risk management: preserve gains while maintaining exposure
+- Time decay: long holding period without meaningful progress
+
+✅ **HOLD SIGNALS:**
+- All timeframes showing alignment with position direction
+- Strong trend indicators: ADX >25 and rising
+{'- DI+ clearly dominating DI- and expanding' if side == 'buy' else '- DI- clearly dominating DI+ and expanding'}
+- MACD histogram expanding with strong momentum
+- No reversal divergences detected on any timeframe
+- CMF positive and strengthening (money flow supporting direction)
+- Price respecting trend structure (higher lows for longs, lower highs for shorts)
+- Profit target still has room with momentum intact
+
+⏰ **TIME-BASED CONTEXT:**
+- Short-term (<1 hour): Prioritize technical signals over time
+- Medium-term (1-4 hours): Normal assessment window
+- Extended (4-8 hours): Evaluate if momentum justifies continued holding
+- Long-term (>8 hours): Question opportunity cost if minimal progress
+- Very long (>24 hours): Seriously reconsider unless strong structural trend
+
+💰 **PROFIT/LOSS ASSESSMENT (Relative to Volatility):**
+**For Loss Scenarios:**
+- **Severe Loss (multiple ATR against position):** 
+  Exit immediately unless extremely strong reversal signals on multiple timeframes
+  
+- **Significant Loss (1-2 ATR against position):** 
+  Monitor very closely, exit if momentum doesn't reverse soon
+  
+- **Moderate Loss (less than 1 ATR):** 
+  Acceptable if technical indicators support recovery
+  Stop loss should be used if breakdown continues
+
+**For Profit Scenarios:**
+- **Minimal Profit (less than 1 ATR movement):**
+  Hold unless clear reversal signals - still early in potential move
+  
+- **Moderate Profit (1-2 ATR movement):**
+  Consider partial exit if reversal hints appear
+  Full hold if momentum remains strong
+  
+- **Substantial Profit (2-3 ATR movement):**
+  Strong candidate for partial profit-taking
+  Watch for exhaustion signals
+  
+- **Exceptional Profit (>3 ATR movement):**
+  Secure significant portion unless momentum extraordinarily strong
+  Use trailing stops to protect gains
+
+**Key Principle:** 
+Don't exit profitable positions just because of arbitrary profit levels. 
+Exit when TECHNICAL SIGNALS indicate momentum exhaustion or reversal,
+not when hitting a percentage target. Let winners run until they show
+weakness. Cut losers when technical breakdown is confirmed.
+
+═══════════════════════════════════════════
+📋 **RESPONSE REQUIREMENTS**
+═══════════════════════════════════════════
 
 **CRITICAL INSTRUCTIONS:**
 1. You MUST respond with ONLY a valid JSON object
@@ -1687,62 +1836,75 @@ Note: These are fixed trading parameters for your reference. Focus on monitoring
 
 **Field Requirements:**
 - decision: "hold", "close", or "partial_close"
-- percentage: 0 for hold, 100 for close, 25-75 for partial
-- reason: detailed explanation
+- percentage: 0 for hold, 100 for full close, 25-75 for partial
+- reason: **MUST be technical and specific, not based on arbitrary percentages**
 - exit_type: "take_profit", "stop_loss", "trend_reversal", "risk_management", "time_stop", or "none"
-- confidence: 0.0 to 1.0
+- confidence: 0.0 to 1.0 (lower if signals are mixed across timeframes)
 - urgency: "immediate", "soon", "watch", or "none"
 
-**EXAMPLES:**
+**Your reason MUST include:**
+1. **Timeframe Analysis:** What each timeframe (5m/1h/4h) is telling you
+2. **Trend Assessment:** Is trend intact, weakening, or reversing?
+3. **Momentum Evaluation:** MACD, RSI, ADX readings and their direction
+4. **Volume Confirmation:** CMF showing money flow direction
+5. **Volatility Context:** How current move compares to ATR baseline
+6. **Key Level Analysis:** Support/resistance, Bollinger band position
+7. **Leveraged PnL Context:** Current profit/loss relative to volatility
+8. **Divergence Check:** Any bearish/bullish divergences detected?
 
-Hold:
-{{
-    "decision": "hold",
-    "percentage": 0,
-    "reason": "Strong bullish momentum, no reversal signals",
-    "exit_type": "none",
-    "confidence": 0.82,
-    "urgency": "none"
-}}
+**DO NOT:**
+- Make decisions based solely on reaching a percentage profit target
+- Exit profitable positions just because "profit is high enough"
+- Ignore strong technical momentum just to "secure profits"
+- Use arbitrary rules like "always exit at X%"
 
-Close:
-{{
-    "decision": "close",
-    "percentage": 100,
-    "reason": "Trend reversal with bearish MACD crossover",
-    "exit_type": "trend_reversal",
-    "confidence": 0.88,
-    "urgency": "immediate"
-}}
+**DO:**
+- Exit when technical indicators show momentum exhaustion
+- Hold strong trends even with large profits if momentum persists
+- Cut losses quickly when breakdown is technically confirmed
+- Let ATR guide what's "normal" vs "extended" movement
+- Prioritize multi-timeframe confirmation over single signals
 
-Partial:
-{{
-    "decision": "partial_close",
-    "percentage": 50,
-    "reason": "Approaching resistance, securing partial profits",
-    "exit_type": "take_profit",
-    "confidence": 0.75,
-    "urgency": "soon"
-}}
-
-Return ONLY the JSON object.
+Return ONLY the JSON object. Start with {{ and end with }}
 """
 
         # AI API 호출
-        logger.info(f"포지션 모니터 시작 - {symbol} {side}")
+        logger.info(f"포지션 모니터 시작 - {symbol} {side} (보유: {holding_hours:.1f}시간, PnL: {pnl_percent:+.2f}%)")
         
         response = client.chat.completions.create(
-            model="deepseek-chat",  # Reasoner 대신 Chat 사용
+            model="deepseek-chat",
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a professional position manager.
+                    "content": """You are an elite crypto position manager specializing in leveraged futures trading with adaptive risk management.
 
 CRITICAL RULES:
 1. ONLY return valid JSON - no explanations, no reasoning, no markdown
 2. Start your response with { and end with }
 3. Follow the exact JSON schema provided
-4. Be decisive about position management
+4. Be decisive but prudent - leveraged positions require careful management
+5. Consider multi-timeframe analysis before making exit decisions
+6. Account for leverage amplification in all profit/loss calculations
+
+ADAPTIVE DECISION FRAMEWORK:
+- Each asset has unique volatility - use ATR as baseline, not fixed percentages
+- Exits should be driven by TECHNICAL SIGNALS, not arbitrary profit targets
+- Let winning trades run until momentum shows exhaustion
+- Cut losing trades when technical breakdown is confirmed
+- Consider timeframe hierarchy: 4h trend > 1h momentum > 5m noise
+- Volatility matters: 5% move in BTC ≠ 5% move in altcoin
+
+PRIORITY OBJECTIVES:
+1. Protect Capital: Exit when multiple timeframes show reversal
+2. Maximize Profits: Hold while momentum and trend remain strong
+3. Manage Risk: Balance profit preservation vs. opportunity cost
+4. Respect Market Structure: Support/resistance, trendlines, key levels
+5. Adapt to Volatility: High ATR assets need wider tolerance
+
+DECISION PHILOSOPHY:
+"Don't exit because you hit a profit target. Exit because the market 
+tells you the move is over. Don't hold a loser hoping. Exit when 
+technical breakdown is clear. Be patient with winners, ruthless with losers."
 
 Your response must be a single JSON object."""
                 },
@@ -1750,7 +1912,7 @@ Your response must be a single JSON object."""
             ],
             response_format={'type': 'json_object'},
             temperature=0.1,
-            max_tokens=1500  # Chat 모델은 Reasoner보다 토큰 효율적
+            max_tokens=1500
         )
         
         # 1. 응답 추출 - 개선된 버전
