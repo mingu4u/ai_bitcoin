@@ -23,7 +23,7 @@ load_dotenv()
 # ============ 서버별 하드코딩 설정 ============
 SERVER_PORT = 5001  # 여기서 포트 변경 (5000, 5001, 5002)
 ENABLE_TELEGRAM = True if SERVER_PORT == 5000 else False  # 5000번 포트만 텔레그램 활성화
-AI_MONITOR_INTERVAL = 1 # AI 포지션 모니터링 간격 (분) - 수동 포지션 빠른 감지를 위해 단축
+AI_MONITOR_INTERVAL = 5 # AI 포지션 모니터링 간격 (분)
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, 
@@ -568,26 +568,6 @@ def sync_positions_from_exchange():
                             synced_count += 1
                             manual_count += 1
                             
-                            # 🆕 수동 거래 데이터베이스 기록
-                            try:
-                                conn = get_db_connection()
-                                c = conn.cursor()
-                                timestamp = datetime.now().isoformat()
-                                
-                                # trades 테이블에 수동 포지션 기록
-                                c.execute("""INSERT INTO trades 
-                                           (timestamp, symbol, trade_type, ai_decision, action, reason, 
-                                            current_price, confidence) 
-                                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                                         (timestamp, symbol, 'MANUAL_ENTRY', 'detected', 'manual_position', 
-                                          f'Manual position detected: {side} {abs(contracts):.4f}', 
-                                          entry_price, 1.0))
-                                conn.commit()
-                                conn.close()
-                                logger.info(f"✅ 수동 포지션 DB 기록 완료: {symbol}")
-                            except Exception as e:
-                                logger.error(f"수동 포지션 DB 기록 실패: {e}")
-                            
                             # 🆕 텔레그램 알림 (수동 포지션 감지)
                             if ENABLE_TELEGRAM:
                                 send_telegram_notification(
@@ -964,9 +944,21 @@ def add_indicators(df):
     df['stoch_k'] = stoch.stoch()
     df['stoch_d'] = stoch.stoch_signal()
 
-    # Average True Range (ATR) 추가
-    df['atr'] = ta.volatility.AverageTrueRange(
-        high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
+    # Average True Range (ATR) 추가 - 개선된 버전
+    atr_indicator = ta.volatility.AverageTrueRange(
+        high=df['high'], low=df['low'], close=df['close'], window=14)
+    df['atr'] = atr_indicator.average_true_range()
+    
+    # ATR NaN 처리 및 최소값 보장
+    # 1. backward fill로 이전 값 사용
+    df['atr'] = df['atr'].fillna(method='bfill')
+    # 2. 그래도 NaN이면 가격의 0.5%를 기본값으로 사용
+    if df['atr'].isna().any():
+        default_atr = df['close'].mean() * 0.005  # 평균 가격의 0.5%
+        df['atr'] = df['atr'].fillna(default_atr)
+    # 3. ATR이 너무 작으면 최소값 적용
+    min_atr = df['close'].mean() * 0.001  # 최소 0.1%
+    df['atr'] = df['atr'].clip(lower=min_atr)
 
     # On-Balance Volume (OBV) 추가
     df['obv'] = ta.volume.OnBalanceVolumeIndicator(
@@ -1653,6 +1645,18 @@ def ai_monitor_position(symbol, position_info):
         df_hourly = market_data['df_hourly']
         df_4h = market_data['df_4h']
         
+        # ATR 값 안전하게 추출 (NaN 체크)
+        atr_5min = df_5min['atr'].iloc[-1] if not df_5min['atr'].isna().all() else 0
+        atr_hourly = df_hourly['atr'].iloc[-1] if not df_hourly['atr'].isna().all() else 0
+        
+        # ATR 로깅 (디버깅용)
+        if atr_5min == 0 or pd.isna(atr_5min):
+            logger.warning(f"⚠️ {symbol} ATR(5m) is 0 or NaN: {atr_5min}")
+            # 대체값 계산
+            price_volatility = df_5min['high'].iloc[-5:].max() - df_5min['low'].iloc[-5:].min()
+            atr_5min = price_volatility if price_volatility > 0 else current_price * 0.002
+            logger.info(f"   → 대체 ATR 사용: {atr_5min:.4f}")
+        
         json_template = """
 {
     "decision": "hold",
@@ -1718,7 +1722,7 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
   • Bollinger Middle: ${df_5min['bb_bbm'].iloc[-1]:.2f}
   • Bollinger Lower: ${df_5min['bb_bbl'].iloc[-1]:.2f}
   • Current Position: {((current_price - df_5min['bb_bbl'].iloc[-1]) / (df_5min['bb_bbh'].iloc[-1] - df_5min['bb_bbl'].iloc[-1]) * 100):.0f}% of band
-  • ATR(14): {df_5min['atr'].iloc[-1]:.2f} (volatility)
+  • ATR(14): {atr_5min:.4f} (volatility indicator)
 
   Volume & Flow:
   • CMF(20): {df_5min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_5min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
@@ -1736,7 +1740,7 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 
   Price:
   • Bollinger Middle: ${df_hourly['bb_bbm'].iloc[-1]:.2f}
-  • ATR: {df_hourly['atr'].iloc[-1]:.2f}
+  • ATR: {atr_hourly:.4f}
 
   Volume:
   • CMF: {df_hourly['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_hourly['cmf'].iloc[-1] > 0 else '[SELLING]'}
@@ -1762,7 +1766,7 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 **For {'LONG' if side == 'buy' else 'SHORT'} Position:**
 
 **Context for Decision Making:**
-- Current ATR (5m): {df_5min['atr'].iloc[-1]:.2f} - Use this as volatility baseline
+- Current ATR (5m): {atr_5min:.4f} - Use this as volatility baseline
 - Price volatility is relative to this asset's normal movement
 - Consider timeframe alignment more than absolute profit percentages
 
@@ -2211,41 +2215,6 @@ def stop_ai_monitoring():
     ai_monitor_running = False
     logger.info("AI position monitoring stopped")
 
-# ============ 수동 포지션 감지를 위한 동기화 스레드 ============
-sync_thread = None
-sync_running = False
-
-def start_position_sync():
-    """거래소 포지션 동기화 스레드 시작 (수동 포지션 빠른 감지)"""
-    global sync_thread, sync_running
-    
-    def sync_loop():
-        global sync_running
-        sync_running = True
-        logger.info("🔄 Position sync thread started (30-second intervals for manual position detection)")
-        
-        while sync_running:
-            try:
-                # 거래소 포지션 동기화 (수동 포지션 감지 포함)
-                sync_count = sync_positions_from_exchange()
-                if sync_count > 0:
-                    logger.debug(f"Sync completed: {sync_count} positions")
-                time.sleep(30)  # 30초마다 동기화
-            except Exception as e:
-                logger.error(f"Error in position sync loop: {e}")
-                time.sleep(60)  # 오류 시 60초 대기
-    
-    if not sync_running:
-        sync_thread = threading.Thread(target=sync_loop, daemon=True)
-        sync_thread.start()
-        logger.info("✅ Position sync thread started - Manual positions will be detected within 30 seconds")
-
-def stop_position_sync():
-    """동기화 스레드 중지"""
-    global sync_running
-    sync_running = False
-    logger.info("Position sync thread stopped")
-
 # ============ AI Decision Making (개선 버전) ============
 def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_data=None):
     """
@@ -2266,6 +2235,18 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
         df_5min = market_data['df_5min']
         df_hourly = market_data['df_hourly'] 
         df_4h = market_data['df_4h']
+        
+        # ATR 값 안전하게 추출 (NaN 체크)
+        atr_5min_val = df_5min['atr'].iloc[-1] if not df_5min['atr'].isna().all() else 0
+        if atr_5min_val == 0 or pd.isna(atr_5min_val):
+            # 대체값: 최근 5개 캔들의 High-Low 평균
+            price_range = (df_5min['high'].iloc[-5:] - df_5min['low'].iloc[-5:]).mean()
+            atr_5min_val = price_range if price_range > 0 else market_data['current_price'] * 0.002
+        
+        atr_hourly_val = df_hourly['atr'].iloc[-1] if not df_hourly['atr'].isna().all() else 0
+        if atr_hourly_val == 0 or pd.isna(atr_hourly_val):
+            price_range = (df_hourly['high'].iloc[-5:] - df_hourly['low'].iloc[-5:]).mean()
+            atr_hourly_val = price_range if price_range > 0 else market_data['current_price'] * 0.003
 
         # close_position 액션 처리 (별도 로직)
         if action in ['close', 'close_position']:
@@ -2595,7 +2576,7 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
     * Middle: ${df_5min['bb_bbm'].iloc[-1]:.2f}
     * Lower: ${df_5min['bb_bbl'].iloc[-1]:.2f}
     * Current Position: {'Near Upper' if market_data['current_price'] > df_5min['bb_bbm'].iloc[-1] else 'Near Lower'}
-  • ATR(14): {df_5min['atr'].iloc[-1]:.2f}
+  • ATR(14): {atr_5min_val:.4f}
 
 → Volume Flow:
   • CMF(20): {df_5min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_5min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
@@ -2613,7 +2594,7 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
 
 → Volatility:
   • Bollinger Middle: ${df_hourly['bb_bbm'].iloc[-1]:.2f}
-  • ATR(14): {df_hourly['atr'].iloc[-1]:.2f}
+  • ATR(14): {atr_hourly_val:.4f}
 
 → Volume Flow:
   • CMF(20): {df_hourly['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_hourly['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
@@ -4519,9 +4500,6 @@ def initialize_bot():
     
     # AI 모니터링 자동 시작
     start_ai_monitoring()
-    
-    # 수동 포지션 감지를 위한 동기화 스레드 시작
-    start_position_sync()
     
     # OpenAI API 테스트
     try:
