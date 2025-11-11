@@ -670,20 +670,24 @@ def record_completed_trade(symbol, position_info, exit_price, close_reason='manu
         # is_win 판단
         is_win = 1 if pnl_percent > 0 else 0
         
-        # DB에 저장 (🆕 position_type 컬럼 추가)
-        c.execute("""INSERT INTO completed_trades 
-                    (open_timestamp, close_timestamp, symbol, side, entry_price, exit_price,
-                     amount, pnl_usdt, pnl_percent, position_size_usdt, holding_time_minutes,
-                     close_reason, leverage, is_win, position_type)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                  (entry_time.isoformat(), datetime.now().isoformat(), symbol, side, 
-                   entry_price, exit_price, amount, pnl_usdt, pnl_percent, position_size_usdt,
-                   holding_time_minutes, close_reason, leverage, is_win, position_type))
+        # 🔒 중복 기록 방지: 동일한 entry_time과 최근 5초 내 종료 기록 확인
+        exit_time = datetime.now()
+        if not is_duplicate_completed_trade(conn, symbol, entry_time, exit_time, time_window_seconds=5):
+            c.execute("""INSERT INTO completed_trades 
+                        (open_timestamp, close_timestamp, symbol, side, entry_price, exit_price,
+                         amount, pnl_usdt, pnl_percent, position_size_usdt, holding_time_minutes,
+                         close_reason, leverage, is_win, position_type)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      (entry_time.isoformat(), exit_time.isoformat(), symbol, side, 
+                       entry_price, exit_price, amount, pnl_usdt, pnl_percent, position_size_usdt,
+                       holding_time_minutes, close_reason, leverage, is_win, position_type))
+            
+            conn.commit()
+            logger.info(f"✅ 완료된 거래 기록: {symbol} ({position_type.upper()}) - PnL: ${pnl_usdt:,.2f} ({pnl_percent:.2f}%)")
+        else:
+            logger.info(f"⏭️  중복 완료 거래 기록 스킵: {symbol}")
         
-        conn.commit()
         conn.close()
-        
-        logger.info(f"✅ 완료된 거래 기록: {symbol} ({position_type.upper()}) - PnL: ${pnl_usdt:,.2f} ({pnl_percent:.2f}%)")
         
         return True
         
@@ -1074,6 +1078,105 @@ def get_fear_and_greed_index():
         return None
 
 # ============ Reflection 기능 ============
+def is_duplicate_trade_record(conn, symbol, action, trade_type, time_window_seconds=10):
+    """
+    중복 거래 기록 체크
+    최근 N초 이내에 동일한 symbol, action, trade_type 조합이 있는지 확인
+    
+    Args:
+        conn: DB 연결
+        symbol: 심볼 (예: 'BTC/USDT')
+        action: 액션 (예: 'buy', 'sell', 'close_position', 'monitor')
+        trade_type: 거래 타입 (예: 'AI_VALIDATION', 'AI_MONITOR')
+        time_window_seconds: 중복 체크 시간 범위 (초)
+    
+    Returns:
+        bool: 중복이면 True, 아니면 False
+    """
+    try:
+        c = conn.cursor()
+        
+        # 현재 시간에서 time_window_seconds 이전 시간 계산
+        cutoff_time = (datetime.now() - timedelta(seconds=time_window_seconds)).isoformat()
+        
+        # 최근 기록 조회
+        c.execute("""
+            SELECT COUNT(*) FROM trades 
+            WHERE symbol = ? 
+            AND action = ? 
+            AND trade_type = ?
+            AND timestamp >= ?
+        """, (symbol, action, trade_type, cutoff_time))
+        
+        count = c.fetchone()[0]
+        
+        if count > 0:
+            logger.warning(
+                f"⚠️ 중복 거래 기록 감지: {symbol} {action} {trade_type} "
+                f"(최근 {time_window_seconds}초 내 {count}건 존재)"
+            )
+            return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"중복 체크 오류: {e}")
+        # 오류 발생 시 안전하게 False 반환 (기록 허용)
+        return False
+
+def is_duplicate_completed_trade(conn, symbol, entry_time, exit_time, time_window_seconds=5):
+    """
+    완료된 거래 중복 체크
+    최근 N초 이내에 동일한 symbol, entry_price로 종료된 거래가 있는지 확인
+    
+    Args:
+        conn: DB 연결
+        symbol: 심볼
+        entry_time: 진입 시간
+        exit_time: 청산 시간
+        time_window_seconds: 중복 체크 시간 범위 (초)
+    
+    Returns:
+        bool: 중복이면 True, 아니면 False
+    """
+    try:
+        c = conn.cursor()
+        
+        # entry_time과 exit_time을 문자열로 변환
+        if isinstance(entry_time, datetime):
+            entry_time_str = entry_time.isoformat()
+        else:
+            entry_time_str = entry_time
+            
+        if isinstance(exit_time, datetime):
+            exit_time_str = exit_time.isoformat()
+        else:
+            exit_time_str = exit_time
+        
+        # 동일한 symbol, entry_time으로 최근 종료된 거래 확인
+        c.execute("""
+            SELECT COUNT(*) FROM completed_trades 
+            WHERE symbol = ? 
+            AND open_timestamp = ?
+            AND close_timestamp >= datetime(?, '-' || ? || ' seconds')
+        """, (symbol, entry_time_str, exit_time_str, time_window_seconds))
+        
+        count = c.fetchone()[0]
+        
+        if count > 0:
+            logger.warning(
+                f"⚠️ 중복 완료 거래 감지: {symbol} "
+                f"(최근 {time_window_seconds}초 내 {count}건 존재)"
+            )
+            return True
+        
+        return False
+        
+    except Exception as e:
+        logger.error(f"완료 거래 중복 체크 오류: {e}")
+        # 오류 발생 시 안전하게 False 반환 (기록 허용)
+        return False
+
 def get_recent_trades(conn, symbol, num_trades=20):
     """특정 심볼의 최근 거래 내역 조회"""
     try:
@@ -1679,18 +1782,25 @@ Your response must be a single JSON object."""
             )
             logger.info(f"결정 이유: {result['reason']}")
             
-            # DB에 모니터링 기록 저장
+            # DB에 모니터링 기록 저장 (중복 체크 추가)
             conn = get_db_connection()
             c = conn.cursor()
             timestamp = datetime.now().isoformat()
-            c.execute("""INSERT INTO trades 
-                         (timestamp, symbol, trade_type, ai_decision, action, percentage, reason, 
-                          entry_price, current_price, confidence, exit_type, urgency) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                      (timestamp, symbol, 'AI_MONITOR', result['decision'], 'monitor', result['percentage'], 
-                       result['reason'], entry_price, current_price, result['confidence'], 
-                       result['exit_type'], result['urgency']))
-            conn.commit()
+            
+            # 🔒 중복 기록 방지: 최근 10초 내 동일 기록 확인
+            if not is_duplicate_trade_record(conn, symbol, 'monitor', 'AI_MONITOR', time_window_seconds=10):
+                c.execute("""INSERT INTO trades 
+                             (timestamp, symbol, trade_type, ai_decision, action, percentage, reason, 
+                              entry_price, current_price, confidence, exit_type, urgency) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                          (timestamp, symbol, 'AI_MONITOR', result['decision'], 'monitor', result['percentage'], 
+                           result['reason'], entry_price, current_price, result['confidence'], 
+                           result['exit_type'], result['urgency']))
+                conn.commit()
+                logger.info(f"✅ AI 모니터링 기록 저장 완료: {symbol}")
+            else:
+                logger.info(f"⏭️  중복 기록 스킵: {symbol} AI_MONITOR")
+            
             conn.close()
             
             return result
@@ -2109,17 +2219,24 @@ Your response must be a single JSON object."""
                 )
                 logger.info(f"결정 이유: {result['reason']}")
                 
-                # 거래 기록 저장
+                # 거래 기록 저장 (중복 체크 추가)
                 conn = get_db_connection()
                 c = conn.cursor()
                 timestamp = datetime.now().isoformat()
-                c.execute("""INSERT INTO trades 
-                             (timestamp, symbol, trade_type, ai_decision, action, reason, 
-                              current_price, confidence) 
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                          (timestamp, symbol, 'AI_VALIDATION', result['decision'], 'close_position', 
-                           result['reason'], market_data['current_price'], result['confidence']))
-                conn.commit()
+                
+                # 🔒 중복 기록 방지: 최근 10초 내 동일 기록 확인
+                if not is_duplicate_trade_record(conn, symbol, 'close_position', 'AI_VALIDATION', time_window_seconds=10):
+                    c.execute("""INSERT INTO trades 
+                                 (timestamp, symbol, trade_type, ai_decision, action, reason, 
+                                  current_price, confidence) 
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                              (timestamp, symbol, 'AI_VALIDATION', result['decision'], 'close_position', 
+                               result['reason'], market_data['current_price'], result['confidence']))
+                    conn.commit()
+                    logger.info(f"✅ 청산 검증 기록 저장 완료: {symbol}")
+                else:
+                    logger.info(f"⏭️  중복 기록 스킵: {symbol} close_position AI_VALIDATION")
+                
                 conn.close()
                 
                 return result
@@ -2344,18 +2461,25 @@ Your response must be a single JSON object."""
             )
             logger.info(f"결정 이유: {result['reason']}")
             
-            # 거래 기록 저장
+            # 거래 기록 저장 (중복 체크 추가)
             conn = get_db_connection()
             c = conn.cursor()
             timestamp = datetime.now().isoformat()
-            c.execute("""INSERT INTO trades 
-                         (timestamp, symbol, trade_type, ai_decision, action, percentage, reason, 
-                          current_price, stop_loss, take_profit, pl_ratio, confidence, reflection) 
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                      (timestamp, symbol, 'AI_VALIDATION', result['decision'], action, result['percentage'], 
-                       result['reason'], market_data['current_price'], result['stop_loss_price'], 
-                       result['take_profit_price'], result['pl_ratio'], result['confidence'], reflection))
-            conn.commit()
+            
+            # 🔒 중복 기록 방지: 최근 10초 내 동일 기록 확인
+            if not is_duplicate_trade_record(conn, symbol, action, 'AI_VALIDATION', time_window_seconds=10):
+                c.execute("""INSERT INTO trades 
+                             (timestamp, symbol, trade_type, ai_decision, action, percentage, reason, 
+                              current_price, stop_loss, take_profit, pl_ratio, confidence, reflection) 
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                          (timestamp, symbol, 'AI_VALIDATION', result['decision'], action, result['percentage'], 
+                           result['reason'], market_data['current_price'], result['stop_loss_price'], 
+                           result['take_profit_price'], result['pl_ratio'], result['confidence'], reflection))
+                conn.commit()
+                logger.info(f"✅ {action.upper()} 신호 검증 기록 저장 완료: {symbol} (Reflection 포함)")
+            else:
+                logger.info(f"⏭️  중복 기록 스킵: {symbol} {action} AI_VALIDATION")
+            
             conn.close()
             
             return result
