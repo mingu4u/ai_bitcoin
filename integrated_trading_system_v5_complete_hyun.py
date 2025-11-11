@@ -23,7 +23,7 @@ load_dotenv()
 # ============ 서버별 하드코딩 설정 ============
 SERVER_PORT = 5001  # 여기서 포트 변경 (5000, 5001, 5002)
 ENABLE_TELEGRAM = True if SERVER_PORT == 5000 else False  # 5000번 포트만 텔레그램 활성화
-AI_MONITOR_INTERVAL = 5 # AI 포지션 모니터링 간격 (분)
+AI_MONITOR_INTERVAL = 1 # AI 포지션 모니터링 간격 (분) - 수동 포지션 빠른 감지를 위해 단축
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, 
@@ -567,6 +567,26 @@ def sync_positions_from_exchange():
                             logger.info(f"   → AI 모니터링 대상에 자동 추가됨")
                             synced_count += 1
                             manual_count += 1
+                            
+                            # 🆕 수동 거래 데이터베이스 기록
+                            try:
+                                conn = get_db_connection()
+                                c = conn.cursor()
+                                timestamp = datetime.now().isoformat()
+                                
+                                # trades 테이블에 수동 포지션 기록
+                                c.execute("""INSERT INTO trades 
+                                           (timestamp, symbol, trade_type, ai_decision, action, reason, 
+                                            current_price, confidence) 
+                                           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                                         (timestamp, symbol, 'MANUAL_ENTRY', 'detected', 'manual_position', 
+                                          f'Manual position detected: {side} {abs(contracts):.4f}', 
+                                          entry_price, 1.0))
+                                conn.commit()
+                                conn.close()
+                                logger.info(f"✅ 수동 포지션 DB 기록 완료: {symbol}")
+                            except Exception as e:
+                                logger.error(f"수동 포지션 DB 기록 실패: {e}")
                             
                             # 🆕 텔레그램 알림 (수동 포지션 감지)
                             if ENABLE_TELEGRAM:
@@ -2190,6 +2210,41 @@ def stop_ai_monitoring():
     global ai_monitor_running
     ai_monitor_running = False
     logger.info("AI position monitoring stopped")
+
+# ============ 수동 포지션 감지를 위한 동기화 스레드 ============
+sync_thread = None
+sync_running = False
+
+def start_position_sync():
+    """거래소 포지션 동기화 스레드 시작 (수동 포지션 빠른 감지)"""
+    global sync_thread, sync_running
+    
+    def sync_loop():
+        global sync_running
+        sync_running = True
+        logger.info("🔄 Position sync thread started (30-second intervals for manual position detection)")
+        
+        while sync_running:
+            try:
+                # 거래소 포지션 동기화 (수동 포지션 감지 포함)
+                sync_count = sync_positions_from_exchange()
+                if sync_count > 0:
+                    logger.debug(f"Sync completed: {sync_count} positions")
+                time.sleep(30)  # 30초마다 동기화
+            except Exception as e:
+                logger.error(f"Error in position sync loop: {e}")
+                time.sleep(60)  # 오류 시 60초 대기
+    
+    if not sync_running:
+        sync_thread = threading.Thread(target=sync_loop, daemon=True)
+        sync_thread.start()
+        logger.info("✅ Position sync thread started - Manual positions will be detected within 30 seconds")
+
+def stop_position_sync():
+    """동기화 스레드 중지"""
+    global sync_running
+    sync_running = False
+    logger.info("Position sync thread stopped")
 
 # ============ AI Decision Making (개선 버전) ============
 def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_data=None):
@@ -4464,6 +4519,9 @@ def initialize_bot():
     
     # AI 모니터링 자동 시작
     start_ai_monitoring()
+    
+    # 수동 포지션 감지를 위한 동기화 스레드 시작
+    start_position_sync()
     
     # OpenAI API 테스트
     try:

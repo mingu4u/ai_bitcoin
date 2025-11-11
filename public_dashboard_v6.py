@@ -1241,13 +1241,29 @@ def main():
     # 수동 거래 감지
     if enable_manual_detection:
         if 'last_detection_time' not in st.session_state:
-            st.session_state.last_detection_time = datetime.now() - timedelta(seconds=31)
+            st.session_state.last_detection_time = datetime.now() - timedelta(seconds=16)
         
         time_since_detection = (datetime.now() - st.session_state.last_detection_time).total_seconds()
         
-        if time_since_detection > 30:  # 30초마다 감지
+        if time_since_detection > 15:  # 15초마다 감지 (더 빠른 감지)
             exchange_pos = get_exchange_positions()
-            save_position_snapshot(exchange_pos)  # 포지션이 없어도 스냅샷 저장
+            
+            # 초기 스냅샷이 없으면 먼저 생성
+            try:
+                conn = sqlite3.connect('integrated_trades.db')
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM position_snapshots")
+                snapshot_count = cursor.fetchone()[0]
+                conn.close()
+                
+                if snapshot_count == 0:
+                    save_position_snapshot(exchange_pos)
+                    st.sidebar.info("📸 초기 포지션 스냅샷 생성")
+                    time.sleep(0.5)  # 짧은 대기
+            except Exception as e:
+                st.sidebar.error(f"스냅샷 체크 오류: {e}")
+            
+            save_position_snapshot(exchange_pos)  # 현재 스냅샷 저장
             detected = detect_manual_trades()
             if detected:
                 st.sidebar.success(f"🔍 {len(detected)}개 수동 거래 감지!")
@@ -1845,7 +1861,7 @@ def main():
         try:
             conn = sqlite3.connect('integrated_trades.db')
             
-            # 최근 감지된 수동 거래
+            # 최근 감지된 수동 거래 (두 소스 통합)
             manual_query = """
             SELECT 
                 detected_at,
@@ -1856,8 +1872,29 @@ def main():
                 price,
                 note
             FROM manual_trades
+            
+            UNION ALL
+            
+            SELECT 
+                timestamp as detected_at,
+                symbol,
+                'MANUAL_ENTRY' as trade_type,
+                CASE 
+                    WHEN reason LIKE '%buy%' OR reason LIKE '%Buy%' OR reason LIKE '%BUY%' THEN 'buy'
+                    WHEN reason LIKE '%sell%' OR reason LIKE '%Sell%' OR reason LIKE '%SELL%' THEN 'sell'
+                    WHEN reason LIKE '%long%' OR reason LIKE '%Long%' OR reason LIKE '%LONG%' THEN 'buy'
+                    WHEN reason LIKE '%short%' OR reason LIKE '%Short%' OR reason LIKE '%SHORT%' THEN 'sell'
+                    ELSE 'unknown'
+                END as side,
+                0 as amount,
+                current_price as price,
+                reason as note
+            FROM trades
+            WHERE trade_type = 'MANUAL_ENTRY'
+               OR (ai_decision = 'detected' AND action = 'manual_position')
+            
             ORDER BY detected_at DESC
-            LIMIT 50
+            LIMIT 100
             """
             
             manual_df = pd.read_sql_query(manual_query, conn)
@@ -1951,11 +1988,17 @@ def main():
                 ai_decision,
                 confidence,
                 urgency,
-                reason
+                reason,
+                CASE 
+                    WHEN reason LIKE '%Manual position%' THEN '🔧 Manual'
+                    WHEN reason LIKE '%manual%' THEN '🔧 Manual'
+                    ELSE '🤖 Auto'
+                END as position_type
             FROM trades
-            WHERE trade_type = 'AI_MONITOR'
+            WHERE trade_type IN ('AI_MONITOR', 'MANUAL_ENTRY')
+               OR (ai_decision = 'detected' AND action = 'manual_position')
             ORDER BY timestamp DESC
-            LIMIT 20
+            LIMIT 30
             """
             
             ai_df = pd.read_sql_query(ai_query, conn)
@@ -1968,8 +2011,12 @@ def main():
                 latest_time = ai_df['timestamp'].max()
                 st.info(f"📊 최근 AI 모니터링: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
                 
+                # 컬럼 순서 조정 - position_type을 앞쪽에 배치
+                display_columns = ['position_type', 'timestamp', 'symbol', 'ai_decision', 
+                                 'confidence', 'urgency', 'reason']
+                
                 st.dataframe(
-                    ai_df.style.format({'confidence': '{:.1f}%'}),
+                    ai_df[display_columns].style.format({'confidence': '{:.1f}%'}),
                     use_container_width=True
                 )
             else:
