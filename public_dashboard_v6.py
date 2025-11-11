@@ -298,33 +298,67 @@ def reset_initial_balance(new_balance):
 def save_position_snapshot(positions_df):
     """현재 포지션 스냅샷 저장 (수동 거래 감지용)"""
     try:
-        if positions_df.empty:
-            return True
-            
         conn = sqlite3.connect('integrated_trades.db')
         cursor = conn.cursor()
         
         timestamp = datetime.now().isoformat()
         
-        for _, pos in positions_df.iterrows():
-            # 스냅샷 해시 생성 (중복 체크용)
-            snapshot_hash = f"{pos['symbol']}_{pos['side']}_{pos['contracts']:.4f}_{pos['entry_price']:.2f}"
-            
+        if positions_df.empty:
+            # 포지션이 없을 때도 빈 스냅샷 저장 (이전에 있던 심볼들의 종료 감지용)
+            # 최근 1시간 내 있던 심볼들 확인
             cursor.execute("""
-                INSERT OR REPLACE INTO position_snapshots
-                (timestamp, symbol, side, amount, entry_price, mark_price, 
-                 unrealized_pnl, snapshot_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                timestamp,
-                pos['symbol'],
-                pos['side'],
-                pos['contracts'],
-                pos['entry_price'],
-                pos['mark_price'],
-                pos['unrealized_pnl'],
-                snapshot_hash
-            ))
+                SELECT DISTINCT symbol FROM position_snapshots
+                WHERE timestamp >= datetime('now', '-1 hour')
+            """)
+            recent_symbols = cursor.fetchall()
+            
+            for (symbol,) in recent_symbols:
+                # 해당 심볼의 최신 스냅샷 확인
+                cursor.execute("""
+                    SELECT amount FROM position_snapshots
+                    WHERE symbol = ? 
+                    ORDER BY timestamp DESC LIMIT 1
+                """, (symbol,))
+                last_snapshot = cursor.fetchone()
+                
+                # 마지막 스냅샷에서 포지션이 있었다면 빈 스냅샷 저장
+                if last_snapshot and last_snapshot[0] > 0:
+                    cursor.execute("""
+                        INSERT INTO position_snapshots
+                        (timestamp, symbol, side, amount, entry_price, mark_price, 
+                         unrealized_pnl, snapshot_hash)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        timestamp,
+                        symbol,
+                        'neutral',
+                        0.0,
+                        0.0,
+                        0.0,
+                        0.0,
+                        f"{symbol}_closed_{timestamp}"
+                    ))
+        else:
+            # 포지션이 있는 경우 저장
+            for _, pos in positions_df.iterrows():
+                # 스냅샷 해시 생성 (중복 체크용)
+                snapshot_hash = f"{pos['symbol']}_{pos['side']}_{pos['contracts']:.4f}_{pos['entry_price']:.2f}"
+                
+                cursor.execute("""
+                    INSERT OR REPLACE INTO position_snapshots
+                    (timestamp, symbol, side, amount, entry_price, mark_price, 
+                     unrealized_pnl, snapshot_hash)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    timestamp,
+                    pos['symbol'],
+                    pos['side'],
+                    pos['contracts'],
+                    pos['entry_price'],
+                    pos['mark_price'],
+                    pos['unrealized_pnl'],
+                    snapshot_hash
+                ))
         
         conn.commit()
         conn.close()
@@ -338,8 +372,9 @@ def detect_manual_trades():
     """수동 거래 감지 (포지션 변화 분석)"""
     try:
         conn = sqlite3.connect('integrated_trades.db')
+        cursor = conn.cursor()
         
-        # 최근 2개 스냅샷 비교
+        # 최근 2개 스냅샷 비교 (심볼별로)
         query = """
         WITH ranked_snapshots AS (
             SELECT 
@@ -350,10 +385,24 @@ def detect_manual_trades():
                 entry_price,
                 ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY timestamp DESC) as rn
             FROM position_snapshots
-            WHERE timestamp >= datetime('now', '-1 hour')
+            WHERE timestamp >= datetime('now', '-2 hours')
+        ),
+        symbol_changes AS (
+            SELECT 
+                symbol,
+                MAX(CASE WHEN rn = 2 THEN amount ELSE 0 END) as old_amount,
+                MAX(CASE WHEN rn = 2 THEN side ELSE 'neutral' END) as old_side,
+                MAX(CASE WHEN rn = 2 THEN entry_price ELSE 0 END) as old_price,
+                MAX(CASE WHEN rn = 1 THEN amount ELSE 0 END) as new_amount,
+                MAX(CASE WHEN rn = 1 THEN side ELSE 'neutral' END) as new_side,
+                MAX(CASE WHEN rn = 1 THEN entry_price ELSE 0 END) as new_price,
+                MAX(CASE WHEN rn = 1 THEN timestamp ELSE NULL END) as latest_timestamp
+            FROM ranked_snapshots
+            WHERE rn <= 2
+            GROUP BY symbol
         )
-        SELECT * FROM ranked_snapshots WHERE rn <= 2
-        ORDER BY symbol, timestamp DESC
+        SELECT * FROM symbol_changes
+        WHERE old_amount != new_amount OR old_side != new_side
         """
         
         df = pd.read_sql_query(query, conn)
@@ -361,51 +410,101 @@ def detect_manual_trades():
         detected_trades = []
         
         if not df.empty:
-            symbols = df['symbol'].unique()
-            
-            for symbol in symbols:
-                symbol_data = df[df['symbol'] == symbol].sort_values('timestamp')
+            for _, row in df.iterrows():
+                symbol = row['symbol']
+                old_amount = row['old_amount']
+                new_amount = row['new_amount']
                 
-                if len(symbol_data) == 2:
-                    old_pos = symbol_data.iloc[0]
-                    new_pos = symbol_data.iloc[1]
-                    
-                    amount_diff = new_pos['amount'] - old_pos['amount']
-                    
-                    # 신규 진입 감지
-                    if old_pos['amount'] == 0 and new_pos['amount'] > 0:
-                        detected_trades.append({
-                            'symbol': symbol,
-                            'type': 'MANUAL_ENTRY',
-                            'side': new_pos['side'],
-                            'amount': new_pos['amount'],
-                            'price': new_pos['entry_price']
-                        })
-                    
-                    # 완전 종료 감지
-                    elif old_pos['amount'] > 0 and new_pos['amount'] == 0:
-                        detected_trades.append({
-                            'symbol': symbol,
-                            'type': 'MANUAL_EXIT',
-                            'side': old_pos['side'],
-                            'amount': old_pos['amount'],
-                            'price': old_pos['entry_price']
-                        })
-                    
-                    # 수량 변경 감지 (부분 청산 or 추가 진입)
-                    elif abs(amount_diff) > 0.0001:
-                        trade_type = 'MANUAL_ADD' if amount_diff > 0 else 'MANUAL_REDUCE'
-                        detected_trades.append({
-                            'symbol': symbol,
-                            'type': trade_type,
-                            'side': new_pos['side'],
-                            'amount': abs(amount_diff),
-                            'price': new_pos['entry_price']
-                        })
+                # 최근 30초 내 이미 감지된 거래 체크 (중복 방지)
+                cursor.execute("""
+                    SELECT COUNT(*) FROM manual_trades
+                    WHERE symbol = ? AND detected_at >= datetime('now', '-30 seconds')
+                """, (symbol,))
+                
+                if cursor.fetchone()[0] > 0:
+                    continue  # 이미 감지됨
+                
+                # 신규 진입 감지
+                if old_amount == 0 and new_amount > 0:
+                    detected_trades.append({
+                        'symbol': symbol,
+                        'type': 'MANUAL_ENTRY',
+                        'side': row['new_side'],
+                        'amount': new_amount,
+                        'price': row['new_price']
+                    })
+                
+                # 완전 종료 감지
+                elif old_amount > 0 and new_amount == 0:
+                    detected_trades.append({
+                        'symbol': symbol,
+                        'type': 'MANUAL_EXIT',
+                        'side': row['old_side'],
+                        'amount': old_amount,
+                        'price': row['old_price']
+                    })
+                
+                # 수량 증가 (추가 진입)
+                elif new_amount > old_amount and abs(new_amount - old_amount) > 0.0001:
+                    detected_trades.append({
+                        'symbol': symbol,
+                        'type': 'MANUAL_ADD',
+                        'side': row['new_side'],
+                        'amount': new_amount - old_amount,
+                        'price': row['new_price']
+                    })
+                
+                # 수량 감소 (부분 청산)
+                elif new_amount < old_amount and abs(old_amount - new_amount) > 0.0001:
+                    detected_trades.append({
+                        'symbol': symbol,
+                        'type': 'MANUAL_REDUCE',
+                        'side': row['old_side'],
+                        'amount': old_amount - new_amount,
+                        'price': row['new_price']
+                    })
+        
+        # 신규 심볼 체크 (이전 스냅샷이 전혀 없는 경우)
+        cursor.execute("""
+            WITH latest_snapshots AS (
+                SELECT DISTINCT symbol, amount, side, entry_price
+                FROM position_snapshots
+                WHERE timestamp = (SELECT MAX(timestamp) FROM position_snapshots)
+                  AND amount > 0
+            ),
+            previous_symbols AS (
+                SELECT DISTINCT symbol
+                FROM position_snapshots
+                WHERE timestamp < (SELECT MAX(timestamp) FROM position_snapshots)
+                  AND timestamp >= datetime('now', '-2 hours')
+            )
+            SELECT ls.*
+            FROM latest_snapshots ls
+            LEFT JOIN previous_symbols ps ON ls.symbol = ps.symbol
+            WHERE ps.symbol IS NULL
+        """)
+        
+        new_positions = cursor.fetchall()
+        for pos in new_positions:
+            symbol, amount, side, price = pos
+            
+            # 최근 감지 체크
+            cursor.execute("""
+                SELECT COUNT(*) FROM manual_trades
+                WHERE symbol = ? AND detected_at >= datetime('now', '-30 seconds')
+            """, (symbol,))
+            
+            if cursor.fetchone()[0] == 0:
+                detected_trades.append({
+                    'symbol': symbol,
+                    'type': 'MANUAL_ENTRY',
+                    'side': side,
+                    'amount': amount,
+                    'price': price
+                })
         
         # 감지된 거래 저장
         if detected_trades:
-            cursor = conn.cursor()
             for trade in detected_trades:
                 cursor.execute("""
                     INSERT INTO manual_trades 
@@ -1142,19 +1241,18 @@ def main():
     # 수동 거래 감지
     if enable_manual_detection:
         if 'last_detection_time' not in st.session_state:
-            st.session_state.last_detection_time = datetime.now() - timedelta(seconds=61)
+            st.session_state.last_detection_time = datetime.now() - timedelta(seconds=31)
         
         time_since_detection = (datetime.now() - st.session_state.last_detection_time).total_seconds()
         
-        if time_since_detection > 60:
+        if time_since_detection > 30:  # 30초마다 감지
             exchange_pos = get_exchange_positions()
-            if not exchange_pos.empty:
-                save_position_snapshot(exchange_pos)
-                detected = detect_manual_trades()
-                if detected:
-                    st.sidebar.success(f"🔍 {len(detected)}개 수동 거래 감지!")
-                
-                st.session_state.last_detection_time = datetime.now()
+            save_position_snapshot(exchange_pos)  # 포지션이 없어도 스냅샷 저장
+            detected = detect_manual_trades()
+            if detected:
+                st.sidebar.success(f"🔍 {len(detected)}개 수동 거래 감지!")
+            
+            st.session_state.last_detection_time = datetime.now()
     
     # 데이터 로드
     exchange_positions = pd.DataFrame()

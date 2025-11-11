@@ -1233,10 +1233,10 @@ def calculate_performance(trades_df):
                 holding_time_minutes,
                 entry_price,
                 exit_price,
-                timestamp
+                close_timestamp
             FROM completed_trades 
             WHERE symbol IN (SELECT DISTINCT symbol FROM trades WHERE timestamp >= datetime('now', '-7 days'))
-            ORDER BY timestamp DESC
+            ORDER BY close_timestamp DESC
             LIMIT 50
         """)
         
@@ -3353,7 +3353,7 @@ def webhook():
                     logger.info(f"🔍 정규식 기반 필수 필드 추출 시도...")
                     parsed_data = {}
                     
-                    # 필수 필드 패턴 정의
+                    # 필수 필드 패턴 정의 (기술적 지표 포함)
                     patterns = {
                         'action': r'"action"\s*:\s*"([^"]+)"',
                         'symbol': r'"symbol"\s*:\s*"([^"]+)"',
@@ -3365,7 +3365,14 @@ def webhook():
                         'profit_percent': r'"profit_percent"\s*:\s*(-?\d+\.?\d*)',
                         'exit_reason': r'"exit_reason"\s*:\s*"([^"]+)"',
                         'trailing_stop_percent': r'"trailing_stop_percent"\s*:\s*(null|"null"|-?\d+\.?\d*)',
-                        'trailing_activation_percent': r'"trailing_activation_percent"\s*:\s*(null|"null"|-?\d+\.?\d*)'
+                        'trailing_activation_percent': r'"trailing_activation_percent"\s*:\s*(null|"null"|-?\d+\.?\d*)',
+                        # 기술적 지표 추가
+                        'timeframe': r'"timeframe"\s*:\s*"([^"]+)"',
+                        'cmf_value': r'"cmf_value"\s*:\s*(-?\d+\.?\d*)',
+                        'cmf_momentum': r'"cmf_momentum"\s*:\s*(-?\d+\.?\d*)',
+                        'adx': r'"adx"\s*:\s*(-?\d+\.?\d*)',
+                        'rsi': r'"rsi"\s*:\s*(-?\d+\.?\d*)',
+                        'volume_ratio': r'"volume_ratio"\s*:\s*(-?\d+\.?\d*)'
                     }
                     
                     # 각 필드 추출
@@ -3374,7 +3381,9 @@ def webhook():
                         if match:
                             value = match.group(1)
                             # 숫자 필드 변환
-                            if key in ['entry_price', 'stop_loss', 'take_profit', 'exit_price', 'profit_percent']:
+                            if key in ['entry_price', 'stop_loss', 'take_profit', 'exit_price', 
+                                      'profit_percent', 'cmf_value', 'cmf_momentum', 
+                                      'adx', 'rsi', 'volume_ratio']:
                                 try:
                                     parsed_data[key] = float(value)
                                 except:
