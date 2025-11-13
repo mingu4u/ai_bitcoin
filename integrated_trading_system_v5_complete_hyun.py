@@ -1036,28 +1036,28 @@ def get_market_data(symbol):
         orderbook = exchange.fetch_order_book(symbol, limit=10)
         
         # 5분봉 데이터 (더 많이 가져오기 - ATR 계산 위해)
-        df_5min = pd.DataFrame(
-            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=150),  # 93 → 150으로 증가
+        df_15min = pd.DataFrame(
+            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=150),  # 15분봉으로 변경
             columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
         )
-        df_5min['timestamp'] = pd.to_datetime(df_5min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
-        df_5min = df_5min.set_index('timestamp')
-        df_5min = df_5min.dropna()  # dropna(df) → df.dropna() 수정
-        df_5min = add_indicators(df_5min)
+        df_15min['timestamp'] = pd.to_datetime(df_15min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
+        df_15min = df_15min.set_index('timestamp')
+        df_15min = df_15min.dropna()  # dropna(df) → df.dropna() 수정
+        df_15min = add_indicators(df_15min)
         
         # ATR NaN 처리 (tail 전에 수행)
-        if 'atr' in df_5min.columns:
-            df_5min['atr'] = df_5min['atr'].fillna(method='bfill')
-            if df_5min['atr'].isna().any():
+        if 'atr' in df_15min.columns:
+            df_15min['atr'] = df_15min['atr'].fillna(method='bfill')
+            if df_15min['atr'].isna().any():
                 # 대체값: high-low 평균
-                default_atr = (df_5min['high'] - df_5min['low']).rolling(14).mean().iloc[-1]
+                default_atr = (df_15min['high'] - df_15min['low']).rolling(14).mean().iloc[-1]
                 if pd.isna(default_atr) or default_atr == 0:
                     default_atr = current_price * 0.002  # 가격의 0.2%
-                df_5min['atr'] = df_5min['atr'].fillna(default_atr)
+                df_15min['atr'] = df_15min['atr'].fillna(default_atr)
             # ATR이 0인 경우 처리
-            df_5min.loc[df_5min['atr'] == 0, 'atr'] = current_price * 0.002
+            df_15min.loc[df_15min['atr'] == 0, 'atr'] = current_price * 0.002
         
-        df_5min = df_5min.tail(60)
+        df_15min = df_15min.tail(60)
         
         # 1시간봉 데이터 (더 많이 가져오기)
         df_hourly = pd.DataFrame(
@@ -1110,17 +1110,17 @@ def get_market_data(symbol):
         
         # ATR 값 로깅 (디버깅용)
         try:
-            atr_5m = df_5min['atr'].iloc[-1] if 'atr' in df_5min.columns else 0
+            atr_15m = df_15min['atr'].iloc[-1] if 'atr' in df_15min.columns else 0
             atr_1h = df_hourly['atr'].iloc[-1] if 'atr' in df_hourly.columns else 0
             atr_4h = df_4h['atr'].iloc[-1] if 'atr' in df_4h.columns else 0
-            logger.debug(f"{symbol} ATR values - 5m: {atr_5m:.4f}, 1h: {atr_1h:.4f}, 4h: {atr_4h:.4f}")
+            logger.debug(f"{symbol} ATR values - 15m: {atr_15m:.4f}, 1h: {atr_1h:.4f}, 4h: {atr_4h:.4f}")
         except Exception as e:
             logger.warning(f"Error logging ATR values: {e}")
         
         return {
             'current_price': current_price,
             'orderbook': orderbook,
-            'df_5min': df_5min,
+            'df_15min': df_15min,
             'df_hourly': df_hourly,
             'df_4h': df_4h,
             'fear_greed_index': fear_greed_index
@@ -1691,7 +1691,7 @@ def ai_monitor_position(symbol, position_info):
         holding_hours = holding_time / 60
         
         # Technical Indicators
-        df_5min = market_data['df_5min']
+        df_15min = market_data['df_15min']
         df_hourly = market_data['df_hourly']
         df_4h = market_data['df_4h']
         
@@ -1725,12 +1725,12 @@ def ai_monitor_position(symbol, position_info):
                 return current_price * 0.002
         
         # 각 타임프레임별 ATR 추출
-        atr_5min = safe_get_atr(df_5min, '5m', current_price)
+        atr_15min = safe_get_atr(df_15min, '5m', current_price)
         atr_hourly = safe_get_atr(df_hourly, '1h', current_price)
         atr_4h = safe_get_atr(df_4h, '4h', current_price)
         
         # ATR 로깅 (디버깅용)
-        logger.debug(f"{symbol} ATR values - 5m: {atr_5min:.4f}, 1h: {atr_hourly:.4f}, 4h: {atr_4h:.4f}")
+        logger.debug(f"{symbol} ATR values - 15m: {atr_15min:.4f}, 1h: {atr_hourly:.4f}, 4h: {atr_4h:.4f}")
         
         json_template = """
 {
@@ -1777,30 +1777,30 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 📊 **MULTI-TIMEFRAME TECHNICAL ANALYSIS**
 ═══════════════════════════════════════════
 
-→ **5-MINUTE CHART (Immediate Momentum)**
+→ **15-MINUTE CHART (Immediate Momentum)**
 ═══════════════════════════════════════════
   Momentum Indicators:
-  • RSI(14): {df_5min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_5min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_5min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
-  • Stochastic %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
-  • Williams %R: {df_5min['williams_r'].iloc[-1]:.2f}
-  • PPO: {df_5min['ppo'].iloc[-1]:.2f}
+  • RSI(14): {df_15min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_15min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_15min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+  • Stochastic %K: {df_15min['stoch_k'].iloc[-1]:.2f}, %D: {df_15min['stoch_d'].iloc[-1]:.2f}
+  • Williams %R: {df_15min['williams_r'].iloc[-1]:.2f}
+  • PPO: {df_15min['ppo'].iloc[-1]:.2f}
 
   Trend Analysis:
-  • MACD: {df_5min['macd'].iloc[-1]:.2f}
-  • MACD Signal: {df_5min['macd_signal'].iloc[-1]:.2f}
-  • MACD Diff: {df_5min['macd_diff'].iloc[-1]:.2f} {'[BULLISH]' if df_5min['macd_diff'].iloc[-1] > 0 else '[BEARISH]'}
-  • ADX: {df_5min['adx'].iloc[-1]:.2f} {'[STRONG TREND]' if df_5min['adx'].iloc[-1] > 25 else '[WEAK TREND]'}
-  • DI+: {df_5min['di_plus'].iloc[-1]:.2f} vs DI-: {df_5min['di_minus'].iloc[-1]:.2f}
+  • MACD: {df_15min['macd'].iloc[-1]:.2f}
+  • MACD Signal: {df_15min['macd_signal'].iloc[-1]:.2f}
+  • MACD Diff: {df_15min['macd_diff'].iloc[-1]:.2f} {'[BULLISH]' if df_15min['macd_diff'].iloc[-1] > 0 else '[BEARISH]'}
+  • ADX: {df_15min['adx'].iloc[-1]:.2f} {'[STRONG TREND]' if df_15min['adx'].iloc[-1] > 25 else '[WEAK TREND]'}
+  • DI+: {df_15min['di_plus'].iloc[-1]:.2f} vs DI-: {df_15min['di_minus'].iloc[-1]:.2f}
 
   Price Position:
-  • Bollinger Upper: ${df_5min['bb_bbh'].iloc[-1]:.2f}
-  • Bollinger Middle: ${df_5min['bb_bbm'].iloc[-1]:.2f}
-  • Bollinger Lower: ${df_5min['bb_bbl'].iloc[-1]:.2f}
-  • Current Position: {((current_price - df_5min['bb_bbl'].iloc[-1]) / (df_5min['bb_bbh'].iloc[-1] - df_5min['bb_bbl'].iloc[-1]) * 100):.0f}% of band
-  • ATR(14): {atr_5min:.4f} (volatility indicator)
+  • Bollinger Upper: ${df_15min['bb_bbh'].iloc[-1]:.2f}
+  • Bollinger Middle: ${df_15min['bb_bbm'].iloc[-1]:.2f}
+  • Bollinger Lower: ${df_15min['bb_bbl'].iloc[-1]:.2f}
+  • Current Position: {((current_price - df_15min['bb_bbl'].iloc[-1]) / (df_15min['bb_bbh'].iloc[-1] - df_15min['bb_bbl'].iloc[-1]) * 100):.0f}% of band
+  • ATR(14): {atr_15min:.4f} (volatility indicator)
 
   Volume & Flow:
-  • CMF(20): {df_5min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_5min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
+  • CMF(20): {df_15min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_15min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
 
 → **1-HOUR CHART (Medium-term Trend)**
 ═══════════════════════════════════════════
@@ -1841,12 +1841,12 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 **For {'LONG' if side == 'buy' else 'SHORT'} Position:**
 
 **Context for Decision Making:**
-- Current ATR (5m): {atr_5min:.4f} - Use this as volatility baseline
+- Current ATR (5m): {atr_15min:.4f} - Use this as volatility baseline
 - Price volatility is relative to this asset's normal movement
 - Consider timeframe alignment more than absolute profit percentages
 
 ⚠️ **IMMEDIATE EXIT SIGNALS (Close 100%):**
-{'- 5m MACD bearish crossover + RSI declining from overbought zone' if side == 'buy' else '- 5m MACD bullish crossover + RSI rising from oversold zone'}
+{'- 15m MACD bearish crossover + RSI declining from overbought zone' if side == 'buy' else '- 15m MACD bullish crossover + RSI rising from oversold zone'}
 {'- 1h DI- crosses above DI+ (definitive trend reversal)' if side == 'buy' else '- 1h DI+ crosses above DI- (definitive trend reversal)'}
 {'- CMF turning negative across 2+ timeframes (money flowing out)' if side == 'buy' else '- CMF turning positive across 2+ timeframes (money flowing in)'}
 {'- Price breaks below 1h Bollinger lower band with volume' if side == 'buy' else '- Price breaks above 1h Bollinger upper band with volume'}
@@ -1855,7 +1855,7 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 - Strong bearish/bullish divergence on multiple timeframes
 
 🔴 **STRONG EXIT SIGNALS (Close 75-100%):**
-{'- 5m RSI dropping sharply from overbought (>70) back below 50' if side == 'buy' else '- 5m RSI rising sharply from oversold (<30) back above 50'}
+{'- 15m RSI dropping sharply from overbought (>70) back below 50' if side == 'buy' else '- 15m RSI rising sharply from oversold (<30) back above 50'}
 - 4h trend weakening (ADX declining, was strong but now <25)
 - MACD histogram consistently shrinking for multiple bars
 - Substantial profit achieved + momentum showing fatigue
@@ -2307,7 +2307,7 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
         reflection = generate_reflection(recent_trades_df, market_data)
         
         # Technical Indicators 준비
-        df_5min = market_data['df_5min']
+        df_15min = market_data['df_15min']
         df_hourly = market_data['df_hourly'] 
         df_4h = market_data['df_4h']
         
@@ -2332,7 +2332,7 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
                 return current_price * 0.002
         
         # ATR 추출
-        atr_5min = safe_get_atr(df_5min, market_data['current_price'])
+        atr_15min = safe_get_atr(df_15min, market_data['current_price'])
         atr_hourly = safe_get_atr(df_hourly, market_data['current_price'])
 
         # close_position 액션 처리 (별도 로직)
@@ -2392,19 +2392,19 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
 **MULTI-TIMEFRAME TECHNICAL ANALYSIS:**
 
 ═══════════════════════════════════════════
-📊 **5-MINUTE CHART (Short-term Momentum)**
+📊 **15-MINUTE CHART (Short-term Momentum)**
 ═══════════════════════════════════════════
 → Momentum:
-  • RSI(14): {df_5min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_5min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_5min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
-  • MACD: {df_5min['macd'].iloc[-1]:.2f} (Signal: {df_5min['macd_signal'].iloc[-1]:.2f})
+  • RSI(14): {df_15min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_15min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_15min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+  • MACD: {df_15min['macd'].iloc[-1]:.2f} (Signal: {df_15min['macd_signal'].iloc[-1]:.2f})
 
 → Trend:
-  • Bollinger: Upper=${df_5min['bb_bbh'].iloc[-1]:.2f}, Mid=${df_5min['bb_bbm'].iloc[-1]:.2f}, Lower=${df_5min['bb_bbl'].iloc[-1]:.2f}
-  • ADX: {df_5min['adx'].iloc[-1]:.2f} {'[STRONG]' if df_5min['adx'].iloc[-1] > 25 else '[WEAK]'}
-  • DI+: {df_5min['di_plus'].iloc[-1]:.2f} vs DI-: {df_5min['di_minus'].iloc[-1]:.2f}
+  • Bollinger: Upper=${df_15min['bb_bbh'].iloc[-1]:.2f}, Mid=${df_15min['bb_bbm'].iloc[-1]:.2f}, Lower=${df_15min['bb_bbl'].iloc[-1]:.2f}
+  • ADX: {df_15min['adx'].iloc[-1]:.2f} {'[STRONG]' if df_15min['adx'].iloc[-1] > 25 else '[WEAK]'}
+  • DI+: {df_15min['di_plus'].iloc[-1]:.2f} vs DI-: {df_15min['di_minus'].iloc[-1]:.2f}
 
 → Volume:
-  • CMF: {df_5min['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_5min['cmf'].iloc[-1] > 0 else '[SELLING]'}
+  • CMF: {df_15min['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_15min['cmf'].iloc[-1] > 0 else '[SELLING]'}
 
 ═══════════════════════════════════════════
 📈 **1-HOUR CHART (Medium-term Trend)**
@@ -2622,9 +2622,9 @@ Your response must be a single JSON object."""
         
         # 프롬프트 구성
         prompt = f"""
-You are an elite crypto trading AI validator specializing in multi-timeframe technical analysis. Your mission is to prevent losses from late entries and reversal traps while capturing genuine opportunities.
+You are an elite crypto trading AI validator specializing in multi-timeframe technical analysis. Your mission is to identify profitable trading opportunities while managing risk through appropriate position sizing, leverage, and stop-loss/take-profit levels.
 
-**ACCOUNT & TRADING CONFIGURATION (REFERENCE ONLY - DO NOT VALIDATE):**
+**ACCOUNT & TRADING CONFIGURATION (REFERENCE ONLY):**
 - Leverage: {leverage}x
 - Position Size Target: {position_size_percent}% of total balance per trade
 - Total Balance: ${total_margin:,.2f} USDT
@@ -2633,7 +2633,7 @@ You are an elite crypto trading AI validator specializing in multi-timeframe tec
 - Available for New Positions: ${free_margin:,.2f} USDT
 - Max Position Size (based on config): ${total_margin * (position_size_percent / 100):,.2f} USDT
 
-Note: These are fixed trading parameters for your reference. Your job is to validate entry/exit signals and suggest optimal stop-loss/take-profit levels, not to validate these settings.
+Note: Risk is managed through position size ({position_size_percent}%), leverage ({leverage}x), and SL/TP settings. These parameters provide safety even in moderate market conditions.
 
 **SIGNAL TO VALIDATE:**
 - Symbol: {symbol}
@@ -2644,29 +2644,29 @@ Note: These are fixed trading parameters for your reference. Your job is to vali
 **MULTI-TIMEFRAME TECHNICAL ANALYSIS:**
 
 ═══════════════════════════════════════════
-📊 **5-MINUTE CHART (Short-term Momentum)**
+📊 **15-MINUTE CHART (Short-term Momentum)**
 ═══════════════════════════════════════════
 → Momentum Indicators:
-  • RSI(14): {df_5min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_5min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_5min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
-  • Stochastic %K: {df_5min['stoch_k'].iloc[-1]:.2f}, %D: {df_5min['stoch_d'].iloc[-1]:.2f}
-  • Williams %R: {df_5min['williams_r'].iloc[-1]:.2f}
-  • PPO: {df_5min['ppo'].iloc[-1]:.2f}
+  • RSI(14): {df_15min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_15min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_15min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
+  • Stochastic %K: {df_15min['stoch_k'].iloc[-1]:.2f}, %D: {df_15min['stoch_d'].iloc[-1]:.2f}
+  • Williams %R: {df_15min['williams_r'].iloc[-1]:.2f}
+  • PPO: {df_15min['ppo'].iloc[-1]:.2f}
 
 → Trend Indicators:
-  • MACD: {df_5min['macd'].iloc[-1]:.2f} (Signal: {df_5min['macd_signal'].iloc[-1]:.2f}, Diff: {df_5min['macd_diff'].iloc[-1]:.2f})
-  • ADX: {df_5min['adx'].iloc[-1]:.2f} {'[STRONG TREND]' if df_5min['adx'].iloc[-1] > 25 else '[WEAK TREND]'}
-  • DI+: {df_5min['di_plus'].iloc[-1]:.2f} vs DI-: {df_5min['di_minus'].iloc[-1]:.2f}
+  • MACD: {df_15min['macd'].iloc[-1]:.2f} (Signal: {df_15min['macd_signal'].iloc[-1]:.2f}, Diff: {df_15min['macd_diff'].iloc[-1]:.2f})
+  • ADX: {df_15min['adx'].iloc[-1]:.2f} {'[STRONG TREND]' if df_15min['adx'].iloc[-1] > 25 else '[WEAK TREND]'}
+  • DI+: {df_15min['di_plus'].iloc[-1]:.2f} vs DI-: {df_15min['di_minus'].iloc[-1]:.2f}
 
 → Volatility & Support/Resistance:
   • Bollinger Bands:
-    * Upper: ${df_5min['bb_bbh'].iloc[-1]:.2f}
-    * Middle: ${df_5min['bb_bbm'].iloc[-1]:.2f}
-    * Lower: ${df_5min['bb_bbl'].iloc[-1]:.2f}
-    * Current Position: {'Near Upper' if market_data['current_price'] > df_5min['bb_bbm'].iloc[-1] else 'Near Lower'}
-  • ATR(14): {atr_5min:.4f}
+    * Upper: ${df_15min['bb_bbh'].iloc[-1]:.2f}
+    * Middle: ${df_15min['bb_bbm'].iloc[-1]:.2f}
+    * Lower: ${df_15min['bb_bbl'].iloc[-1]:.2f}
+    * Current Position: {'Near Upper' if market_data['current_price'] > df_15min['bb_bbm'].iloc[-1] else 'Near Lower'}
+  • ATR(14): {atr_15min:.4f}
 
 → Volume Flow:
-  • CMF(20): {df_5min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_5min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
+  • CMF(20): {df_15min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_15min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
 
 ═══════════════════════════════════════════
 📈 **1-HOUR CHART (Medium-term Trend)**
@@ -2716,95 +2716,130 @@ The reflection above provides:
 
 Use these insights to validate the current signal. If the reflection indicates that similar signals have failed, be more conservative. If certain patterns have succeeded, increase confidence accordingly.
 
-**ENHANCED VALIDATION FRAMEWORK:**
+**🔄 BALANCED VALIDATION FRAMEWORK (v2.0):**
 
-⚠️ **CRITICAL CHECKS - REJECT IF ANY ARE TRUE:**
+⚠️ **HIGH RISK - STRONG REJECTION CONDITIONS:**
 
-For BUY Signals:
-1. **Late Entry Detection:**
-   - 5m RSI > 75 AND 1h RSI > 70 → Likely already pumped, high reversal risk
-   - Price > 1h Bollinger Upper Band → Overextended
-   - 4h RSI > 80 → Major overbought on higher timeframe
+For BUY Signals (Reject only if MULTIPLE conditions are true):
+1. **Extreme Overbought Combination:**
+   - 15m RSI > 85 AND 1h RSI > 75 AND 4h RSI > 70 → Severely overextended
+   - Price > 1h Bollinger Upper + 2*ATR → Extreme deviation
 
-2. **Reversal Warning Signs:**
-   - 5m MACD histogram declining while price rising → Bearish divergence
-   - DI- crossing above DI+ on 1h or 4h → Trend reversal
-   - CMF turning negative on multiple timeframes → Money flowing out
+2. **Clear Reversal Signals:**
+   - Strong bearish divergence on multiple timeframes
+   - DI- strongly crossing above DI+ on BOTH 1h and 4h
+   - CMF strongly negative on ALL timeframes with increasing magnitude
 
-3. **Weak Trend Confirmation:**
-   - 4h ADX < 20 → No clear trend, avoid entries
-   - All timeframes showing conflicting signals → High uncertainty
+3. **No Trend Support:**
+   - 4h ADX < 15 AND declining → Very weak/no trend
+   - All timeframes showing opposite signals → Complete misalignment
 
-For SELL Signals:
-1. **Late Entry Detection:**
-   - 5m RSI < 25 AND 1h RSI < 30 → Likely already dumped, bounce risk
-   - Price < 1h Bollinger Lower Band → Overextended downside
-   - 4h RSI < 20 → Major oversold on higher timeframe
+For SELL Signals (Reject only if MULTIPLE conditions are true):
+1. **Extreme Oversold Combination:**
+   - 15m RSI < 15 AND 1h RSI < 25 AND 4h RSI < 30 → Severely oversold
+   - Price < 1h Bollinger Lower - 2*ATR → Extreme deviation
 
-2. **Reversal Warning Signs:**
-   - 5m MACD histogram rising while price falling → Bullish divergence
-   - DI+ crossing above DI- on 1h or 4h → Trend reversal
-   - CMF turning positive on multiple timeframes → Money flowing in
+2. **Clear Reversal Signals:**
+   - Strong bullish divergence on multiple timeframes
+   - DI+ strongly crossing above DI- on BOTH 1h and 4h
+   - CMF strongly positive on ALL timeframes with increasing magnitude
 
-3. **Weak Trend Confirmation:**
-   - 4h ADX < 20 → No clear trend, avoid entries
-   - All timeframes showing conflicting signals → High uncertainty
+3. **No Trend Support:**
+   - 4h ADX < 15 AND declining → Very weak/no trend
+   - All timeframes showing opposite signals → Complete misalignment
 
-✅ **APPROVAL CRITERIA - ALL MUST ALIGN:**
+✅ **FLEXIBLE APPROVAL CRITERIA - WEIGHTED SCORING:**
 
-For BUY Signals:
-- 4h trend: DI+ > DI- (uptrend confirmed)
-- 1h momentum: RSI 40-70 (healthy range)
-- 5m entry: Recent bounce from support OR breakout with volume
-- CMF positive on at least 2 timeframes
-- ADX > 20 on 4h (trend strength)
-- No extreme overbought conditions
+For BUY Signals (Approve if score ≥ 60%):
+**Primary Factors (Higher Timeframe Focus):**
+- 4h trend direction: DI+ > DI- → Uptrend confirmed (+25 points) [중장기 가중치 상향]
+- 1h momentum not extreme: RSI 25-80 → Room to move (+25 points) [중기 가중치 상향]
+- Price action favorable: Above key MA or bounce from support (+15 points)
 
-For SELL Signals:
-- 4h trend: DI- > DI+ (downtrend confirmed)
-- 1h momentum: RSI 30-60 (healthy range)
-- 5m entry: Recent rejection from resistance OR breakdown with volume
-- CMF negative on at least 2 timeframes
-- ADX > 20 on 4h (trend strength)
-- No extreme oversold conditions
+**Secondary Factors (10 points each):**
+- 115m entry timing good: Not at immediate resistance (+10)
+- CMF positive on 2+ timeframes → Money flowing in (+10)
+- ADX > 18 on 1h or 4h timeframe → Trend strength (+12 if 4h, +10 if 1h) [중장기 보너스]
+- No strong divergences visible (+10)
 
-🎯 **OPTIMAL ENTRY CONDITIONS (High Confidence):**
-- All 3 timeframes aligned in same direction
-- Strong ADX (>25) on 4h showing trend strength
-- Entry on pullback, not at extremes
-- Volume confirmation across timeframes
-- RSI in goldilocks zone (not too hot, not too cold)
+**Bonus Factors (5 points each):**
+- 4h MACD bullish alignment (+7) [중장기 보너스]
+- 1h volume increasing (+6) [중기 보너스]
+- Market sentiment supportive (+5)
+- Breaking key level with conviction (+5)
+- Retesting previous resistance as support (+5)
+
+For SELL Signals (Approve if score ≥ 60%):
+**Primary Factors (Higher Timeframe Focus):**
+- 4h trend direction: DI- > DI+ → Downtrend confirmed (+25 points) [중장기 가중치 상향]
+- 1h momentum not extreme: RSI 20-75 → Room to move (+25 points) [중기 가중치 상향]
+- Price action favorable: Below key MA or rejection from resistance (+15 points)
+
+**Secondary Factors (10 points each):**
+- 115m entry timing good: Not at immediate support (+10)
+- CMF negative on 2+ timeframes → Money flowing out (+10)
+- ADX > 18 on 1h or 4h timeframe → Trend strength (+12 if 4h, +10 if 1h) [중장기 보너스]
+- No strong divergences visible (+10)
+
+**Bonus Factors (5 points each):**
+- 4h MACD bearish alignment (+7) [중장기 보너스]
+- 1h volume increasing (+6) [중기 보너스]
+- Market sentiment supportive (+5)
+- Breaking key level with conviction (+5)
+- Retesting previous support as resistance (+5)
+
+🎯 **RISK-ADJUSTED DECISION MAKING:**
+
+**Position Size Recommendations Based on Confidence:**
+- High Confidence (80-100 points): Use full position size
+- Good Confidence (70-79 points): Use 75% position size
+- Moderate Confidence (60-69 points): Use 50% position size
+- Low Confidence (below 60): Reject or suggest waiting
+
+**Dynamic Stop Loss & Take Profit:**
+- Use ATR-based stops: 1.5-2.5x ATR from entry
+- Risk-reward ratio flexible: 1.0-3.0 based on market structure
+- Consider support/resistance levels over fixed percentages
+- Tighter stops for lower confidence trades
 
 **DECISION FRAMEWORK:**
-1. **APPROVE:** All criteria met, low reversal risk, optimal entry
-2. **REJECT:** Critical checks failed, high reversal risk, or late entry
-3. **MODIFY:** Partial criteria met, suggest hold or reduced position
+1. **APPROVE:** Score ≥ 60%, acceptable risk/reward
+2. **REJECT:** High risk conditions met OR score < 50%
+3. **MODIFY:** Score 50-59%, suggest reduced position or wait
+
+**IMPORTANT MINDSET SHIFT:**
+- We're not looking for perfect setups, but favorable risk/reward opportunities
+- Risk is managed through position sizing, stops, and leverage - not just entry selection
+- A 60% win rate with proper risk management is profitable
+- Focus on catching moves early rather than waiting for perfect confirmation
+- Accept that some trades will lose - that's why we use risk management
 
 **CRITICAL INSTRUCTIONS:**
 1. You MUST respond with ONLY a valid JSON object
 2. Do NOT include any text before or after the JSON
 3. Do NOT use markdown code blocks (no ```)
-4. Follow this EXACT structure:
+4. Calculate your confidence score based on the criteria above
+5. Be more open to opportunities while respecting clear danger signals
 
 {json_template}
 
 **Field Requirements:**
 - decision: must be "approve", "reject", or "modify"
 - modified_action: must be "buy", "sell", or "hold"
-- percentage: integer between 10 and 100 (reduce if uncertain)
-- reason: string explaining the decision WITH SPECIFIC TIMEFRAME ANALYSIS
-- stop_loss_price: number (price level based on ATR and support/resistance)
-- take_profit_price: number (price level with realistic targets)
-- pl_ratio: number between 1.0 and 5.0 (risk/reward ratio)
-- confidence: number between 0.0 and 1.0 (lower if reversal risk detected)
-
-Return ONLY the JSON object. Start with {{ and end with }}
+- percentage: integer between 10 and 100 (adjust based on confidence score)
+- reason: string explaining the decision with SCORE CALCULATION
+- stop_loss_price: number (use ATR-based calculation)
+- take_profit_price: number (aim for 1.5-2.5 risk/reward)
+- pl_ratio: number between 1.0 and 5.0
+- confidence: number between 0.0 and 1.0 (score/100)
 
 Your reason MUST include:
-- Which timeframes support/oppose the signal
-- Specific indicator values that drove your decision
-- Reversal risks identified (if any)
-- Why this is or isn't a late entry
+- Calculated score breakdown (which factors earned points)
+- Key supporting and opposing factors
+- Why risk/reward is acceptable given position sizing
+- Specific entry quality assessment
+
+Return ONLY the JSON object. Start with {{ and end with }}
 """
         
         # AI API 호출
@@ -4681,4 +4716,4 @@ def initialize_bot():
 
 if __name__ == '__main__':
     initialize_bot()
-    app.run(host='0.0.0.0', port=SERVER_PORT, debug=False)
+    app.run(host='0.0.0.0', port=SERVER_PORT, debug=False, threaded=True)  # 명시적 멀티스레드 설정
