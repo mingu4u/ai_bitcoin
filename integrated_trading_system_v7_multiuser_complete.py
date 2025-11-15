@@ -4011,19 +4011,21 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
             main_order = user_exchange.create_market_order(symbol, order_side, amount)
             actual_entry = float(main_order['average']) if main_order.get('average') else current_price
             logger.info(f"[{user_name}] ✅ 메인 주문 체결: {symbol} {order_side} {amount:.6f} @ ${actual_entry:.4f}")
-            
+
             # Stop Loss 주문
             try:
                 sl_side = 'sell' if action == 'buy' else 'buy'
                 sl_params = {
                     'stopPrice': stop_loss_price,
-                    'reduceOnly': True
+                    'workingType': 'MARK_PRICE',
+                    # 'reduceOnly': True,
+                    'closePosition': True  # 모든 포지션 정리
                 }
                 sl_order = user_exchange.create_order(
                     symbol=symbol,
                     type='STOP_MARKET',
                     side=sl_side,
-                    amount=amount,
+                    # amount=amount,
                     params=sl_params
                 )
                 logger.info(f"[{user_name}] 🛡️ Stop Loss 설정: ${stop_loss_price:.4f}")
@@ -4035,13 +4037,15 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                 tp_side = 'sell' if action == 'buy' else 'buy'
                 tp_params = {
                     'stopPrice': take_profit_price,
-                    'reduceOnly': True
+                    'workingType': 'MARK_PRICE',
+                    # 'reduceOnly': True,
+                    'closePosition': True  # 모든 포지션 정리
                 }
                 tp_order = user_exchange.create_order(
                     symbol=symbol,
                     type='TAKE_PROFIT_MARKET',
                     side=tp_side,
-                    amount=amount,
+                    # amount=amount,
                     params=tp_params
                 )
                 logger.info(f"[{user_name}] 🎯 Take Profit 설정: ${take_profit_price:.4f}")
@@ -4219,7 +4223,7 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 symbol=symbol,
                 type='stop_market',
                 side=sl_side,
-                amount=amount,
+                # amount=amount,
                 params={
                     'stopPrice': stop_loss_price,
                     'workingType': 'MARK_PRICE',
@@ -4240,7 +4244,7 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
                 symbol=symbol,
                 type='take_profit_market',
                 side=tp_side,
-                amount=amount,
+                # amount=amount,
                 params={
                     'stopPrice': take_profit_price,
                     'workingType': 'MARK_PRICE',
@@ -4353,7 +4357,7 @@ def update_stop_loss(symbol, new_sl_price, amount):
                 symbol=symbol,
                 type='stop_market',
                 side=sl_side,
-                amount=amount,
+                # amount=amount,
                 params={
                     'stopPrice': new_sl_price,
                     'workingType': 'MARK_PRICE',
