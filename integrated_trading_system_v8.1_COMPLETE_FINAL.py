@@ -33,13 +33,13 @@ USER_CONFIGS = {
         'api_key_env': 'BINANCE_API_KEY_HYUN',
         'secret_key_env': 'BINANCE_SECRET_KEY_HYUN',
         'is_primary': False,  # 주문만 실행
-    },
-    'USER3': {
-        'name': 'Hyuk',
-        'api_key_env': 'BINANCE_API_KEY_HYUK',
-        'secret_key_env': 'BINANCE_SECRET_KEY_HYUK',
-        'is_primary': False,  # 주문만 실행
     }
+    # 'USER3': {
+    #     'name': 'User 3',
+    #     'api_key_env': 'BINANCE_API_KEY_USER3',
+    #     'secret_key_env': 'BINANCE_SECRET_KEY_USER3',
+    #     'is_primary': False,  # 주문만 실행
+    # }
 }
 
 SERVER_PORT = 5000  # 하나의 서버에서 모든 유저 관리
@@ -909,7 +909,11 @@ def init_db_once():
     table_count = c.fetchone()[0]
     
     if table_count >= 4:  # 이미 초기화됨
-        # 🆕 기존 테이블에 position_type 컬럼이 없으면 추가 (마이그레이션)
+        # 🆕 v8.1: DB 마이그레이션 (기존 DB 호환성)
+        logger.info("🔧 DB 마이그레이션 체크 중...")
+        migration_done = False
+        
+        # 1. completed_trades 테이블에 position_type 컬럼 추가
         try:
             c.execute("SELECT position_type FROM completed_trades LIMIT 1")
         except sqlite3.OperationalError:
@@ -917,6 +921,42 @@ def init_db_once():
             c.execute("ALTER TABLE completed_trades ADD COLUMN position_type TEXT DEFAULT 'auto'")
             conn.commit()
             logger.info("✅ position_type 컬럼 추가 완료")
+            migration_done = True
+        
+        # 2. completed_trades 테이블에 realized_pnl_binance 컬럼 추가
+        try:
+            c.execute("SELECT realized_pnl_binance FROM completed_trades LIMIT 1")
+        except sqlite3.OperationalError:
+            logger.info("🔧 completed_trades 테이블에 realized_pnl_binance 컬럼 추가 중...")
+            c.execute("ALTER TABLE completed_trades ADD COLUMN realized_pnl_binance REAL")
+            conn.commit()
+            logger.info("✅ realized_pnl_binance 컬럼 추가 완료")
+            migration_done = True
+        
+        # 3. realtime_events 테이블 생성 (없으면)
+        c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='realtime_events'")
+        if c.fetchone()[0] == 0:
+            logger.info("🔧 realtime_events 테이블 생성 중...")
+            c.execute('''CREATE TABLE realtime_events
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          event_type TEXT NOT NULL,
+                          symbol TEXT NOT NULL,
+                          timestamp TEXT NOT NULL,
+                          data TEXT,
+                          is_processed INTEGER DEFAULT 0,
+                          processed_at TEXT)''')
+            
+            c.execute('''CREATE INDEX idx_realtime_events_processed 
+                         ON realtime_events(is_processed, timestamp DESC)''')
+            
+            conn.commit()
+            logger.info("✅ realtime_events 테이블 생성 완료")
+            migration_done = True
+        
+        if migration_done:
+            logger.info("✅ DB 마이그레이션 완료 (v8.1 호환)")
+        else:
+            logger.info("✅ DB 이미 최신 상태 (v8.1)")
         
         conn.close()
         return

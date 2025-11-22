@@ -178,11 +178,17 @@ def fetch_unread_events():
             data = response.json()
             return data.get('events', [])
         else:
-            st.error(f"이벤트 조회 실패: {response.status_code}")
+            # 봇이 구버전이거나 엔드포인트가 없을 수 있음
             return []
             
+    except requests.exceptions.ConnectionError:
+        # 봇이 실행 중이 아님
+        return []
+    except requests.exceptions.Timeout:
+        # 봇 응답 없음
+        return []
     except Exception as e:
-        # 연결 실패는 조용히 처리 (봇이 꺼져있을 수 있음)
+        # 기타 오류는 조용히 처리
         return []
 
 def fetch_system_status():
@@ -508,21 +514,42 @@ def get_completed_trades(days=30):
     """완료된 거래 조회 (🆕 바이낸스 실제 PnL 포함)"""
     try:
         conn = sqlite3.connect('integrated_trades.db')
+        cursor = conn.cursor()
         
-        query = f"""
-        SELECT 
-            symbol, side, entry_price, exit_price, amount,
-            pnl_usdt, pnl_percent, is_win, 
-            open_timestamp, close_timestamp, holding_time_minutes, close_reason,
-            realized_pnl_binance,
-            CASE 
-                WHEN realized_pnl_binance IS NOT NULL THEN 1
-                ELSE 0
-            END as is_binance_verified
-        FROM completed_trades
-        WHERE close_timestamp >= datetime('now', '-{days} days')
-        ORDER BY close_timestamp DESC
-        """
+        # 🆕 v8.1: realized_pnl_binance 컬럼 존재 여부 확인
+        cursor.execute("PRAGMA table_info(completed_trades)")
+        columns = [col[1] for col in cursor.fetchall()]
+        has_binance_pnl = 'realized_pnl_binance' in columns
+        
+        # 쿼리 동적 생성
+        if has_binance_pnl:
+            query = f"""
+            SELECT 
+                symbol, side, entry_price, exit_price, amount,
+                pnl_usdt, pnl_percent, is_win, 
+                open_timestamp, close_timestamp, holding_time_minutes, close_reason,
+                realized_pnl_binance,
+                CASE 
+                    WHEN realized_pnl_binance IS NOT NULL THEN 1
+                    ELSE 0
+                END as is_binance_verified
+            FROM completed_trades
+            WHERE close_timestamp >= datetime('now', '-{days} days')
+            ORDER BY close_timestamp DESC
+            """
+        else:
+            # 구버전 DB 호환 (realized_pnl_binance 없음)
+            query = f"""
+            SELECT 
+                symbol, side, entry_price, exit_price, amount,
+                pnl_usdt, pnl_percent, is_win, 
+                open_timestamp, close_timestamp, holding_time_minutes, close_reason,
+                NULL as realized_pnl_binance,
+                0 as is_binance_verified
+            FROM completed_trades
+            WHERE close_timestamp >= datetime('now', '-{days} days')
+            ORDER BY close_timestamp DESC
+            """
         
         df = pd.read_sql_query(query, conn)
         conn.close()
@@ -537,6 +564,8 @@ def get_completed_trades(days=30):
         
     except Exception as e:
         st.error(f"거래 히스토리 조회 오류: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return pd.DataFrame()
 
 def calculate_period_stats(df, period_days):
