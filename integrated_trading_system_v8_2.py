@@ -1,9 +1,13 @@
 """
-Integrated Trading System v8.3
-=================================
+Integrated Trading System v8.3 Enhanced
+=========================================
 자동매매봇 - 다중 유저 지원, AI 검증/모니터링 통합 버전
+✨ 봇 시작 전 진입한 포지션도 AI 모니터링 수행
 
-v8.3 주요 수정사항 (2025-11-22):
+v8.3 Enhanced 주요 개선사항 (2025-11-22):
+- ✨ 봇 시작시 기존 포지션도 AI 모니터링 대상에 포함
+- ✨ existing_positions를 current_positions로 정상 동기화  
+- ✨ AI 모니터링이 모든 포지션(기존/신규) 대상으로 작동
 - 🔥 봇 시작시 기존 포지션 잘못된 청산 감지 문제 해결
 - 🔥 existing_positions_at_start 변수 추가하여 기존 포지션 추적
 - 🔥 PnL 조회 실패시에도 계산값으로 정상 처리
@@ -648,7 +652,8 @@ def sync_positions_from_exchange():
                         'trailing_activation_percent': DEFAULT_TRAILING_ACTIVATION_PERCENT,
                         'entry_time': datetime.now(),
                         'position_type': 'manual',
-                        'leverage': SYMBOL_CONFIG[symbol].get('leverage', 10)
+                        'leverage': SYMBOL_CONFIG[symbol].get('leverage', 10),
+                        'ai_monitoring': SYMBOL_CONFIG[symbol].get('ai_monitoring', True)  # ✨ AI 모니터링 플래그
                     }
                     
                     # 🔥 v8.4: 봇 시작 직후인지 확인
@@ -6947,21 +6952,14 @@ def initialize_bot():
             position_info = f"\n\n<b>복구된 포지션:</b>\n{get_position_summary()}"
         
         startup_message = f"""
-🚀 <b>통합 트레이딩 시스템 v8.1 시작 (Realtime Enhanced Edition)</b>
+🚀 <b>통합 트레이딩 시스템 v8.3 Enhanced 시작</b>
 
-<b>🆕 v8.1 실시간 TP/SL 감지 시스템:</b>
-⚡ <b>바이낸스 WebSocket 실시간 감지</b>
-  → TP/SL 체결을 0.1초 이내 즉시 감지
-  → ORDER_TRADE_UPDATE 이벤트 수신
-  → ACCOUNT_UPDATE로 포지션 변경 추적
-🔍 <b>백업 폴링 시스템</b>
-  → 10초마다 포지션 상태 확인
-  → WebSocket 장애 시 자동 백업
-  → 놓친 청산 100% 방지
-💰 <b>바이낸스 실제 PnL 동기화</b>
-  → 모든 종료 방식(TP/SL/수동) 지원
-  → 실제 확정 손익 저장
-  → 이벤트 즉시 대시보드 전송
+<b>✨ v8.3 Enhanced 신규 기능:</b>
+🤖 <b>기존 포지션 AI 모니터링</b>
+  → 봇 시작 전 진입한 포지션도 AI가 모니터링
+  → 모든 포지션에 대해 종료 시점 분석
+  → Manual/Auto 포지션 구분 관리
+  → AI가 기존/신규 구별없이 모든 포지션 감시
 
 <b>📊 v7.0 Multi-User 기능 (유지):</b>
 👥 다중 유저 동시 거래

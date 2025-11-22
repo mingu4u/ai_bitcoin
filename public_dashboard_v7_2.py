@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Public Dashboard v7.3 Complete - 모든 기능 복원 버전
+Public Dashboard v7.4 Enhanced - AI 모니터링 + Symbol Analytics 완전 구현
 =======================================================
-v7.2의 수정사항 + v6의 모든 Performance Analysis 기능 통합
+v7.3의 모든 기능 + AI 모니터링 탭 재구현 + Symbol Analytics 완전 구현
 
 주요 기능:
 1. 🔥 Exchange 연결 문제 해결 (v7.2)
@@ -10,6 +10,8 @@ v7.2의 수정사항 + v6의 모든 Performance Analysis 기능 통합
 3. 📈 심볼별 수익 분석 (v6)
 4. 🎯 상세한 그래프와 통계 (v6)
 5. ⚡ 실시간 업데이트 (v7)
+6. 🤖 AI 모니터링 탭 재구현 (v7.4)
+7. 📊 Symbol Analytics 완전 구현 (v7.4)
 
 작성일: 2025-11-22
 """
@@ -437,11 +439,12 @@ def main():
         st.stop()
     
     # 탭 생성
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Trading Overview", 
         "📈 Performance Analysis", 
         "📜 Trade History",
-        "🎯 Symbol Analytics"
+        "🎯 Symbol Analytics",
+        "🤖 AI Monitoring"
     ])
     
     # ==========================================
@@ -1123,10 +1126,25 @@ def main():
         try:
             conn = sqlite3.connect('integrated_trades.db')
             
+            # 기간 선택
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                period_filter = st.selectbox(
+                    "분석 기간",
+                    options=[7, 30, 90, 365, -1],
+                    format_func=lambda x: "전체" if x == -1 else f"최근 {x}일",
+                    key="symbol_period"
+                )
+            
             # 심볼별 상세 분석
             st.subheader("📊 Symbol Performance Matrix")
             
-            symbol_analysis_query = """
+            if period_filter == -1:
+                date_condition = ""
+            else:
+                date_condition = f"AND close_timestamp >= date('now', '-{period_filter} days')"
+            
+            symbol_analysis_query = f"""
             SELECT 
                 symbol,
                 COUNT(*) as total_trades,
@@ -1137,11 +1155,12 @@ def main():
                 ROUND(MAX(pnl_usdt), 2) as max_win,
                 ROUND(MIN(pnl_usdt), 2) as max_loss,
                 ROUND(AVG(holding_time_minutes), 1) as avg_holding_time,
-                ROUND(SUM(amount * entry_price), 2) as total_volume
+                ROUND(SUM(amount * entry_price), 2) as total_volume,
+                ROUND(AVG(pnl_percent), 2) as avg_pnl_percent
             FROM completed_trades
-            WHERE close_timestamp >= date('now', '-30 days')
+            WHERE 1=1 {date_condition}
             GROUP BY symbol
-            HAVING COUNT(*) >= 3
+            HAVING COUNT(*) >= 1
             ORDER BY total_pnl DESC
             """
             
@@ -1150,7 +1169,13 @@ def main():
             if not symbol_analysis_df.empty:
                 # Profit Factor 계산
                 symbol_analysis_df['profit_factor'] = symbol_analysis_df.apply(
-                    lambda row: abs(row['max_win'] / row['max_loss']) if row['max_loss'] != 0 else 0,
+                    lambda row: abs(row['max_win'] / row['max_loss']) if row['max_loss'] != 0 and row['max_loss'] < 0 else 0,
+                    axis=1
+                )
+                
+                # Sharpe Ratio 간단 계산 (일별 수익률 기준)
+                symbol_analysis_df['efficiency'] = symbol_analysis_df.apply(
+                    lambda row: row['avg_pnl'] / abs(row['max_loss']) if row['max_loss'] != 0 else 0,
                     axis=1
                 )
                 
@@ -1159,21 +1184,54 @@ def main():
                     lambda x: '🟢' if x > 0 else '🔴'
                 )
                 
-                # 표시
+                # 메트릭 카드로 상위 3개 심볼 표시
+                st.markdown("### 🏆 Top Performers")
+                top_symbols = symbol_analysis_df.nlargest(3, 'total_pnl')
+                
+                if len(top_symbols) > 0:
+                    cols = st.columns(min(3, len(top_symbols)))
+                    for idx, (col, (_, row)) in enumerate(zip(cols, top_symbols.iterrows())):
+                        with col:
+                            st.markdown(f"""
+                            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                                        color: white; padding: 1.5rem; border-radius: 10px; text-align: center;">
+                                <h3>{row['status']} {row['symbol']}</h3>
+                                <h2>${row['total_pnl']:,.2f}</h2>
+                                <p>Win Rate: {row['win_rate']:.1f}%</p>
+                                <p>Trades: {row['total_trades']}</p>
+                                <p>PF: {row['profit_factor']:.2f}</p>
+                            </div>
+                            """, unsafe_allow_html=True)
+                
+                st.markdown("---")
+                
+                # 전체 심볼 테이블
+                st.markdown("### 📋 All Symbols Performance")
+                
+                # 표시용 데이터프레임
                 display_df = symbol_analysis_df[[
                     'status', 'symbol', 'total_trades', 'win_rate', 
-                    'total_pnl', 'avg_pnl', 'max_win', 'max_loss', 
-                    'profit_factor', 'total_volume'
-                ]]
+                    'total_pnl', 'avg_pnl', 'avg_pnl_percent', 'max_win', 'max_loss', 
+                    'profit_factor', 'efficiency', 'total_volume'
+                ]].copy()
                 
                 display_df.columns = [
                     '', 'Symbol', 'Trades', 'Win %', 'Total PnL', 
-                    'Avg PnL', 'Best', 'Worst', 'PF', 'Volume'
+                    'Avg PnL', 'Avg %', 'Best', 'Worst', 'PF', 'Eff', 'Volume'
                 ]
+                
+                # 포맷팅
+                for col in ['Total PnL', 'Avg PnL', 'Best', 'Worst', 'Volume']:
+                    display_df[col] = display_df[col].apply(lambda x: f"${x:,.2f}")
+                display_df['Win %'] = display_df['Win %'].apply(lambda x: f"{x:.1f}%")
+                display_df['Avg %'] = display_df['Avg %'].apply(lambda x: f"{x:.2f}%")
+                display_df['PF'] = display_df['PF'].apply(lambda x: f"{x:.2f}")
+                display_df['Eff'] = display_df['Eff'].apply(lambda x: f"{x:.2f}")
                 
                 st.dataframe(display_df, use_container_width=True, hide_index=True)
                 
                 # 차트들
+                st.markdown("### 📈 Visual Analytics")
                 col1, col2 = st.columns(2)
                 
                 with col1:
@@ -1228,52 +1286,306 @@ def main():
                     
                     st.plotly_chart(fig_scatter, use_container_width=True)
                 
-                # 시간대별 분석
-                st.subheader("⏰ Trading Activity by Hour")
+                # 트레이드 분포 히트맵
+                st.markdown("### 🗓️ Trading Activity Heatmap")
                 
-                hourly_query = """
+                # 시간대별/요일별 분석
+                heatmap_query = f"""
                 SELECT 
                     strftime('%H', close_timestamp) as hour,
+                    strftime('%w', close_timestamp) as day_of_week,
                     COUNT(*) as trades,
                     SUM(pnl_usdt) as total_pnl
                 FROM completed_trades
-                WHERE close_timestamp >= date('now', '-30 days')
-                GROUP BY hour
-                ORDER BY hour
+                WHERE 1=1 {date_condition}
+                GROUP BY hour, day_of_week
                 """
                 
-                hourly_df = pd.read_sql_query(hourly_query, conn)
+                heatmap_df = pd.read_sql_query(heatmap_query, conn)
                 
-                if not hourly_df.empty:
-                    fig_hourly = make_subplots(
-                        rows=1, cols=2,
-                        subplot_titles=('Trades by Hour', 'PnL by Hour')
+                if not heatmap_df.empty:
+                    # 피벗 테이블 생성
+                    pivot_trades = heatmap_df.pivot_table(
+                        values='trades', 
+                        index='hour', 
+                        columns='day_of_week', 
+                        fill_value=0
                     )
                     
-                    fig_hourly.add_trace(
-                        go.Bar(x=hourly_df['hour'], y=hourly_df['trades'], name='Trades'),
-                        row=1, col=1
+                    pivot_pnl = heatmap_df.pivot_table(
+                        values='total_pnl', 
+                        index='hour', 
+                        columns='day_of_week', 
+                        fill_value=0
                     )
                     
-                    fig_hourly.add_trace(
-                        go.Bar(
-                            x=hourly_df['hour'], 
-                            y=hourly_df['total_pnl'], 
-                            name='PnL',
-                            marker_color=hourly_df['total_pnl'].apply(
-                                lambda x: '#2ca02c' if x > 0 else '#d62728'
-                            )
-                        ),
-                        row=1, col=2
+                    # 요일 이름 매핑
+                    day_names = {
+                        '0': 'Sun', '1': 'Mon', '2': 'Tue', 
+                        '3': 'Wed', '4': 'Thu', '5': 'Fri', '6': 'Sat'
+                    }
+                    pivot_trades.columns = [day_names.get(col, col) for col in pivot_trades.columns]
+                    pivot_pnl.columns = [day_names.get(col, col) for col in pivot_pnl.columns]
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        fig_heat_trades = go.Figure(data=go.Heatmap(
+                            z=pivot_trades.values,
+                            x=pivot_trades.columns,
+                            y=pivot_trades.index,
+                            colorscale='Blues',
+                            text=pivot_trades.values,
+                            texttemplate='%{text}',
+                            textfont={"size": 10},
+                            colorbar=dict(title="Trades")
+                        ))
+                        
+                        fig_heat_trades.update_layout(
+                            title="Trade Count by Hour/Day",
+                            xaxis_title="Day of Week",
+                            yaxis_title="Hour",
+                            height=400
+                        )
+                        
+                        st.plotly_chart(fig_heat_trades, use_container_width=True)
+                    
+                    with col2:
+                        fig_heat_pnl = go.Figure(data=go.Heatmap(
+                            z=pivot_pnl.values,
+                            x=pivot_pnl.columns,
+                            y=pivot_pnl.index,
+                            colorscale='RdYlGn',
+                            text=pivot_pnl.values.round(2),
+                            texttemplate='$%{text}',
+                            textfont={"size": 10},
+                            colorbar=dict(title="PnL")
+                        ))
+                        
+                        fig_heat_pnl.update_layout(
+                            title="PnL by Hour/Day",
+                            xaxis_title="Day of Week",
+                            yaxis_title="Hour",
+                            height=400
+                        )
+                        
+                        st.plotly_chart(fig_heat_pnl, use_container_width=True)
+                
+                # 보유 시간 분석
+                st.markdown("### ⏱️ Holding Time Analysis")
+                
+                holding_query = f"""
+                SELECT 
+                    symbol,
+                    AVG(holding_time_minutes) as avg_holding,
+                    AVG(CASE WHEN is_win = 1 THEN holding_time_minutes END) as avg_win_holding,
+                    AVG(CASE WHEN is_win = 0 THEN holding_time_minutes END) as avg_loss_holding
+                FROM completed_trades
+                WHERE 1=1 {date_condition}
+                GROUP BY symbol
+                HAVING COUNT(*) >= 3
+                """
+                
+                holding_df = pd.read_sql_query(holding_query, conn)
+                
+                if not holding_df.empty:
+                    fig_holding = go.Figure()
+                    
+                    fig_holding.add_trace(go.Bar(
+                        name='Win Trades',
+                        x=holding_df['symbol'],
+                        y=holding_df['avg_win_holding'] / 60,  # 시간으로 변환
+                        marker_color='#2ca02c'
+                    ))
+                    
+                    fig_holding.add_trace(go.Bar(
+                        name='Loss Trades',
+                        x=holding_df['symbol'],
+                        y=holding_df['avg_loss_holding'] / 60,
+                        marker_color='#d62728'
+                    ))
+                    
+                    fig_holding.update_layout(
+                        title="Average Holding Time by Symbol (Hours)",
+                        xaxis_title="Symbol",
+                        yaxis_title="Hours",
+                        barmode='group',
+                        height=350
                     )
                     
-                    fig_hourly.update_layout(height=350, showlegend=False)
-                    st.plotly_chart(fig_hourly, use_container_width=True)
+                    st.plotly_chart(fig_holding, use_container_width=True)
+            
+            else:
+                st.info("분석할 거래 데이터가 없습니다.")
             
             conn.close()
             
         except Exception as e:
             st.error(f"심볼 분석 오류: {e}")
+    
+    # ==========================================
+    # Tab 5: AI Monitoring (v7.4 신규)
+    # ==========================================
+    with tab5:
+        st.header("🤖 AI Monitoring Status")
+        
+        # AI 모니터링 즉시 실행
+        col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
+        
+        with col_btn1:
+            if st.button("🚀 즉시 AI 모니터링 실행", type="primary"):
+                try:
+                    response = requests.post(f'{TRADING_BOT_URL}/ai-monitor/force', timeout=30)
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        st.success(f"✅ AI 모니터링 완료: {result.get('positions_monitored', 0)}개 포지션 분석")
+                        if result.get('exit_decisions'):
+                            st.warning(f"⚠️ {len(result['exit_decisions'])}개 청산 결정 발생")
+                            
+                            # 청산 결정 상세 표시
+                            for decision in result['exit_decisions']:
+                                symbol = decision.get('symbol', 'N/A')
+                                dec = decision.get('decision', {})
+                                st.info(f"📊 {symbol}: {dec.get('decision', 'N/A')} - {dec.get('reason', 'N/A')}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ 오류: {response.text}")
+                        
+                except requests.exceptions.ConnectionError:
+                    st.error("❌ 봇 서버에 연결할 수 없습니다.")
+                except Exception as e:
+                    st.error(f"❌ 에러: {str(e)}")
+        
+        with col_btn2:
+            if st.button("🔄 새로고침"):
+                st.rerun()
+        
+        st.markdown("---")
+        
+        # AI 모니터링 현황
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            st.subheader("📊 최근 AI 모니터링 기록")
+            
+            try:
+                conn = sqlite3.connect('integrated_trades.db')
+                
+                ai_query = """
+                SELECT 
+                    timestamp,
+                    symbol,
+                    action as ai_decision,
+                    confidence,
+                    reason,
+                    price,
+                    CASE 
+                        WHEN trade_type = 'MANUAL_ENTRY' THEN '🔧 Manual'
+                        WHEN reason LIKE '%Manual position%' THEN '🔧 Manual'
+                        WHEN reason LIKE '%manual%' THEN '🔧 Manual'
+                        ELSE '🤖 Auto'
+                    END as position_type,
+                    CASE 
+                        WHEN action = 'close' THEN '🔴 Close'
+                        WHEN action = 'partial_close' THEN '🟠 Partial'
+                        WHEN action = 'hold' THEN '🟢 Hold'
+                        ELSE action
+                    END as decision_icon
+                FROM trades
+                WHERE trade_type IN ('AI_MONITOR', 'MANUAL_ENTRY')
+                   OR (ai_decision IS NOT NULL AND ai_decision != '')
+                ORDER BY timestamp DESC
+                LIMIT 50
+                """
+                
+                ai_df = pd.read_sql_query(ai_query, conn)
+                
+                if not ai_df.empty:
+                    ai_df['timestamp'] = pd.to_datetime(ai_df['timestamp'])
+                    ai_df['confidence'] = ai_df['confidence'] * 100
+                    
+                    latest_time = ai_df['timestamp'].max()
+                    st.info(f"📊 최근 AI 모니터링: {latest_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                    
+                    # 포맷팅
+                    ai_df['timestamp'] = ai_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M')
+                    ai_df['confidence'] = ai_df['confidence'].apply(lambda x: f"{x:.1f}%")
+                    ai_df['price'] = ai_df['price'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
+                    
+                    # 컬럼 순서 조정
+                    display_columns = ['timestamp', 'position_type', 'symbol', 'decision_icon', 
+                                     'confidence', 'price', 'reason']
+                    
+                    st.dataframe(
+                        ai_df[display_columns],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.warning("⚠️ AI 모니터링 기록이 없습니다.")
+                
+                conn.close()
+                
+            except Exception as e:
+                st.error(f"AI 모니터링 조회 오류: {e}")
+        
+        with col2:
+            st.subheader("📈 AI 통계")
+            
+            try:
+                conn = sqlite3.connect('integrated_trades.db')
+                
+                # AI 통계 조회
+                stats_query = """
+                SELECT 
+                    COUNT(*) as total_monitors,
+                    SUM(CASE WHEN action = 'close' THEN 1 ELSE 0 END) as close_decisions,
+                    SUM(CASE WHEN action = 'hold' THEN 1 ELSE 0 END) as hold_decisions,
+                    AVG(confidence) * 100 as avg_confidence
+                FROM trades
+                WHERE trade_type = 'AI_MONITOR'
+                  AND timestamp >= datetime('now', '-24 hours')
+                """
+                
+                stats = conn.execute(stats_query).fetchone()
+                
+                if stats and stats[0] > 0:
+                    st.metric("📊 24h 모니터링", stats[0])
+                    st.metric("🔴 청산 권고", stats[1] or 0)
+                    st.metric("🟢 보유 권고", stats[2] or 0)
+                    st.metric("🎯 평균 신뢰도", f"{stats[3]:.1f}%" if stats[3] else "N/A")
+                else:
+                    st.info("24시간 내 모니터링 기록 없음")
+                
+                conn.close()
+                
+            except Exception as e:
+                st.error(f"통계 조회 오류: {e}")
+        
+        # AI 모니터링 설정 정보
+        st.markdown("---")
+        st.subheader("ℹ️ AI 모니터링 정보")
+        
+        info_col1, info_col2 = st.columns(2)
+        
+        with info_col1:
+            st.info("""
+            **AI 모니터링 기능:**
+            - 5분마다 자동 실행
+            - 모든 포지션 분석 (기존/신규)
+            - 기술적 지표 기반 판단
+            - 위험 관리 자동화
+            """)
+        
+        with info_col2:
+            st.warning("""
+            **결정 타입:**
+            - 🟢 Hold: 포지션 유지
+            - 🟠 Partial: 부분 청산
+            - 🔴 Close: 전체 청산
+            - 긴급도에 따라 자동/수동 처리
+            """)
     
     # 사이드바 - 설정 및 정보
     with st.sidebar:
