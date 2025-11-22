@@ -3368,7 +3368,7 @@ def ai_monitoring_cycle():
     AI 모니터링 주기 실행
     🆕 개선: 자동/수동 포지션 모두 모니터링
     """
-    global current_positions
+    global current_positions, bot_start_time, initial_sync_completed
     
     logger.info("=== AI Position Monitoring Cycle Start ===")
     logger.info(f"⏰ Monitoring interval: {AI_MONITOR_INTERVAL} minutes")
@@ -3431,8 +3431,6 @@ def ai_monitoring_cycle():
                     logger.info(f"✅ {symbol} 자동 청산 감지 및 DB 기록 완료")
                     
                     # 🔥 텔레그램 알림 (봇 시작 후 충분한 시간이 지났을 때만)
-                    global initial_sync_completed, bot_start_time
-                    
                     # 봇 시작 후 5분이 지났거나, 이미 초기 동기화가 완료된 경우에만 알림
                     send_notification = False
                     if bot_start_time:
@@ -6766,7 +6764,6 @@ def initialize_bot():
             logger.info("복구할 포지션 없음 (새로 시작)")
         
         # 🆕 초기 동기화 완료 표시 (5분 대기 없이 바로 알림 가능)
-        global initial_sync_completed
         initial_sync_completed = True
         logger.info("✅ 초기 포지션 동기화 완료 - 이후 청산 감지 알림 활성화")
         
