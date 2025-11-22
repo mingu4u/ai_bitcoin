@@ -1479,7 +1479,7 @@ def main():
                     action as ai_decision,
                     confidence,
                     reason,
-                    price,
+                    current_price as price,
                     CASE 
                         WHEN trade_type = 'MANUAL_ENTRY' THEN '🔧 Manual'
                         WHEN reason LIKE '%Manual position%' THEN '🔧 Manual'
