@@ -33,13 +33,13 @@ USER_CONFIGS = {
         'api_key_env': 'BINANCE_API_KEY_HYUN',
         'secret_key_env': 'BINANCE_SECRET_KEY_HYUN',
         'is_primary': False,  # 주문만 실행
+    },
+    'USER3': {
+        'name': 'Hyuk',
+        'api_key_env': 'BINANCE_API_KEY_HYUK',
+        'secret_key_env': 'BINANCE_SECRET_KEY_HYUK',
+        'is_primary': False,  # 주문만 실행
     }
-    # 'USER3': {
-    #     'name': 'User 3',
-    #     'api_key_env': 'BINANCE_API_KEY_USER3',
-    #     'secret_key_env': 'BINANCE_SECRET_KEY_USER3',
-    #     'is_primary': False,  # 주문만 실행
-    # }
 }
 
 SERVER_PORT = 5000  # 하나의 서버에서 모든 유저 관리
