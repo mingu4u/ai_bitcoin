@@ -103,6 +103,8 @@ TELEGRAM_CHAT_IDS = os.getenv('TELEGRAM_CHAT_IDS', '').split(',')
 bot_start_time = None
 initial_sync_completed = False
 existing_positions_at_start = set()  # 🔥 v8.3: 봇 시작시 이미 있던 포지션 추적
+positions_already_notified = set()  # 🔥 v8.4: 이미 알림 보낸 청산 추적
+last_position_check = {}  # 🔥 v8.4: 마지막 포지션 확인 시간
 
 # ============ AI Decision Models ============
 class TradingDecision(BaseModel):
@@ -598,100 +600,126 @@ ai_monitor_running = False
 def sync_positions_from_exchange():
     """
     거래소의 실제 포지션을 current_positions와 동기화
-    🆕 개선: 수동 포지션 감지 및 position_type 필드 추가
+    🔥 v8.4: 잘못된 청산 감지 방지 및 안정성 개선
     """
-    global current_positions
+    global current_positions, existing_positions_at_start, positions_already_notified
     
     try:
-        logger.info("=== 거래소 포지션 동기화 시작 (수동 포지션 감지 포함) ===")
+        logger.info("=== 거래소 포지션 동기화 시작 ===")
         
-        # 모든 활성 심볼에 대해 포지션 조회
         synced_count = 0
-        manual_count = 0  # 🆕 수동 포지션 카운트
+        manual_count = 0
         new_positions = {}
         
-        for symbol in SYMBOL_CONFIG.keys():
+        # 🔥 v8.4: 모든 포지션을 한번에 조회 (개별 심볼 조회보다 안정적)
+        all_positions = exchange.fetch_positions()
+        
+        for position in all_positions:
+            symbol = position['symbol']
+            contracts = float(position.get('contracts', 0))
+            
+            # SYMBOL_CONFIG에 있는 심볼만 처리
+            if symbol not in SYMBOL_CONFIG:
+                continue
+            
             if not SYMBOL_CONFIG[symbol].get('enabled', True):
                 continue
             
-            try:
-                # 거래소에서 실제 포지션 조회
-                positions = exchange.fetch_positions([symbol])
+            if contracts != 0:  # 포지션이 있는 경우
+                entry_price = float(position.get('entryPrice', 0))
+                side = 'buy' if position['side'] == 'long' else 'sell'
                 
-                for position in positions:
-                    contracts = float(position.get('contracts', 0))
+                # 기존 포지션 정보가 있으면 유지, 없으면 새로 생성
+                if symbol in current_positions:
+                    # 기존 정보 유지
+                    new_positions[symbol] = current_positions[symbol]
+                    new_positions[symbol]['amount'] = abs(contracts)
+                    new_positions[symbol]['entry_price'] = entry_price
+                    logger.info(f"✓ {symbol} 포지션 업데이트: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
+                else:
+                    # 새로운 포지션 발견
+                    new_positions[symbol] = {
+                        'side': side,
+                        'entry_price': entry_price,
+                        'amount': abs(contracts),
+                        'stop_loss': 0,
+                        'take_profit': 0,
+                        'trailing_stop_percent': DEFAULT_TRAILING_STOP_PERCENT,
+                        'trailing_activation_percent': DEFAULT_TRAILING_ACTIVATION_PERCENT,
+                        'entry_time': datetime.now(),
+                        'position_type': 'manual',
+                        'leverage': SYMBOL_CONFIG[symbol].get('leverage', 10)
+                    }
                     
-                    if contracts != 0:  # 포지션이 있는 경우
-                        entry_price = float(position.get('entryPrice', 0))
-                        side = 'buy' if position['side'] == 'long' else 'sell'
+                    # 🔥 v8.4: 봇 시작 직후인지 확인
+                    is_bot_just_started = False
+                    if bot_start_time:
+                        time_since_start = (datetime.now() - bot_start_time).total_seconds()
+                        if time_since_start < 60:  # 봇 시작 후 1분 이내
+                            is_bot_just_started = True
+                            existing_positions_at_start.add(symbol)
+                            logger.info(f"📌 봇 시작시 기존 포지션으로 기록: {symbol}")
+                    
+                    if not is_bot_just_started:
+                        logger.info(f"🆕🔧 {symbol} 수동 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
+                        synced_count += 1
+                        manual_count += 1
                         
-                        # 기존 포지션 정보가 있으면 유지, 없으면 새로 생성
-                        if symbol in current_positions:
-                            # 기존 정보 유지 (SL/TP, position_type 등)
-                            new_positions[symbol] = current_positions[symbol]
-                            # 수량과 진입가는 거래소 기준으로 업데이트
-                            new_positions[symbol]['amount'] = abs(contracts)
-                            new_positions[symbol]['entry_price'] = entry_price
-                            logger.info(f"✓ {symbol} 포지션 업데이트: {side} {abs(contracts):.4f} @ ${entry_price:.2f} (타입: {new_positions[symbol].get('position_type', 'auto')})")
-                        else:
-                            # 🆕 새로운 포지션 발견 → 수동 포지션으로 간주
-                            new_positions[symbol] = {
-                                'side': side,
-                                'entry_price': entry_price,
-                                'amount': abs(contracts),
-                                'stop_loss': 0,  # 실제 SL/TP는 거래소에서 조회 가능하지만 간단히 0으로
-                                'take_profit': 0,
-                                'trailing_stop_percent': DEFAULT_TRAILING_STOP_PERCENT,
-                                'trailing_activation_percent': DEFAULT_TRAILING_ACTIVATION_PERCENT,
-                                'entry_time': datetime.now(),  # 동기화 시점을 진입 시간으로
-                                'position_type': 'manual',  # 🆕 수동 포지션으로 표시
-                                'leverage': SYMBOL_CONFIG[symbol].get('leverage', 10)
-                            }
-                            logger.info(f"🆕🔧 {symbol} 수동 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
-                            logger.info(f"   → AI 모니터링 대상에 자동 추가됨")
-                            synced_count += 1
-                            manual_count += 1
-                            
-                            # 🆕 텔레그램 알림 (수동 포지션 감지)
-                            if ENABLE_TELEGRAM:
-                                send_telegram_notification(
-                                    f"🔧 <b>수동 포지션 감지</b>\n\n"
-                                    f"<b>심볼:</b> {symbol}\n"
-                                    f"<b>방향:</b> {side.upper()}\n"
-                                    f"<b>진입가:</b> ${entry_price:,.2f}\n"
-                                    f"<b>수량:</b> {abs(contracts):.4f}\n"
-                                    f"<b>타입:</b> MANUAL\n\n"
-                                    f"✅ AI 모니터링이 자동으로 시작됩니다.\n"
-                                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                                    'info'
-                                )
-                        
-            except Exception as e:
-                logger.error(f"{symbol} 포지션 조회 오류: {str(e)}")
-                continue
+                        # 텔레그램 알림 (진짜 신규 수동 포지션만)
+                        if ENABLE_TELEGRAM:
+                            send_telegram_notification(
+                                f"🔧 <b>수동 포지션 감지</b>\n\n"
+                                f"<b>심볼:</b> {symbol}\n"
+                                f"<b>방향:</b> {side.upper()}\n"
+                                f"<b>진입가:</b> ${entry_price:,.2f}\n"
+                                f"<b>수량:</b> {abs(contracts):.4f}\n"
+                                f"<b>타입:</b> MANUAL\n\n"
+                                f"✅ AI 모니터링이 자동으로 시작됩니다.\n"
+                                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                                'info'
+                            )
         
         # 동기화 완료 - 메모리에 없지만 거래소에 있는 포지션 추가
         for symbol, pos_info in new_positions.items():
             if symbol not in current_positions:
                 current_positions[symbol] = pos_info
         
-        # 메모리에는 있지만 거래소에 없는 포지션 제거 및 DB 기록
+        # 🔥 v8.4: 메모리에는 있지만 거래소에 없는 포지션 처리 개선
         removed_symbols = []
         for symbol in list(current_positions.keys()):
             if symbol not in new_positions:
-                # 종료된 포지션을 completed_trades에 기록
-                try:
-                    ticker = exchange.fetch_ticker(symbol)
-                    exit_price = ticker['last']
-                    position_info = current_positions[symbol]
-                    record_completed_trade(symbol, position_info, exit_price, 'sync_detected_close')
-                    logger.info(f"✅ Closed position recorded for {symbol} (detected by sync)")
-                except Exception as e:
-                    logger.error(f"Failed to record closed position for {symbol}: {e}")
+                # 🔥 봇 시작시 있던 포지션인지 확인
+                is_existing = symbol in existing_positions_at_start
+                
+                # 🔥 이미 알림 보낸 청산인지 확인
+                already_notified = symbol in positions_already_notified
+                
+                # 🔥 최근에 체크한 포지션인지 확인 (5초 이내)
+                recently_checked = False
+                if symbol in last_position_check:
+                    time_since_check = (datetime.now() - last_position_check[symbol]).total_seconds()
+                    if time_since_check < 5:
+                        recently_checked = True
+                
+                # 정말로 청산된 경우만 처리
+                if not is_existing and not already_notified and not recently_checked:
+                    try:
+                        ticker = exchange.fetch_ticker(symbol)
+                        exit_price = ticker['last']
+                        position_info = current_positions[symbol]
+                        record_completed_trade(symbol, position_info, exit_price, 'sync_detected_close')
+                        logger.info(f"✅ {symbol} 청산 확인 및 DB 기록")
+                        positions_already_notified.add(symbol)
+                    except Exception as e:
+                        logger.error(f"청산 기록 실패 ({symbol}): {e}")
                 
                 removed_symbols.append(symbol)
                 del current_positions[symbol]
-                logger.warning(f"⚠️ {symbol} 포지션이 거래소에 없어 메모리에서 제거 및 DB 기록")
+                
+                if is_existing:
+                    logger.info(f"⏭️ {symbol} 봇 시작시 포지션 - 메모리에서만 제거")
+                else:
+                    logger.warning(f"⚠️ {symbol} 포지션 청산됨 - 메모리에서 제거")
         
         # 🆕 수동 포지션 감지 결과 로깅
         auto_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'auto')
@@ -3409,7 +3437,7 @@ def ai_monitoring_cycle():
     AI 모니터링 주기 실행
     🆕 개선: 자동/수동 포지션 모두 모니터링
     """
-    global current_positions, initial_sync_completed, bot_start_time, existing_positions_at_start
+    global current_positions, initial_sync_completed, bot_start_time, existing_positions_at_start, positions_already_notified, last_position_check
     
     logger.info("=== AI Position Monitoring Cycle Start ===")
     logger.info(f"⏰ Monitoring interval: {AI_MONITOR_INTERVAL} minutes")
@@ -3433,6 +3461,14 @@ def ai_monitoring_cycle():
     monitored_count = 0
     exit_decisions = []
     
+    # 🔥 v8.4: 전체 포지션을 한번에 조회 (더 안정적)
+    try:
+        all_positions = exchange.fetch_positions()
+        active_symbols = {pos['symbol']: pos for pos in all_positions if abs(float(pos.get('contracts', 0))) > 0}
+    except Exception as e:
+        logger.error(f"전체 포지션 조회 오류: {e}")
+        active_symbols = {}
+    
     for symbol, position in current_positions.copy().items():
         # AI 모니터링이 활성화된 심볼인지 확인
         if not SYMBOL_CONFIG.get(symbol, {}).get('ai_monitoring', True):
@@ -3441,104 +3477,108 @@ def ai_monitoring_cycle():
         position_type = position.get('position_type', 'auto')
         type_indicator = "🤖" if position_type == 'auto' else "🔧"
         
-        # 🔥 실제 포지션 존재 확인 (시간 기반 아닌 실제 상태 기반)
-        try:
-            positions_check = exchange.fetch_positions([symbol])
-            position_exists = False
-            
-            for pos in positions_check:
-                if abs(float(pos.get('contracts', 0))) > 0:
-                    position_exists = True
-                    break
-            
-            if not position_exists:
-                # 포지션이 이미 청산됨 (TP/SL 등으로) - DB 기록 및 메모리에서 제거
-                logger.info(f"{type_indicator} {symbol} 포지션 이미 청산됨 (TP/SL/자동청산) - AI 모니터링 스킵")
-                
-                try:
-                    ticker = exchange.fetch_ticker(symbol)
-                    exit_price = ticker['last']
-                    
-                    # 🆕 v8.1: 포지션 종료 기록
-                    position_data = position.copy()
-                    position_data['mark_price'] = exit_price
-                    
-                    # 🔥 v8.3: 기존 포지션 여부 확인
-                    is_existing_position = symbol in existing_positions_at_start
-                    
-                    # 봇 시작 후 5분이 지났거나, 이미 초기 동기화가 완료된 경우에만 알림
-                    send_notification = False
-                    if bot_start_time:
-                        time_since_start = (datetime.now() - bot_start_time).total_seconds() / 60
-                        # 🔥 기존 포지션은 알림하지 않음
-                        if time_since_start >= 5 and not is_existing_position:
-                            send_notification = True
-                        elif initial_sync_completed and not is_existing_position:
-                            send_notification = True
-                    else:
-                        # bot_start_time이 없으면 (이상한 경우) 신규 포지션만 알림
-                        send_notification = not is_existing_position
-                    
-                    # DB 기록 및 PnL 계산
-                    pnl_result = record_position_closure_with_real_pnl(
-                        symbol,
-                        position_data,
-                        close_type='auto_close_detected'
-                    )
-                    
-                    logger.info(f"✅ {symbol} 자동 청산 감지 및 DB 기록 완료")
-                    
-                    # 텔레그램 알림 (조건부)
-                    if ENABLE_TELEGRAM and send_notification and pnl_result is not None:
-                        send_telegram_notification(
-                            f"📊 <b>🔔 자동 청산 감지</b>\n\n"
-                            f"<b>심볼:</b> {symbol}\n"
-                            f"<b>종료 방식:</b> TP/SL 자동 체결\n"
-                            f"<b>실현 손익:</b> ${pnl_result:,.2f} USD\n"
-                            f"<b>타입:</b> {position_type.upper()}\n\n"
-                            f"<b>감지 시간:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                            f"💡 바이낸스에서 자동으로 청산되었습니다.",
-                            'info'
-                        )
-                    elif not send_notification:
-                        logger.info(f"⏭️ {symbol} 청산 알림 억제 (봇 시작시 기존 포지션: {is_existing_position})")
-                    
-                except Exception as record_error:
-                    logger.error(f"청산 기록 실패 ({symbol}): {record_error}")
-                
-                # 메모리에서 제거
+        # 🔥 v8.4: 포지션 체크 시간 기록
+        last_position_check[symbol] = datetime.now()
+        
+        # 🔥 v8.4: 개선된 포지션 존재 확인
+        position_exists = symbol in active_symbols
+        
+        if not position_exists:
+            # 🔥 이미 처리한 청산인지 확인
+            if symbol in positions_already_notified:
+                logger.info(f"⏭️ {symbol} 이미 처리된 청산 - 스킵")
                 if symbol in current_positions:
                     del current_positions[symbol]
-                
-                continue  # 다음 포지션으로
+                continue
             
-        except Exception as check_error:
-            logger.error(f"{symbol} 포지션 존재 확인 오류: {check_error}")
-            continue
+            # 🔥 봇 시작시 있던 포지션인지 확인
+            is_existing = symbol in existing_positions_at_start
+            
+            # 🔥 봇 시작 후 충분한 시간이 지났는지 확인
+            can_notify = False
+            if bot_start_time:
+                time_since_start = (datetime.now() - bot_start_time).total_seconds() / 60
+                # 봇 시작 후 5분이 지났고, 기존 포지션이 아닌 경우만
+                if time_since_start >= 5 and not is_existing:
+                    can_notify = True
+            
+            logger.info(f"{type_indicator} {symbol} 포지션 청산 감지 (기존: {is_existing}, 알림: {can_notify})")
+            
+            # 포지션이 이미 청산됨 (TP/SL 등으로) - DB 기록 및 메모리에서 제거
+            try:
+                ticker = exchange.fetch_ticker(symbol)
+                exit_price = ticker['last']
+                
+                # 포지션 종료 기록
+                position_data = position.copy()
+                position_data['mark_price'] = exit_price
+                
+                # DB 기록 및 PnL 계산
+                pnl_result = record_position_closure_with_real_pnl(
+                    symbol,
+                    position_data,
+                    close_type='auto_close_detected'
+                )
+                
+                logger.info(f"✅ {symbol} 청산 DB 기록 완료")
+                positions_already_notified.add(symbol)
+                
+                # 텔레그램 알림 (조건부)
+                if ENABLE_TELEGRAM and can_notify and pnl_result is not None:
+                    send_telegram_notification(
+                        f"📊 <b>🔔 자동 청산 감지</b>\n\n"
+                        f"<b>심볼:</b> {symbol}\n"
+                        f"<b>종료 방식:</b> TP/SL 자동 체결\n"
+                        f"<b>실현 손익:</b> ${pnl_result:,.2f} USD\n"
+                        f"<b>타입:</b> {position_type.upper()}\n\n"
+                        f"<b>감지 시간:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"💡 바이낸스에서 자동으로 청산되었습니다.",
+                        'info'
+                    )
+                elif not can_notify:
+                    logger.info(f"⏭️ {symbol} 청산 알림 억제 (봇 시작시 기존 포지션: {is_existing})")
+                    
+            except Exception as record_error:
+                logger.error(f"청산 기록 실패 ({symbol}): {record_error}")
+            
+            # 메모리에서 제거
+            if symbol in current_positions:
+                del current_positions[symbol]
+            
+            # existing_positions_at_start에서도 제거
+            if symbol in existing_positions_at_start:
+                existing_positions_at_start.discard(symbol)
+            
+            continue  # 다음 포지션으로
         
         # 포지션이 실제로 존재하는 경우에만 AI 모니터링 진행
         logger.info(f"{type_indicator} Monitoring position: {symbol} ({position_type.upper()})")
         
-        # AI 모니터링 실행
-        decision = ai_monitor_position(symbol, position)
-        
-        if decision:
-            monitored_count += 1
+        try:
+            # AI 모니터링 실행
+            decision = ai_monitor_position(symbol, position)
             
-            # 종료 결정인 경우
-            if decision['decision'] in ['close', 'partial_close']:
-                # 신뢰도와 긴급도 확인
-                if decision['confidence'] >= 0.6 or decision['urgency'] == 'immediate':
-                    success = execute_position_exit(symbol, decision)
-                    if success:
-                        exit_decisions.append({
-                            'symbol': symbol,
-                            'position_type': position_type,  # 🆕
-                            'decision': decision['decision'],
-                            'reason': decision['reason']
-                        })
-                else:
-                    logger.info(f"{type_indicator} Exit decision for {symbol} ({position_type.upper()}) not executed due to low confidence ({decision['confidence']:.1%})")
+            if decision:
+                monitored_count += 1
+                
+                # 종료 결정인 경우
+                if decision['decision'] in ['close', 'partial_close']:
+                    # 신뢰도와 긴급도 확인
+                    if decision['confidence'] >= 0.6 or decision['urgency'] == 'immediate':
+                        success = execute_position_exit(symbol, decision)
+                        if success:
+                            exit_decisions.append({
+                                'symbol': symbol,
+                                'position_type': position_type,  # 🆕
+                                'decision': decision['decision'],
+                                'reason': decision['reason']
+                            })
+                    else:
+                        logger.info(f"{type_indicator} Exit decision for {symbol} ({position_type.upper()}) not executed due to low confidence ({decision['confidence']:.1%})")
+        
+        except Exception as monitor_error:
+            logger.error(f"AI 모니터링 오류 ({symbol}): {monitor_error}")
+            continue
         
         # API 제한을 위한 짧은 대기
         time.sleep(2)
@@ -6780,13 +6820,15 @@ def start_position_closure_monitor():
     logger.info("✅ 포지션 종료 감지 스레드 시작 (10초 간격)")
 
 def initialize_bot():
-    """봇 초기화 - v8.3: 기존 포지션 추적 추가"""
-    global bot_start_time, initial_sync_completed, existing_positions_at_start
+    """봇 초기화 - v8.4: 완벽한 기존 포지션 추적"""
+    global bot_start_time, initial_sync_completed, existing_positions_at_start, positions_already_notified, last_position_check
     
     # 🆕 봇 시작 시간 기록
     bot_start_time = datetime.now()
     initial_sync_completed = False
-    existing_positions_at_start = set()  # 🔥 v8.3: 초기화
+    existing_positions_at_start = set()  # 🔥 v8.4: 기존 포지션 추적
+    positions_already_notified = set()  # 🔥 v8.4: 알림 추적 초기화
+    last_position_check = {}  # 🔥 v8.4: 체크 시간 초기화
     
     logger.info(f"봇 초기화 중... (포트: {SERVER_PORT})")
     logger.info(f"🕐 봇 시작 시간: {bot_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -6802,16 +6844,24 @@ def initialize_bot():
     except Exception as e:
         logger.error(f"거래소 연결 실패: {str(e)}")
     
-    # 🔥 v8.3: 봇 시작시 기존 포지션 추적
+    # 🔥 v8.4: 봇 시작시 기존 포지션을 확실하게 추적
     try:
-        positions = exchange.fetch_positions()
-        for pos in positions:
-            if abs(float(pos.get('contracts', 0))) > 0:
-                symbol = pos['symbol']
+        logger.info("📌 봇 시작시 기존 포지션 확인 중...")
+        all_positions = exchange.fetch_positions()
+        
+        for pos in all_positions:
+            symbol = pos['symbol']
+            contracts = float(pos.get('contracts', 0))
+            
+            if contracts != 0 and symbol in SYMBOL_CONFIG:
                 existing_positions_at_start.add(symbol)
-                logger.info(f"📌 기존 포지션 발견: {symbol}")
+                side = 'long' if contracts > 0 else 'short'
+                entry_price = float(pos.get('entryPrice', 0))
+                logger.info(f"📌 기존 포지션 발견: {symbol} ({side} {abs(contracts):.4f} @ ${entry_price:.2f})")
         
         logger.info(f"📌 봇 시작시 기존 포지션: {len(existing_positions_at_start)}개")
+        if existing_positions_at_start:
+            logger.info(f"📌 기존 포지션 목록: {list(existing_positions_at_start)}")
     except Exception as e:
         logger.error(f"기존 포지션 확인 실패: {str(e)}")
     
