@@ -513,23 +513,25 @@ def get_completed_trades(days=30):
         SELECT 
             symbol, side, entry_price, exit_price, amount,
             pnl_usdt, pnl_percent, is_win, 
-            entry_time, exit_time, holding_time_minutes, close_type,
+            open_timestamp, close_timestamp, holding_time_minutes, close_reason,
             realized_pnl_binance,
             CASE 
                 WHEN realized_pnl_binance IS NOT NULL THEN 1
                 ELSE 0
             END as is_binance_verified
         FROM completed_trades
-        WHERE exit_time >= datetime('now', '-{days} days')
-        ORDER BY exit_time DESC
+        WHERE close_timestamp >= datetime('now', '-{days} days')
+        ORDER BY close_timestamp DESC
         """
         
         df = pd.read_sql_query(query, conn)
         conn.close()
         
         if not df.empty:
-            df['exit_time'] = pd.to_datetime(df['exit_time'])
-            df['entry_time'] = pd.to_datetime(df['entry_time'])
+            # 컬럼명을 exit_time, entry_time으로 변경 (하위 호환성)
+            df['exit_time'] = pd.to_datetime(df['close_timestamp'])
+            df['entry_time'] = pd.to_datetime(df['open_timestamp'])
+            df = df.drop(['close_timestamp', 'open_timestamp'], axis=1)
         
         return df
         
@@ -915,7 +917,7 @@ def main():
             # 🆕 바이낸스 확인 여부 추가
             display_df = completed_df[[
                 'exit_time', 'symbol', 'side', 'entry_price', 'exit_price',
-                'pnl_usdt', 'pnl_percent', 'holding_time_minutes', 'close_type',
+                'pnl_usdt', 'pnl_percent', 'holding_time_minutes', 'close_reason',
                 'is_binance_verified'
             ]].copy()
             
