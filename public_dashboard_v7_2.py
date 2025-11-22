@@ -982,13 +982,20 @@ def main():
                          help=f"{binance_verified}/{total_trades} 거래가 바이낸스에서 실제 PnL 확인됨")
     
     # ==========================================
-    # Tab 2: 성과 분석 (기존 유지)
-    # ==========================================
-    # ==========================================
     # Tab 2: 성과 분석 (🆕 v7.2 Enhanced - from v6)
     # ==========================================
     with tab2:
         st.header("📈 Performance Analysis")
+        
+        # 🆕 필요한 변수들 가져오기
+        if exchange:
+            balance_data_tab2 = fetch_balance_from_binance(exchange)
+            current_balance = balance_data_tab2['total']
+        else:
+            current_balance = None
+        
+        initial_balance = get_or_set_initial_balance()
+        lifetime_start_balance = get_or_set_lifetime_start_balance()
         
         if current_balance is None or initial_balance is None or lifetime_start_balance is None:
             st.error("⚠️ 잔고 정보를 가져올 수 없습니다. API 키를 확인해주세요.")

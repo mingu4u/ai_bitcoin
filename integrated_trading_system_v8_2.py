@@ -81,6 +81,10 @@ exchange = exchanges.get('USER1')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_IDS = os.getenv('TELEGRAM_CHAT_IDS', '').split(',')
 
+# 🆕 봇 시작 시간 추적 (초기 청산 감지 알림 억제용)
+bot_start_time = None
+initial_sync_completed = False
+
 # ============ AI Decision Models ============
 class TradingDecision(BaseModel):
     """트레이딩 시그널 검증용 모델"""
@@ -3426,17 +3430,32 @@ def ai_monitoring_cycle():
                     
                     logger.info(f"✅ {symbol} 자동 청산 감지 및 DB 기록 완료")
                     
-                    # 텔레그램 알림
-                    if ENABLE_TELEGRAM:
+                    # 🔥 텔레그램 알림 (봇 시작 후 충분한 시간이 지났을 때만)
+                    global initial_sync_completed, bot_start_time
+                    
+                    # 봇 시작 후 5분이 지났거나, 이미 초기 동기화가 완료된 경우에만 알림
+                    send_notification = False
+                    if bot_start_time:
+                        time_since_start = (datetime.now() - bot_start_time).total_seconds() / 60
+                        if time_since_start >= 5 or initial_sync_completed:
+                            send_notification = True
+                    else:
+                        # bot_start_time이 없으면 (이상한 경우) 알림 보냄
+                        send_notification = True
+                    
+                    if ENABLE_TELEGRAM and send_notification:
                         send_telegram_notification(
-                            f"✅ <b>자동 청산 감지</b>\n\n"
+                            f"📊 <b>🔔 자동 청산 감지</b>\n\n"
                             f"<b>심볼:</b> {symbol}\n"
+                            f"<b>종료 방식:</b> TP/SL 자동 체결\n"
                             f"<b>청산가:</b> ${exit_price:,.2f}\n"
-                            f"<b>청산 유형:</b> TP/SL/자동청산\n"
                             f"<b>타입:</b> {position_type.upper()}\n\n"
-                            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                            f"<b>감지 시간:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                            f"💡 바이낸스에서 자동으로 청산되었습니다.",
                             'info'
                         )
+                    elif not send_notification:
+                        logger.info(f"⏭️ {symbol} 청산 알림 억제 (봇 시작 직후 또는 기존 포지션)")
                     
                 except Exception as record_error:
                     logger.error(f"청산 기록 실패 ({symbol}): {record_error}")
@@ -6716,7 +6735,14 @@ def start_position_closure_monitor():
 
 def initialize_bot():
     """봇 초기화"""
+    global bot_start_time, initial_sync_completed
+    
+    # 🆕 봇 시작 시간 기록
+    bot_start_time = datetime.now()
+    initial_sync_completed = False
+    
     logger.info(f"봇 초기화 중... (포트: {SERVER_PORT})")
+    logger.info(f"🕐 봇 시작 시간: {bot_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # 데이터베이스 초기화 (프로그램 시작 시 1회)
     init_db_once()
@@ -6738,6 +6764,12 @@ def initialize_bot():
             logger.info(f"복구된 포지션:\n{position_summary}")
         else:
             logger.info("복구할 포지션 없음 (새로 시작)")
+        
+        # 🆕 초기 동기화 완료 표시 (5분 대기 없이 바로 알림 가능)
+        global initial_sync_completed
+        initial_sync_completed = True
+        logger.info("✅ 초기 포지션 동기화 완료 - 이후 청산 감지 알림 활성화")
+        
     except Exception as e:
         logger.error(f"포지션 동기화 실패: {str(e)}")
     
