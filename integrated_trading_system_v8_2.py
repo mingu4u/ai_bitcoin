@@ -1,8 +1,16 @@
 """
-Integrated Trading System v8.6 Enhanced (Fixed)
+Integrated Trading System v8.7 Enhanced (Perfect Fix)
 ================================================
 자동매매봇 - 다중 유저 지원, AI 검증/모니터링 통합 버전
-🔥 포지션 청산 감지 완벽 해결 + 물타기 기능 + v7 방식 포지션 감지!
+🔥 봇 시작시 기존 포지션 auto_close_detected 문제 완벽 해결!
+
+v8.7 Enhanced Perfect Fix (2025-11-23):
+- 🔥🔥🔥 봇 시작시 기존 포지션 auto_close_detected 기록 문제 완벽 해결!
+- 🔥 개별 심볼 조회 (v7 방식): 각 심볼을 개별적으로 fetch_positions 호출
+- 🔥 재시도 로직: 포지션 조회 실패 시 3회 재시도
+- 🔥 안전 모드: 조회 실패 시 포지션이 존재한다고 가정
+- 🔥 안전 시간: 봇 시작 후 10분 동안은 기존 포지션 auto_close 기록 방지
+- 🔥 AI 모니터링 정상 작동: 기존 포지션도 정상적으로 모니터링됨
 
 v8.6 Enhanced Fixed (2025-11-23):
 - 🔥 v7 방식 포지션 감지 적용: 각 심볼 개별 조회로 기존 포지션 100% 감지
@@ -3597,13 +3605,10 @@ def ai_monitoring_cycle():
     monitored_count = 0
     exit_decisions = []
     
-    # 🔥 v8.4: 전체 포지션을 한번에 조회 (더 안정적)
-    try:
-        all_positions = exchange.fetch_positions()
-        active_symbols = {pos['symbol']: pos for pos in all_positions if abs(float(pos.get('contracts', 0))) > 0}
-    except Exception as e:
-        logger.error(f"전체 포지션 조회 오류: {e}")
-        active_symbols = {}
+    # 🔥 v8.7: 봇 시작 후 경과 시간 계산 (안전 시간 체크용)
+    bot_uptime_minutes = 0
+    if bot_start_time:
+        bot_uptime_minutes = (datetime.now() - bot_start_time).total_seconds() / 60
     
     for symbol, position in current_positions.copy().items():
         # AI 모니터링이 활성화된 심볼인지 확인
@@ -3616,8 +3621,35 @@ def ai_monitoring_cycle():
         # 🔥 v8.4: 포지션 체크 시간 기록
         last_position_check[symbol] = datetime.now()
         
-        # 🔥 v8.4: 개선된 포지션 존재 확인
-        position_exists = symbol in active_symbols
+        # 🔥 v8.7 Fixed: v7 방식 - 각 심볼을 개별 조회 (재시도 포함)
+        position_exists = False
+        max_retries = 3
+        
+        for retry in range(max_retries):
+            try:
+                positions = exchange.fetch_positions([symbol])
+                for pos in positions:
+                    if abs(float(pos.get('contracts', 0))) > 0:
+                        position_exists = True
+                        break
+                
+                # 성공적으로 조회했으면 루프 종료
+                break
+                
+            except Exception as e:
+                if retry < max_retries - 1:
+                    logger.warning(f"⚠️ {symbol} 포지션 조회 실패 (재시도 {retry+1}/{max_retries}): {e}")
+                    time.sleep(1)  # 재시도 전 대기
+                else:
+                    logger.error(f"❌ {symbol} 포지션 조회 최종 실패: {e}")
+                    # 조회 실패 시 포지션이 존재한다고 가정 (안전 모드)
+                    position_exists = True
+                    logger.warning(f"⚠️ {symbol} 안전 모드: 포지션 존재로 간주 (조회 실패)")
+        
+        if position_exists:
+            logger.info(f"✓ {symbol} 포지션 확인됨 (개별 조회)")
+        else:
+            logger.info(f"✗ {symbol} 포지션 없음 (개별 조회 확인)")
         
         if not position_exists:
             # 🔥 이미 처리한 청산인지 확인
@@ -3635,15 +3667,29 @@ def ai_monitoring_cycle():
             # 🔥 봇 시작시 있던 포지션인지 확인
             is_existing = symbol in existing_positions_at_start
             
-            # 🔥 봇 시작 후 충분한 시간이 지났는지 확인
+            # 🔥 v8.7 Fixed: 봇 시작 후 충분한 시간이 지났는지 확인
+            # 봇 시작 후 10분 이내이고 기존 포지션이면 auto_close_detected 기록하지 않음!
+            can_record_closure = True
             can_notify = False
-            if bot_start_time:
-                time_since_start = (datetime.now() - bot_start_time).total_seconds() / 60
-                # 봇 시작 후 5분이 지났고, 기존 포지션이 아닌 경우만
-                if time_since_start >= 5 and not is_existing:
-                    can_notify = True
             
-            logger.info(f"{type_indicator} {symbol} 포지션 청산 감지 (기존: {is_existing}, 알림: {can_notify})")
+            if bot_uptime_minutes < 10 and is_existing:
+                can_record_closure = False
+                logger.warning(f"🛡️ {symbol} 봇 시작 직후 기존 포지션 - auto_close_detected 기록 방지!")
+                logger.info(f"   → 봇 가동 시간: {bot_uptime_minutes:.1f}분 (안전 시간: 10분)")
+                # 메모리에서는 유지하고 다음 사이클에서 재확인
+                continue
+            
+            # 알림 조건: 봇 시작 후 5분이 지났고, 기존 포지션이 아닌 경우
+            if bot_uptime_minutes >= 5 and not is_existing:
+                can_notify = True
+            
+            logger.info(f"{type_indicator} {symbol} 포지션 청산 감지")
+            logger.info(f"   → 기존 포지션: {is_existing}, 봇 가동: {bot_uptime_minutes:.1f}분")
+            logger.info(f"   → DB 기록: {can_record_closure}, 알림: {can_notify}")
+            
+            # 🔥 v8.7 Fixed: can_record_closure가 True인 경우에만 DB 기록
+            if not can_record_closure:
+                continue
             
             # 포지션이 이미 청산됨 (TP/SL 등으로) - DB 기록 및 메모리에서 제거
             try:
