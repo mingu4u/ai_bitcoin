@@ -1,8 +1,16 @@
 """
-Integrated Trading System v8.5 Fixed
-======================================
+Integrated Trading System v8.6 Enhanced
+========================================
 자동매매봇 - 다중 유저 지원, AI 검증/모니터링 통합 버전
-🔥 포지션 청산 감지 문제 완벽 해결!
+🔥 포지션 청산 감지 완벽 해결 + 물타기 기능 추가!
+
+v8.6 Enhanced 주요 신규 기능 (2025-11-23):
+- 🎯 AI 물타기 기능 추가 (손실 구간에서 추가 진입)
+- 🎯 물타기 수량: 잔여 마진의 5~30% (확신도/승률 기반)
+- 🎯 물타기 조건: 강력한 반전 신호 + 충분한 잔여 마진
+- 🎯 AI 판단: 포지션 유지/부분청산/전체청산/물타기 (4가지)
+- ✅ 봇 시작 시 기존 포지션 감지 개선 및 AI 모니터링 확실히 적용
+- ✅ 기존 포지션도 AI가 물타기 판단 가능
 
 v8.5 Fixed 주요 수정사항 (2025-11-23):
 - 🔥 포지션 진입 시간 추적 시스템 추가 (position_entry_times)
@@ -139,16 +147,19 @@ class ClosePositionDecision(BaseModel):
     urgency: str = Field(..., pattern="^(immediate|soon|normal|low)$")
 
 class PositionExitDecision(BaseModel):
-    """포지션 종료 결정용 모델 - 개선 버전"""
-    decision: str = Field(..., pattern="^(hold|close|partial_close)$")
+    """포지션 종료/추가 진입 결정용 모델 - 물타기 기능 추가"""
+    decision: str = Field(..., pattern="^(hold|close|partial_close|add_position)$")
     percentage: int = Field(..., ge=0, le=100)
     reason: str = Field(..., min_length=1)
     exit_type: str = Field(
         ..., 
-        pattern="^(take_profit|stop_loss|trend_reversal|risk_management|time_stop|none)$"
+        pattern="^(take_profit|stop_loss|trend_reversal|risk_management|time_stop|averaging_down|none)$"
     )
     confidence: float = Field(..., ge=0.0, le=1.0)
     urgency: str = Field(..., pattern="^(immediate|soon|watch|none)$")
+    # 🆕 물타기 관련 필드
+    add_position_margin_percent: int = Field(default=0, ge=0, le=30)  # 잔여 마진의 5~30%
+    expected_win_rate: float = Field(default=0.0, ge=0.0, le=1.0)  # 예상 승률
 
 # 🆕 JSON 파싱 오류 시 AI 복구용 모델
 class EmergencyTradingDecision(BaseModel):
@@ -677,7 +688,9 @@ def sync_positions_from_exchange():
                         if time_since_start < 60:  # 봇 시작 후 1분 이내
                             is_bot_just_started = True
                             existing_positions_at_start.add(symbol)
-                            logger.info(f"📌 봇 시작시 기존 포지션으로 기록: {symbol}")
+                            logger.info(f"📌 봇 시작시 기존 포지션 발견 - AI 모니터링 대상: {symbol}")
+                            logger.info(f"   → Side: {side}, Amount: {abs(contracts):.4f}, Entry: ${entry_price:.2f}")
+                            logger.info(f"   → AI 모니터링: {'활성화' if SYMBOL_CONFIG[symbol].get('ai_monitoring', True) else '비활성화'}")
                     
                     if not is_bot_just_started:
                         logger.info(f"🆕🔧 {symbol} 수동 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
@@ -2964,7 +2977,9 @@ def ai_monitor_position(symbol, position_info):
     "reason": "Strong momentum continues, no reversal signals detected",
     "exit_type": "none",
     "confidence": 0.85,
-    "urgency": "none"
+    "urgency": "none",
+    "add_position_margin_percent": 0,
+    "expected_win_rate": 0.0
 }"""
 
         prompt = f"""
@@ -3142,6 +3157,31 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 - **Moderate Loss (less than 1 ATR):** 
   Acceptable if technical indicators support recovery
   Stop loss should be used if breakdown continues
+  
+  🎯 **물타기(ADD_POSITION) 고려 상황:**
+  - **현재 손실 중이지만** 다음 조건을 **모두** 만족할 때만 물타기 고려:
+    ✓ 손실이 -5% ~ -15% 범위 (너무 적거나 많으면 안됨)
+    ✓ **강력한 반전 신호**: 4h/1h/15m 최소 2개 타임프레임에서 반전 확인
+    ✓ **추세 재개 신호**: ADX 상승, MACD 골든크로스, RSI 과매도 탈출
+    ✓ **볼륨 확인**: CMF 양전환, 거래량 급증
+    ✓ **핵심 지지선 테스트**: 강력한 지지선 근처에서 반등 시도
+    ✓ **잔여 마진 충분**: 최소 50% 이상 잔여 마진 보유
+    ✓ **포지션 확신도 높음**: confidence ≥ 0.75
+  
+  📊 **물타기 수량 결정 기준:**
+  - **매우 높은 확신 (confidence ≥ 0.85, 승률 ≥ 75%)**: 25-30% 잔여 마진
+  - **높은 확신 (confidence ≥ 0.75, 승률 ≥ 65%)**: 15-20% 잔여 마진  
+  - **중간 확신 (confidence ≥ 0.65, 승률 ≥ 55%)**: 10-15% 잔여 마진
+  - **낮은 확신 (그 외)**: 5-10% 잔여 마진 또는 물타기 안함
+  
+  ⚠️ **물타기 금지 조건:**
+  - 손실이 -20% 초과 (너무 깊은 손실)
+  - 손실이 -3% 미만 (너무 얕은 손실, 의미 없음)
+  - 잔여 마진 50% 미만
+  - 반전 신호가 1개 타임프레임에만 있는 경우
+  - 추세가 여전히 반대 방향으로 강한 경우
+  - ADX 하락 중이거나 25 미만
+  - 이미 물타기를 2회 이상 한 포지션
 
 **For Profit Scenarios:**
 - **Minimal Profit (less than 1 ATR movement):**
@@ -3178,12 +3218,14 @@ weakness. Cut losers when technical breakdown is confirmed.
 {json_template}
 
 **Field Requirements:**
-- decision: "hold", "close", or "partial_close"
-- percentage: 0 for hold, 100 for full close, 25-75 for partial
+- decision: "hold", "close", "partial_close", or "add_position" (물타기)
+- percentage: 0 for hold, 100 for full close, 25-75 for partial, 5-30 for add_position (잔여 마진 %)
 - reason: **MUST be technical and specific, not based on arbitrary percentages**
-- exit_type: "take_profit", "stop_loss", "trend_reversal", "risk_management", "time_stop", or "none"
+- exit_type: "take_profit", "stop_loss", "trend_reversal", "risk_management", "time_stop", "averaging_down", or "none"
 - confidence: 0.0 to 1.0 (lower if signals are mixed across timeframes)
 - urgency: "immediate", "soon", "watch", or "none"
+- add_position_margin_percent: 5-30 (물타기 시 잔여 마진의 몇 % 사용할지)
+- expected_win_rate: 0.0-1.0 (물타기 시 예상 승률)
 
 **Your reason MUST include:**
 1. **Timeframe Analysis:** What each timeframe (5m/1h/4h) is telling you
@@ -3380,6 +3422,52 @@ def execute_position_exit(symbol, decision):
                     exit_amount = abs(contracts)
                 elif decision['decision'] == 'partial_close':
                     exit_amount = abs(contracts) * (decision['percentage'] / 100)
+                elif decision['decision'] == 'add_position':
+                    # 🆕 물타기 로직: 추가 진입
+                    logger.info(f"[{user_name}] 🎯 물타기 신호 감지: {symbol}")
+                    
+                    # 잔여 마진 확인
+                    balance = user_exchange.fetch_balance()
+                    free_margin = balance['USDT']['free']
+                    
+                    # 물타기 수량 계산
+                    margin_percent = decision.get('add_position_margin_percent', 10)
+                    add_position_size = free_margin * (margin_percent / 100)
+                    
+                    # 최소 수량 체크
+                    if add_position_size < 10:
+                        logger.warning(f"[{user_name}] 물타기 수량 너무 작음 (${add_position_size:.2f}) - 스킵")
+                        continue
+                    
+                    # 현재가 조회
+                    ticker = user_exchange.fetch_ticker(symbol)
+                    current_price = ticker['last']
+                    
+                    # 추가 진입 수량 계산
+                    add_amount = add_position_size / current_price
+                    
+                    # 시장가 주문 실행
+                    add_side = 'buy' if side == 'long' else 'sell'
+                    add_order = user_exchange.create_market_order(symbol, add_side, add_amount)
+                    
+                    logger.info(f"[{user_name}] 🎯 물타기 실행: {symbol} {add_side} {add_amount:.6f} @ ${current_price:.2f}")
+                    logger.info(f"[{user_name}] 💰 투입 마진: ${add_position_size:.2f} ({margin_percent}% of free margin)")
+                    
+                    # Primary User의 경우 current_positions 업데이트
+                    if USER_CONFIGS[user_id].get('is_primary', False):
+                        # 평균 진입가 재계산
+                        old_entry_price = position['entry_price']
+                        old_amount = position['amount']
+                        new_entry_price = (old_entry_price * old_amount + current_price * add_amount) / (old_amount + add_amount)
+                        
+                        current_positions[symbol]['entry_price'] = new_entry_price
+                        current_positions[symbol]['amount'] += add_amount
+                        
+                        logger.info(f"✅ 평균 진입가 업데이트: ${old_entry_price:.2f} → ${new_entry_price:.2f}")
+                        logger.info(f"✅ 총 포지션 수량: {old_amount:.6f} → {old_amount + add_amount:.6f}")
+                    
+                    success_count += 1
+                    continue
                 else:
                     continue
                 
@@ -3446,7 +3534,32 @@ def execute_position_exit(symbol, decision):
         
         # 텔레그램 알림
         if ENABLE_TELEGRAM:
-            message = f"""
+            if decision['decision'] == 'add_position':
+                # 물타기 알림
+                margin_percent = decision.get('add_position_margin_percent', 10)
+                expected_win_rate = decision.get('expected_win_rate', 0.0)
+                
+                message = f"""
+🎯 <b>AI 물타기 실행 (Multi-User)</b>
+
+<b>Type:</b> {position_type.upper()} 포지션
+<b>Symbol:</b> {symbol}
+<b>Decision:</b> ADD_POSITION (물타기)
+<b>투입 마진:</b> {margin_percent}% of free margin
+<b>예상 승률:</b> {expected_win_rate:.1%}
+<b>성공:</b> {success_count}/{total_users}명
+<b>Reason:</b> {decision['reason']}
+<b>Confidence:</b> {decision['confidence']:.1%}
+
+💡 손실 구간에서 강력한 반전 신호 포착
+⚡ 평균 진입가가 개선되었습니다
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            """.strip()
+                send_telegram_notification(message, 'high')
+            else:
+                # 기존 청산 알림
+                message = f"""
 {type_indicator} <b>AI Position Exit (Multi-User)</b>
 
 <b>Type:</b> {position_type.upper()} 포지션
@@ -3460,7 +3573,7 @@ def execute_position_exit(symbol, decision):
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             """.strip()
-            send_telegram_notification(message, 'high' if decision['urgency'] == 'immediate' else 'normal')
+                send_telegram_notification(message, 'high' if decision['urgency'] == 'immediate' else 'normal')
         
         return success_count > 0
         
@@ -7035,34 +7148,36 @@ def initialize_bot():
             position_info = f"\n\n<b>복구된 포지션:</b>\n{get_position_summary()}"
         
         startup_message = f"""
-🚀 <b>통합 트레이딩 시스템 v8.3 Enhanced 시작</b>
+🚀 <b>통합 트레이딩 시스템 v8.6 Enhanced 시작</b>
 
-<b>✨ v8.3 Enhanced 신규 기능:</b>
-🤖 <b>기존 포지션 AI 모니터링</b>
-  → 봇 시작 전 진입한 포지션도 AI가 모니터링
-  → 모든 포지션에 대해 종료 시점 분석
+<b>🎯 v8.6 Enhanced 신규 기능:</b>
+💪 <b>AI 물타기 시스템</b>
+  → 손실 구간에서 강력한 반전 신호 포착 시 추가 진입
+  → 잔여 마진의 5~30% 투입 (확신도/승률 기반)
+  → 평균 진입가 개선으로 수익 전환 가능성 향상
+  → AI 판단: 유지/부분청산/전체청산/물타기 (4가지)
+
+<b>✅ v8.5 Fixed - 청산 감지 완벽 해결:</b>
+🔥 <b>신규 포지션 30초 보호</b>
+  → 포지션 진입 시간 추적 시스템
+  → API 지연으로 인한 오감지 완벽 차단
+  → 바이낸스 API 3회 재시도 로직
+
+<b>✨ v8.3 Enhanced - 기존 포지션 모니터링:</b>
+🤖 <b>봇 시작 전 포지션도 AI 모니터링</b>
+  → 기존 포지션 자동 감지 및 추적
+  → 모든 포지션에 대해 종료/물타기 시점 분석
   → Manual/Auto 포지션 구분 관리
-  → AI가 기존/신규 구별없이 모든 포지션 감시
 
 <b>📊 v7.0 Multi-User 기능 (유지):</b>
 👥 다중 유저 동시 거래
 🗑️ TP/SL 자동 삭제
 🔄 동기화된 거래 실행
 
-<b>📊 v6.1 리스크 관리 (유지):</b>
-💡 균형잡힌 TP/SL 설정
-🚨 스마트한 포지션 종료 기준
-🔧 JSON 파싱 오류 자동 복구
-
 <b>📊 v6.0 핵심 기능 (유지):</b>
 🎯 과매수/과매도 멀티 타임프레임 필터링
 💡 매물대 기반 TP/SL 자동 조정
 🚨 추세 역전 조기 신호 감지
-
-<b>📊 v5.1 기능 (유지):</b>
-✨ 수동 포지션 자동 감지
-✨ 포지션 타입 구분
-✅ 마진 부족 100% 방지
 
 <b>⚙️ 서버 정보:</b>
 <b>서버 포트:</b> {SERVER_PORT}
@@ -7076,12 +7191,13 @@ def initialize_bot():
 
 ✅ 시스템이 정상적으로 시작되었습니다.
 ⚡ WebSocket 실시간 감지 활성화
-🔍 백업 폴링 시스템 활성화 (10초)
+🔍 백업 폴링 시스템 활성화 (10초, 30초 신규 보호)
 💰 바이낸스 실제 PnL 동기화 활성화
 📊 실시간 대시보드 연동 준비 완료
 🔄 거래소 포지션 자동 동기화 활성화
 📊 서버 재시작 시 포지션 자동 복구
 💾 주기적 데이터 기록 활성화 (5분)
+🎯 AI 물타기 시스템 활성화
 🎯 모든 기존 기능 100% 유지
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
