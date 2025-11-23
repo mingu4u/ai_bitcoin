@@ -1,8 +1,15 @@
 """
-Integrated Trading System v8.3 Enhanced
-=========================================
+Integrated Trading System v8.5 Fixed
+======================================
 자동매매봇 - 다중 유저 지원, AI 검증/모니터링 통합 버전
-✨ 봇 시작 전 진입한 포지션도 AI 모니터링 수행
+🔥 포지션 청산 감지 문제 완벽 해결!
+
+v8.5 Fixed 주요 수정사항 (2025-11-23):
+- 🔥 포지션 진입 시간 추적 시스템 추가 (position_entry_times)
+- 🔥 신규 포지션 30초 보호 기간 설정 (POSITION_CHECK_DELAY)
+- 🔥 바이낸스 API 재시도 로직 추가 (3회)
+- 🔥 포지션 청산 시 진입 시간 정보도 함께 제거
+- 🔥 포지션 진입 직후 잘못된 청산 감지 문제 완벽 해결
 
 v8.3 Enhanced 주요 개선사항 (2025-11-22):
 - ✨ 봇 시작시 기존 포지션도 AI 모니터링 대상에 포함
@@ -109,6 +116,8 @@ initial_sync_completed = False
 existing_positions_at_start = set()  # 🔥 v8.3: 봇 시작시 이미 있던 포지션 추적
 positions_already_notified = set()  # 🔥 v8.4: 이미 알림 보낸 청산 추적
 last_position_check = {}  # 🔥 v8.4: 마지막 포지션 확인 시간
+position_entry_times = {}  # 🔥 v8.5 Fixed: 포지션 진입 시간 추적 (청산 감지 보호용)
+POSITION_CHECK_DELAY = 30  # 🔥 v8.5 Fixed: 신규 포지션 체크 대기시간 (30초)
 
 # ============ AI Decision Models ============
 class TradingDecision(BaseModel):
@@ -604,9 +613,9 @@ ai_monitor_running = False
 def sync_positions_from_exchange():
     """
     거래소의 실제 포지션을 current_positions와 동기화
-    🔥 v8.4: 잘못된 청산 감지 방지 및 안정성 개선
+    🔥 v8.5 Fixed: 포지션 진입 시간 추적으로 잘못된 청산 감지 완벽 방지
     """
-    global current_positions, existing_positions_at_start, positions_already_notified
+    global current_positions, existing_positions_at_start, positions_already_notified, position_entry_times
     
     try:
         logger.info("=== 거래소 포지션 동기화 시작 ===")
@@ -655,6 +664,11 @@ def sync_positions_from_exchange():
                         'leverage': SYMBOL_CONFIG[symbol].get('leverage', 10),
                         'ai_monitoring': SYMBOL_CONFIG[symbol].get('ai_monitoring', True)  # ✨ AI 모니터링 플래그
                     }
+                    
+                    # 🔥 v8.5 Fixed: 포지션 진입 시간 기록 (청산 감지 보호용)
+                    if symbol not in position_entry_times:
+                        position_entry_times[symbol] = datetime.now()
+                        logger.info(f"📝 새 포지션 진입 시간 기록: {symbol} at {position_entry_times[symbol]}")
                     
                     # 🔥 v8.4: 봇 시작 직후인지 확인
                     is_bot_just_started = False
@@ -719,6 +733,12 @@ def sync_positions_from_exchange():
                         logger.error(f"청산 기록 실패 ({symbol}): {e}")
                 
                 removed_symbols.append(symbol)
+                
+                # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
+                if symbol in position_entry_times:
+                    del position_entry_times[symbol]
+                    logger.info(f"🗑️ 포지션 진입 시간 제거: {symbol}")
+                
                 del current_positions[symbol]
                 
                 if is_existing:
@@ -3396,6 +3416,12 @@ def execute_position_exit(symbol, decision):
                 # 전체 종료인 경우
                 record_completed_trade(symbol, position, exit_price, decision.get('exit_type', 'ai_exit'))
                 logger.info(f"✅ Completed trade recorded for {symbol} ({position_type.upper()})")
+                
+                # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
+                if symbol in position_entry_times:
+                    del position_entry_times[symbol]
+                    logger.info(f"🗑️ AI 청산 후 진입 시간 제거: {symbol}")
+                
                 del current_positions[symbol]
             else:
                 # 부분 종료인 경우
@@ -3409,6 +3435,11 @@ def execute_position_exit(symbol, decision):
             logger.error(f"Failed to record completed trade: {e}")
             # 오류가 나도 포지션은 정리
             if decision['decision'] == 'close' and symbol in current_positions:
+                # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
+                if symbol in position_entry_times:
+                    del position_entry_times[symbol]
+                    logger.info(f"🗑️ 오류 처리 청산 후 진입 시간 제거: {symbol}")
+                
                 del current_positions[symbol]
             elif decision['decision'] == 'partial_close' and symbol in current_positions:
                 current_positions[symbol]['amount'] -= position['amount'] * (decision['percentage'] / 100)
@@ -3441,8 +3472,9 @@ def ai_monitoring_cycle():
     """
     AI 모니터링 주기 실행
     🆕 개선: 자동/수동 포지션 모두 모니터링
+    🔥 v8.5 Fixed: 포지션 진입 시간 추적 추가
     """
-    global current_positions, initial_sync_completed, bot_start_time, existing_positions_at_start, positions_already_notified, last_position_check
+    global current_positions, initial_sync_completed, bot_start_time, existing_positions_at_start, positions_already_notified, last_position_check, position_entry_times
     
     logger.info("=== AI Position Monitoring Cycle Start ===")
     logger.info(f"⏰ Monitoring interval: {AI_MONITOR_INTERVAL} minutes")
@@ -3493,6 +3525,11 @@ def ai_monitoring_cycle():
             if symbol in positions_already_notified:
                 logger.info(f"⏭️ {symbol} 이미 처리된 청산 - 스킵")
                 if symbol in current_positions:
+                    # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
+                    if symbol in position_entry_times:
+                        del position_entry_times[symbol]
+                        logger.info(f"🗑️ 이미 처리된 청산의 진입 시간 제거: {symbol}")
+                    
                     del current_positions[symbol]
                 continue
             
@@ -3548,6 +3585,11 @@ def ai_monitoring_cycle():
             
             # 메모리에서 제거
             if symbol in current_positions:
+                # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
+                if symbol in position_entry_times:
+                    del position_entry_times[symbol]
+                    logger.info(f"🗑️ AI 청산 감지 후 진입 시간 제거: {symbol}")
+                
                 del current_positions[symbol]
             
             # existing_positions_at_start에서도 제거
@@ -5739,6 +5781,11 @@ def webhook():
                                 close_type=data.get('exit_reason', 'manual')
                             )
                             
+                            # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
+                            if symbol in position_entry_times:
+                                del position_entry_times[symbol]
+                                logger.info(f"🗑️ 웹훅 청산 후 진입 시간 제거: {symbol}")
+                            
                             del current_positions[symbol]
                         
                         return jsonify({
@@ -5973,6 +6020,10 @@ def webhook():
                     'position_size_usdt': position_size,  # 포지션 크기 추가
                     'position_type': 'auto'  # 자동 거래 표시
                 }
+                
+                # 🔥 v8.5 Fixed: 포지션 진입 시간 기록 (청산 감지 보호용)
+                position_entry_times[symbol] = datetime.now()
+                logger.info(f"📝 새 포지션 진입 시간 기록: {symbol} at {position_entry_times[symbol]}")
                 
                 # 🔥 포지션 진입 즉시 DB 기록 (대시보드 표시용)
                 try:
@@ -6754,11 +6805,13 @@ def start_binance_websocket_listener():
 
 def start_position_closure_monitor():
     """
-    포지션 종료 감지 스레드
-    바이낸스에서 TP/SL로 자동 종료된 포지션을 감지하여 이벤트 발생
+    포지션 종료 감지 스레드 - v8.5 Fixed
+    🔥 신규 포지션 30초 보호 + API 재시도 로직
     """
     def monitor_loop():
-        logger.info("🔍 포지션 종료 감지 시작 (10초 간격)")
+        global current_positions, position_entry_times, existing_positions_at_start
+        
+        logger.info("🔍 포지션 종료 감지 시작 (10초 간격, 신규 포지션 30초 보호)")
         
         while True:
             try:
@@ -6767,43 +6820,72 @@ def start_position_closure_monitor():
                 if not current_positions:
                     continue
                 
-                # 바이낸스에서 실제 포지션 조회
-                actual_positions = exchange.fetch_positions()
+                # 🔥 v8.5 Fixed: 바이낸스 API 재시도 로직 (3회)
+                actual_positions = None
+                for attempt in range(3):
+                    try:
+                        actual_positions = exchange.fetch_positions()
+                        break
+                    except Exception as e:
+                        if attempt < 2:
+                            logger.warning(f"포지션 조회 재시도 {attempt+1}/3: {str(e)}")
+                            time.sleep(2)
+                        else:
+                            raise e
+                
+                if not actual_positions:
+                    continue
+                
+                # 실제 포지션 목록
                 actual_symbols = {
                     p['symbol'] for p in actual_positions 
                     if float(p['info'].get('positionAmt', 0)) != 0
                 }
                 
-                # 메모리에는 있지만 바이낸스에는 없는 포지션 = 종료된 포지션
-                closed_symbols = set(current_positions.keys()) - actual_symbols
-                
-                for symbol in closed_symbols:
-                    logger.info(f"🔔 {symbol} 포지션 종료 감지 (TP/SL 또는 수동 청산)")
+                # 메모리에는 있지만 바이낸스에는 없는 포지션 확인
+                for symbol in list(current_positions.keys()):
+                    # 🔥 v8.5 Fixed: 신규 포지션 보호 - 진입 후 30초간 체크 안함
+                    if symbol in position_entry_times:
+                        entry_time = position_entry_times[symbol]
+                        elapsed_seconds = (datetime.now() - entry_time).total_seconds()
+                        
+                        if elapsed_seconds < POSITION_CHECK_DELAY:
+                            logger.debug(f"⏳ {symbol} 신규 포지션 보호 중 ({elapsed_seconds:.0f}/{POSITION_CHECK_DELAY}초)")
+                            continue
                     
-                    # 포지션 데이터 가져오기
-                    position_data = current_positions[symbol].copy()
-                    
-                    # 최종 가격 조회 (현재가)
-                    try:
-                        ticker = exchange.fetch_ticker(symbol)
-                        position_data['mark_price'] = ticker['last']
-                    except:
-                        position_data['mark_price'] = position_data.get('entry_price', 0)
-                    
-                    # 실제 PnL 기록 및 이벤트 발생
-                    realized_pnl = record_position_closure_with_real_pnl(
-                        symbol, 
-                        position_data, 
-                        close_type='auto_tpsl'  # TP/SL 자동 체결
-                    )
-                    
-                    # 메모리에서 제거
-                    del current_positions[symbol]
-                    
-                    # 텔레그램 알림
-                    if ENABLE_TELEGRAM and realized_pnl is not None:
-                        pnl_sign = "+" if realized_pnl > 0 else ""
-                        message = f"""
+                    # 포지션이 실제로 없어진 경우만 처리
+                    if symbol not in actual_symbols:
+                        logger.info(f"🔔 {symbol} 포지션 종료 감지 (TP/SL 또는 수동 청산)")
+                        
+                        # 포지션 데이터 가져오기
+                        position_data = current_positions[symbol].copy()
+                        
+                        # 최종 가격 조회 (현재가)
+                        try:
+                            ticker = exchange.fetch_ticker(symbol)
+                            position_data['mark_price'] = ticker['last']
+                        except:
+                            position_data['mark_price'] = position_data.get('entry_price', 0)
+                        
+                        # 실제 PnL 기록 및 이벤트 발생
+                        realized_pnl = record_position_closure_with_real_pnl(
+                            symbol, 
+                            position_data, 
+                            close_type='auto_tpsl'  # TP/SL 자동 체결
+                        )
+                        
+                        # 메모리에서 제거
+                        del current_positions[symbol]
+                        
+                        # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
+                        if symbol in position_entry_times:
+                            del position_entry_times[symbol]
+                            logger.info(f"🗑️ 청산 후 진입 시간 제거: {symbol}")
+                        
+                        # 텔레그램 알림
+                        if ENABLE_TELEGRAM and realized_pnl is not None:
+                            pnl_sign = "+" if realized_pnl > 0 else ""
+                            message = f"""
 🔔 <b>자동 청산 감지</b>
 
 <b>심볼:</b> {symbol}
@@ -6813,7 +6895,7 @@ def start_position_closure_monitor():
 
 💡 바이낸스에서 자동으로 청산되었습니다.
                         """.strip()
-                        send_telegram_notification(message, 'info')
+                            send_telegram_notification(message, 'info')
                     
             except Exception as e:
                 logger.error(f"포지션 종료 감지 오류: {str(e)}")
@@ -6822,11 +6904,11 @@ def start_position_closure_monitor():
     # 백그라운드 스레드로 실행
     monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
     monitor_thread.start()
-    logger.info("✅ 포지션 종료 감지 스레드 시작 (10초 간격)")
+    logger.info("✅ 포지션 종료 감지 스레드 시작 (10초 간격, 신규 포지션 30초 보호)")
 
 def initialize_bot():
-    """봇 초기화 - v8.4: 완벽한 기존 포지션 추적"""
-    global bot_start_time, initial_sync_completed, existing_positions_at_start, positions_already_notified, last_position_check
+    """봇 초기화 - v8.5 Fixed: 포지션 진입 시간 추적으로 청산 감지 안정성 향상"""
+    global bot_start_time, initial_sync_completed, existing_positions_at_start, positions_already_notified, last_position_check, position_entry_times
     
     # 🆕 봇 시작 시간 기록
     bot_start_time = datetime.now()
@@ -6834,6 +6916,7 @@ def initialize_bot():
     existing_positions_at_start = set()  # 🔥 v8.4: 기존 포지션 추적
     positions_already_notified = set()  # 🔥 v8.4: 알림 추적 초기화
     last_position_check = {}  # 🔥 v8.4: 체크 시간 초기화
+    position_entry_times = {}  # 🔥 v8.5 Fixed: 포지션 진입 시간 추적 초기화
     
     logger.info(f"봇 초기화 중... (포트: {SERVER_PORT})")
     logger.info(f"🕐 봇 시작 시간: {bot_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
