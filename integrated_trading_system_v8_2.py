@@ -1,45 +1,29 @@
 """
-Integrated Trading System v8.9.1 Complete (v7 Method + Fixed)
+Integrated Trading System v8.9.2 (V7 Base + Add Position)
 ================================================
-자동매매봇 - 다중 유저 지원, AI 검증/모니터링 통합 버전
-🔥🔥🔥 v7 방식 완전 적용 + 수동 AI 모니터링 에러 해결!
+자동매매봇 - v7의 안정적인 로직 + v8 물타기 기능
+🔥 청산 감지 문제 완전 해결: v7의 검증된 로직 사용
+💪 물타기 기능: v8의 AI 물타기 시스템 추가
 
-v8.9.1 Complete (2025-11-24):
-- 🔥 /ai-monitor/force 엔드포인트 수정 (v7 방식)
-- 🔥 먼저 sync_positions_from_exchange() 호출
-- 🔥 "No positions to monitor" 에러 해결
-- ✅ 수동 포지션 AI 모니터링 보장
-- ✅ 봇 시작 전 포지션도 정상 감지
+v8.9.2 (2025-11-24):
+- 🔥 v7 COMPLETE FIXED 기반으로 재작성
+- 🔥 안정적인 sync_positions_from_exchange (v7)
+- 🔥 안정적인 ai_monitoring_cycle (v7)
+- 💪 AI 물타기 기능 추가 (v8)
+- ✅ 청산 감지 문제 완전 해결
+- ✅ 단순하고 명확한 로직
 
-v8.9 Final Fix - v7 Method (2025-11-24):
-- 🔥🔥🔥 근본 원인 해결: AI 모니터링 루프의 중복 청산 감지 제거!
-- 🔥 v7 방식 적용: sync_positions_from_exchange()만 포지션 동기화 담당
-- 🔥 AI 모니터링 단순화: current_positions에 있는 포지션만 AI 분석
-- 🔥 중복 조회 제거: fetch_positions 중복 호출 제거
-- ✅ 30초 후 청산 감지 문제 완벽 해결
-- ✅ Trade History 정확성 보장
-- ✅ API 호출 최소화
+v7 COMPLETE FIXED (Original):
+- 검증된 안정적인 AI 모니터링
+- 수동 포지션 자동 감지
+- 완벽한 포지션 동기화
+- 청산 감지 오류 없음
 
-핵심 차이점:
-- v8.8 이하: sync + AI 루프에서 또 조회 → 중복 청산 감지 ❌
-- v8.9 (v7 방식): sync만 포지션 동기화 담당 → 청산 감지 안정 ✅
-- v8.9.1: + /ai-monitor/force 엔드포인트 수정 ✅
-
-v8.8 Perfect Fix Ultimate (2025-11-24):
-- 🔥 sync_positions_from_exchange 청산 감지 문제 해결
-- 🔥 봇 시작 후 10분: 기존 포지션 보호
-- 🔥 신규 포지션 30초: 진입 직후 보호 기간
-
-v8.6 Enhanced 주요 신규 기능:
-- 🎯 AI 물타기 기능 추가
+v8 Add Position Feature:
+- 🎯 AI 물타기 기능
 - 🎯 물타기 수량: 잔여 마진의 5~30%
-- 🎯 AI 판단: 포지션 유지/부분청산/전체청산/물타기 (4가지)
-
-v8.2 기능:
-- 다중 유저 동시 지원
-- AI 시그널 검증 및 포지션 모니터링
-- 실시간 TP/SL 감지
-- 바이낸스 실제 PnL 조회
+- 🎯 AI 판단: 유지/부분청산/전체청산/물타기 (4가지)
+- 🎯 체계적 리스크 관리
 """
 
 from flask import Flask, request, jsonify
@@ -77,13 +61,13 @@ USER_CONFIGS = {
         'api_key_env': 'BINANCE_API_KEY_HYUN',
         'secret_key_env': 'BINANCE_SECRET_KEY_HYUN',
         'is_primary': False,  # 주문만 실행
-    },
-    'USER3': {
-        'name': 'Hyuk',
-        'api_key_env': 'BINANCE_API_KEY_HYUK',
-        'secret_key_env': 'BINANCE_SECRET_KEY_HYUK',
-        'is_primary': False,  # 주문만 실행
     }
+    # 'USER3': {
+    #     'name': 'User 3',
+    #     'api_key_env': 'BINANCE_API_KEY_USER3',
+    #     'secret_key_env': 'BINANCE_SECRET_KEY_USER3',
+    #     'is_primary': False,  # 주문만 실행
+    # }
 }
 
 SERVER_PORT = 5000  # 하나의 서버에서 모든 유저 관리
@@ -125,15 +109,6 @@ exchange = exchanges.get('USER1')
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_IDS = os.getenv('TELEGRAM_CHAT_IDS', '').split(',')
 
-# 🆕 봇 시작 시간 추적 (초기 청산 감지 알림 억제용)
-bot_start_time = None
-initial_sync_completed = False
-existing_positions_at_start = set()  # 🔥 v8.3: 봇 시작시 이미 있던 포지션 추적
-positions_already_notified = set()  # 🔥 v8.4: 이미 알림 보낸 청산 추적
-last_position_check = {}  # 🔥 v8.4: 마지막 포지션 확인 시간
-position_entry_times = {}  # 🔥 v8.5 Fixed: 포지션 진입 시간 추적 (청산 감지 보호용)
-POSITION_CHECK_DELAY = 30  # 🔥 v8.5 Fixed: 신규 포지션 체크 대기시간 (30초)
-
 # ============ AI Decision Models ============
 class TradingDecision(BaseModel):
     """트레이딩 시그널 검증용 모델"""
@@ -160,10 +135,11 @@ class PositionExitDecision(BaseModel):
     reason: str = Field(..., min_length=1)
     exit_type: str = Field(
         ..., 
-        pattern="^(take_profit|stop_loss|trend_reversal|risk_management|time_stop|averaging_down|none)$"
+        pattern="^(take_profit|stop_loss|trend_reversal|risk_management|time_stop|add_position|none)$"
     )
     confidence: float = Field(..., ge=0.0, le=1.0)
     urgency: str = Field(..., pattern="^(immediate|soon|watch|none)$")
+    
     # 🆕 물타기 관련 필드
     add_position_margin_percent: int = Field(default=0, ge=0, le=30)  # 잔여 마진의 5~30%
     expected_win_rate: float = Field(default=0.0, ge=0.0, le=1.0)  # 예상 승률
@@ -631,25 +607,24 @@ ai_monitor_running = False
 def sync_positions_from_exchange():
     """
     거래소의 실제 포지션을 current_positions와 동기화
-    🔥 v8.6 Fixed: v7 방식으로 각 심볼 개별 조회 - 기존 포지션 감지 확실!
+    🆕 개선: 수동 포지션 감지 및 position_type 필드 추가
     """
-    global current_positions, existing_positions_at_start, positions_already_notified, position_entry_times
+    global current_positions
     
     try:
         logger.info("=== 거래소 포지션 동기화 시작 (수동 포지션 감지 포함) ===")
         
         # 모든 활성 심볼에 대해 포지션 조회
         synced_count = 0
-        manual_count = 0
+        manual_count = 0  # 🆕 수동 포지션 카운트
         new_positions = {}
         
-        # 🔥 v8.6: v7 방식 적용 - 각 심볼별로 개별 조회 (더 확실함!)
         for symbol in SYMBOL_CONFIG.keys():
             if not SYMBOL_CONFIG[symbol].get('enabled', True):
                 continue
             
             try:
-                # 거래소에서 실제 포지션 조회 (개별 심볼)
+                # 거래소에서 실제 포지션 조회
                 positions = exchange.fetch_positions([symbol])
                 
                 for position in positions:
@@ -679,46 +654,27 @@ def sync_positions_from_exchange():
                                 'trailing_activation_percent': DEFAULT_TRAILING_ACTIVATION_PERCENT,
                                 'entry_time': datetime.now(),  # 동기화 시점을 진입 시간으로
                                 'position_type': 'manual',  # 🆕 수동 포지션으로 표시
-                                'leverage': SYMBOL_CONFIG[symbol].get('leverage', 10),
-                                'ai_monitoring': SYMBOL_CONFIG[symbol].get('ai_monitoring', True)  # ✨ AI 모니터링 플래그
+                                'leverage': SYMBOL_CONFIG[symbol].get('leverage', 10)
                             }
+                            logger.info(f"🆕🔧 {symbol} 수동 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
+                            logger.info(f"   → AI 모니터링 대상에 자동 추가됨")
+                            synced_count += 1
+                            manual_count += 1
                             
-                            # 🔥 v8.5 Fixed: 포지션 진입 시간 기록 (청산 감지 보호용)
-                            if symbol not in position_entry_times:
-                                position_entry_times[symbol] = datetime.now()
-                                logger.info(f"📝 새 포지션 진입 시간 기록: {symbol} at {position_entry_times[symbol]}")
-                            
-                            # 🔥 v8.4: 봇 시작 직후인지 확인
-                            is_bot_just_started = False
-                            if bot_start_time:
-                                time_since_start = (datetime.now() - bot_start_time).total_seconds()
-                                if time_since_start < 60:  # 봇 시작 후 1분 이내
-                                    is_bot_just_started = True
-                                    existing_positions_at_start.add(symbol)
-                                    logger.info(f"📌 봇 시작시 기존 포지션 발견 - AI 모니터링 대상: {symbol}")
-                                    logger.info(f"   → Side: {side}, Amount: {abs(contracts):.4f}, Entry: ${entry_price:.2f}")
-                                    logger.info(f"   → AI 모니터링: {'활성화' if SYMBOL_CONFIG[symbol].get('ai_monitoring', True) else '비활성화'}")
-                            
-                            if not is_bot_just_started:
-                                logger.info(f"🆕🔧 {symbol} 수동 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
-                                logger.info(f"   → AI 모니터링 대상에 자동 추가됨")
-                                synced_count += 1
-                                manual_count += 1
-                                
-                                # 🆕 텔레그램 알림 (수동 포지션 감지)
-                                if ENABLE_TELEGRAM:
-                                    send_telegram_notification(
-                                        f"🔧 <b>수동 포지션 감지</b>\n\n"
-                                        f"<b>심볼:</b> {symbol}\n"
-                                        f"<b>방향:</b> {side.upper()}\n"
-                                        f"<b>진입가:</b> ${entry_price:,.2f}\n"
-                                        f"<b>수량:</b> {abs(contracts):.4f}\n"
-                                        f"<b>타입:</b> MANUAL\n\n"
-                                        f"✅ AI 모니터링이 자동으로 시작됩니다.\n"
-                                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                                        'info'
-                                    )
-                            
+                            # 🆕 텔레그램 알림 (수동 포지션 감지)
+                            if ENABLE_TELEGRAM:
+                                send_telegram_notification(
+                                    f"🔧 <b>수동 포지션 감지</b>\n\n"
+                                    f"<b>심볼:</b> {symbol}\n"
+                                    f"<b>방향:</b> {side.upper()}\n"
+                                    f"<b>진입가:</b> ${entry_price:,.2f}\n"
+                                    f"<b>수량:</b> {abs(contracts):.4f}\n"
+                                    f"<b>타입:</b> MANUAL\n\n"
+                                    f"✅ AI 모니터링이 자동으로 시작됩니다.\n"
+                                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                                    'info'
+                                )
+                        
             except Exception as e:
                 logger.error(f"{symbol} 포지션 조회 오류: {str(e)}")
                 continue
@@ -729,32 +685,9 @@ def sync_positions_from_exchange():
                 current_positions[symbol] = pos_info
         
         # 메모리에는 있지만 거래소에 없는 포지션 제거 및 DB 기록
-        # 🔥 v8.8 Fixed: 봇 시작 직후 기존 포지션 보호
         removed_symbols = []
-        
-        # 봇 가동 시간 계산
-        bot_uptime_minutes = 0
-        if bot_start_time:
-            bot_uptime_minutes = (datetime.now() - bot_start_time).total_seconds() / 60
-        
         for symbol in list(current_positions.keys()):
             if symbol not in new_positions:
-                # 🔥 v8.8 Fixed: 기존 포지션 보호 (봇 시작 후 10분 이내)
-                is_existing = symbol in existing_positions_at_start
-                
-                if bot_uptime_minutes < 10 and is_existing:
-                    logger.warning(f"🛡️ {symbol} 봇 시작 직후 기존 포지션 - 조회 실패여도 유지")
-                    logger.info(f"   → 봇 가동 시간: {bot_uptime_minutes:.1f}분 (안전 시간: 10분)")
-                    logger.info(f"   → 다음 사이클에서 재확인 예정")
-                    continue  # 제거하지 않고 유지
-                
-                # 🔥 v8.8 Fixed: 포지션 진입 시간 확인 (신규 포지션 30초 보호)
-                if symbol in position_entry_times:
-                    time_since_entry = (datetime.now() - position_entry_times[symbol]).total_seconds()
-                    if time_since_entry < 30:
-                        logger.warning(f"🛡️ {symbol} 신규 포지션 30초 보호 기간 (진입 후 {time_since_entry:.1f}초)")
-                        continue  # 제거하지 않고 유지
-                
                 # 종료된 포지션을 completed_trades에 기록
                 try:
                     ticker = exchange.fetch_ticker(symbol)
@@ -766,12 +699,6 @@ def sync_positions_from_exchange():
                     logger.error(f"Failed to record closed position for {symbol}: {e}")
                 
                 removed_symbols.append(symbol)
-                
-                # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
-                if symbol in position_entry_times:
-                    del position_entry_times[symbol]
-                    logger.info(f"🗑️ 포지션 진입 시간 제거: {symbol}")
-                
                 del current_positions[symbol]
                 logger.warning(f"⚠️ {symbol} 포지션이 거래소에 없어 메모리에서 제거 및 DB 기록")
         
@@ -1014,11 +941,7 @@ def init_db_once():
     table_count = c.fetchone()[0]
     
     if table_count >= 4:  # 이미 초기화됨
-        # 🆕 v8.1: DB 마이그레이션 (기존 DB 호환성)
-        logger.info("🔧 DB 마이그레이션 체크 중...")
-        migration_done = False
-        
-        # 1. completed_trades 테이블에 position_type 컬럼 추가
+        # 🆕 기존 테이블에 position_type 컬럼이 없으면 추가 (마이그레이션)
         try:
             c.execute("SELECT position_type FROM completed_trades LIMIT 1")
         except sqlite3.OperationalError:
@@ -1026,42 +949,6 @@ def init_db_once():
             c.execute("ALTER TABLE completed_trades ADD COLUMN position_type TEXT DEFAULT 'auto'")
             conn.commit()
             logger.info("✅ position_type 컬럼 추가 완료")
-            migration_done = True
-        
-        # 2. completed_trades 테이블에 realized_pnl_binance 컬럼 추가
-        try:
-            c.execute("SELECT realized_pnl_binance FROM completed_trades LIMIT 1")
-        except sqlite3.OperationalError:
-            logger.info("🔧 completed_trades 테이블에 realized_pnl_binance 컬럼 추가 중...")
-            c.execute("ALTER TABLE completed_trades ADD COLUMN realized_pnl_binance REAL")
-            conn.commit()
-            logger.info("✅ realized_pnl_binance 컬럼 추가 완료")
-            migration_done = True
-        
-        # 3. realtime_events 테이블 생성 (없으면)
-        c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='realtime_events'")
-        if c.fetchone()[0] == 0:
-            logger.info("🔧 realtime_events 테이블 생성 중...")
-            c.execute('''CREATE TABLE realtime_events
-                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                          event_type TEXT NOT NULL,
-                          symbol TEXT NOT NULL,
-                          timestamp TEXT NOT NULL,
-                          data TEXT,
-                          is_processed INTEGER DEFAULT 0,
-                          processed_at TEXT)''')
-            
-            c.execute('''CREATE INDEX idx_realtime_events_processed 
-                         ON realtime_events(is_processed, timestamp DESC)''')
-            
-            conn.commit()
-            logger.info("✅ realtime_events 테이블 생성 완료")
-            migration_done = True
-        
-        if migration_done:
-            logger.info("✅ DB 마이그레이션 완료 (v8.1 호환)")
-        else:
-            logger.info("✅ DB 이미 최신 상태 (v8.1)")
         
         conn.close()
         return
@@ -1092,7 +979,7 @@ def init_db_once():
                   required_margin REAL,
                   leverage INTEGER)''')
     
-    # 2. 완료된 거래 테이블 (대시보드용, 🆕 position_type 컬럼 추가, 🆕 v8.1 realized_pnl_binance 추가)
+    # 2. 완료된 거래 테이블 (대시보드용, 🆕 position_type 컬럼 추가)
     c.execute('''CREATE TABLE IF NOT EXISTS completed_trades
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   open_timestamp TEXT NOT NULL,
@@ -1112,8 +999,7 @@ def init_db_once():
                   leverage INTEGER,
                   is_win INTEGER DEFAULT 0,
                   commission REAL DEFAULT 0,
-                  position_type TEXT DEFAULT 'auto',
-                  realized_pnl_binance REAL)''')
+                  position_type TEXT DEFAULT 'auto')''')
     
     # 3. 잔고 히스토리 (대시보드용)
     c.execute('''CREATE TABLE IF NOT EXISTS balance_history
@@ -1141,16 +1027,6 @@ def init_db_once():
                   required_margin REAL,
                   liquidation_price REAL)''')
     
-    # 🆕 v8.1: 5. 실시간 이벤트 테이블 (대시보드 실시간 업데이트용)
-    c.execute('''CREATE TABLE IF NOT EXISTS realtime_events
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  event_type TEXT NOT NULL,
-                  symbol TEXT NOT NULL,
-                  timestamp TEXT NOT NULL,
-                  data TEXT,
-                  is_processed INTEGER DEFAULT 0,
-                  processed_at TEXT)''')
-    
     # 인덱스 생성 (성능 향상)
     c.execute('''CREATE INDEX IF NOT EXISTS idx_trades_timestamp 
                  ON trades(timestamp DESC)''')
@@ -1158,181 +1034,10 @@ def init_db_once():
                  ON completed_trades(close_timestamp DESC)''')
     c.execute('''CREATE INDEX IF NOT EXISTS idx_balance_history_timestamp 
                  ON balance_history(timestamp DESC)''')
-    # 🆕 v8.1: 실시간 이벤트 인덱스
-    c.execute('''CREATE INDEX IF NOT EXISTS idx_realtime_events_processed 
-                 ON realtime_events(is_processed, timestamp DESC)''')
     
     conn.commit()
-    logger.info("✅ DB 초기화 완료 (v8.1 실시간 이벤트 시스템)")
+    logger.info("✅ DB 초기화 완료 (프로그램 시작, position_type 지원)")
     return conn
-
-# ============ 🆕 v8.1 실시간 이벤트 시스템 ============
-def trigger_dashboard_event(event_type, symbol, data=None):
-    """
-    대시보드로 실시간 이벤트를 전송하는 함수
-    
-    event_type: 'position_closed', 'position_opened', 'pnl_update', etc.
-    symbol: 거래 심볼
-    data: 추가 데이터 (딕셔너리)
-    """
-    try:
-        conn = sqlite3.connect('integrated_trades.db')
-        c = conn.cursor()
-        
-        event_data = {
-            'event_type': event_type,
-            'symbol': symbol,
-            'timestamp': datetime.now().isoformat(),
-            'data': json.dumps(data) if data else '{}'
-        }
-        
-        c.execute("""
-            INSERT INTO realtime_events (event_type, symbol, timestamp, data, is_processed)
-            VALUES (?, ?, ?, ?, 0)
-        """, (event_type, symbol, event_data['timestamp'], event_data['data']))
-        
-        conn.commit()
-        conn.close()
-        
-        logger.info(f"🔔 실시간 이벤트 발생: {event_type} - {symbol}")
-        
-    except Exception as e:
-        logger.error(f"이벤트 트리거 오류: {str(e)}")
-
-def fetch_binance_position_pnl(user_exchange, symbol):
-    """
-    🆕 v8.1: 바이낸스 포지션 히스토리에서 실제 수익률 가져오기
-    """
-    try:
-        # 심볼 형식 변환 (BTC/USDT -> BTCUSDT)
-        binance_symbol = symbol.replace('/', '')
-        
-        # 최근 종료된 포지션 조회
-        income_history = user_exchange.fapiPrivateGetIncome({
-            'symbol': binance_symbol,
-            'incomeType': 'REALIZED_PNL',  # 실현 손익만 조회
-            'limit': 10  # 최근 10개
-        })
-        
-        if not income_history:
-            return None
-        
-        # 가장 최근 포지션의 실제 PnL
-        latest_pnl = float(income_history[0]['income'])
-        timestamp = int(income_history[0]['time'])
-        
-        return {
-            'realized_pnl': latest_pnl,
-            'timestamp': datetime.fromtimestamp(timestamp / 1000).isoformat(),
-            'symbol': symbol
-        }
-        
-    except Exception as e:
-        logger.error(f"바이낸스 PnL 조회 오류 ({symbol}): {str(e)}")
-        return None
-
-def record_position_closure_with_real_pnl(symbol, position_data, close_type='manual'):
-    """
-    🆕 v8.3: 포지션 종료 시 바이낸스 실제 수익률을 기록하고 이벤트 발생
-    - 실제 PnL 가져오기 실패시 종료로 판단하지 않음
-    
-    close_type: 'manual', 'auto', 'sl', 'tp', 'auto_tpsl', 'liquidation', 'auto_close_detected'
-    """
-    try:
-        # 1. 바이낸스에서 실제 PnL 가져오기 시도
-        real_pnl_data = fetch_binance_position_pnl(exchange, symbol)
-        
-        # 🔥 v8.3 수정: 실제 PnL이 없어도 정상 처리
-        if real_pnl_data:
-            realized_pnl = real_pnl_data['realized_pnl']
-            logger.info(f"✅ {symbol} 실제 수익: ${realized_pnl:.2f} (바이낸스 확인)")
-            is_binance_confirmed = True
-        else:
-            # 바이낸스 데이터 없으면 계산된 값 사용
-            entry_price = position_data.get('entry_price', 0)
-            exit_price = position_data.get('mark_price', entry_price)
-            amount = position_data.get('amount', 0)
-            side = position_data.get('side', 'unknown')
-            leverage = position_data.get('leverage', 10)  # 기본 레버리지 10
-            
-            # 수익 계산
-            if entry_price > 0 and amount > 0:
-                if side == 'long':
-                    price_change = ((exit_price - entry_price) / entry_price)
-                else:  # short
-                    price_change = ((entry_price - exit_price) / entry_price)
-                
-                # 레버리지 적용한 실제 PnL 계산
-                realized_pnl = (amount * entry_price * price_change) * leverage
-            else:
-                realized_pnl = position_data.get('unrealized_pnl', 0)
-            
-            logger.info(f"📊 {symbol} 계산된 수익: ${realized_pnl:.2f} (레버리지 {leverage}x 적용)")
-            is_binance_confirmed = False
-        
-        # 2. completed_trades 테이블에 기록
-        conn = sqlite3.connect('integrated_trades.db')
-        c = conn.cursor()
-        
-        entry_price = position_data.get('entry_price', 0)
-        exit_price = position_data.get('mark_price', entry_price)
-        amount = position_data.get('amount', 0)
-        side = position_data.get('side', 'unknown')
-        position_type = position_data.get('position_type', 'auto')
-        leverage = position_data.get('leverage', 10)
-        
-        # 수익률 계산 (레버리지 포함)
-        if entry_price > 0:
-            if side == 'long':
-                pnl_percent = ((exit_price - entry_price) / entry_price) * 100 * leverage
-            else:  # short
-                pnl_percent = ((entry_price - exit_price) / entry_price) * 100 * leverage
-        else:
-            pnl_percent = 0
-        
-        # 보유 시간 계산
-        entry_time = position_data.get('entry_time', datetime.now().isoformat())
-        exit_dt = datetime.now()
-        
-        try:
-            entry_dt = datetime.fromisoformat(entry_time)
-            holding_minutes = (exit_dt - entry_dt).total_seconds() / 60
-        except:
-            holding_minutes = 0
-        
-        c.execute("""
-            INSERT INTO completed_trades 
-            (open_timestamp, close_timestamp, symbol, side, entry_price, exit_price, amount, 
-             pnl_usdt, pnl_percent, holding_time_minutes, close_reason, is_win, position_type, realized_pnl_binance)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            entry_time, exit_dt.isoformat(), symbol, side, entry_price, exit_price, amount,
-            realized_pnl, pnl_percent, holding_minutes, close_type, 1 if realized_pnl > 0 else 0,
-            position_type, realized_pnl if is_binance_confirmed else None
-        ))
-        
-        conn.commit()
-        conn.close()
-        
-        # 3. 실시간 이벤트 발생
-        event_data = {
-            'symbol': symbol,
-            'pnl_usdt': realized_pnl,
-            'pnl_percent': pnl_percent,
-            'close_type': close_type,
-            'side': side,
-            'is_binance_confirmed': is_binance_confirmed
-        }
-        
-        trigger_dashboard_event('position_closed', symbol, event_data)
-        
-        logger.info(f"📊 {symbol} 포지션 종료 기록 완료 (PnL: ${realized_pnl:.2f}, 확인: {is_binance_confirmed})")
-        
-        return realized_pnl
-        
-    except Exception as e:
-        logger.error(f"포지션 종료 기록 오류 ({symbol}): {str(e)}")
-        return None
 
 # ============ Technical Indicators 추가 ============
 def add_indicators(df):
@@ -2809,7 +2514,9 @@ def create_default_hold_decision(reason: str) -> dict:
         "reason": reason,
         "exit_type": "none",
         "confidence": 0.0,
-        "urgency": "none"
+        "urgency": "none",
+        "add_position_margin_percent": 0,
+        "expected_win_rate": 0.0
     }
 
 def create_default_reject_decision(reason: str) -> dict:
@@ -3155,6 +2862,65 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 - Price respecting trend structure (higher lows for longs, lower highs for shorts)
 - Profit target still has room with momentum intact
 
+═══════════════════════════════════════════
+💪 **ADD POSITION (물타기) STRATEGY**
+═══════════════════════════════════════════
+
+🎯 **WHEN TO CONSIDER ADD_POSITION (물타기):**
+
+**Only consider adding to position when ALL these conditions are met:**
+
+1. **Currently in LOSS territory** (-5% to -15% leveraged P&L)
+   - Too early (<-5%): wait for better confirmation
+   - Too late (>-15%): risk too high
+
+2. **Strong reversal signals detected:**
+{'   - RSI oversold (<30) AND starting to turn up' if side == 'buy' else '   - RSI overbought (>70) AND starting to turn down'}
+{'   - MACD showing bullish crossover' if side == 'buy' else '   - MACD showing bearish crossover'}
+{'   - Price bouncing from Bollinger lower band' if side == 'buy' else '   - Price bouncing from Bollinger upper band'}
+   - CMF turning positive (money flowing in)
+   - Multiple timeframes showing reversal confirmation
+
+3. **Sufficient remaining margin:**
+   - Free Balance: ${free_margin:,.2f} USDT
+   - Must have at least 20% of total balance free
+   - Risk management: ensure account can handle additional exposure
+
+4. **High confidence in reversal:**
+   - AI confidence ≥ 70%
+   - Expected win rate ≥ 60%
+   - Multi-timeframe confirmation (2+ timeframes align)
+
+5. **Not already over-exposed:**
+   - This is the FIRST or SECOND add_position for this trade
+   - Position hasn't been added to more than twice already
+
+📊 **ADD_POSITION SIZING:**
+
+Based on your confidence level:
+- **Very High Confidence (90%+)**: Use 20-30% of remaining margin
+- **High Confidence (80-90%)**: Use 15-20% of remaining margin
+- **Medium Confidence (70-80%)**: Use 10-15% of remaining margin
+- **Low Confidence (<70%)**: Use 5-10% or DON'T add
+
+⚠️ **NEVER ADD POSITION IF:**
+- Free margin < 20% of total balance
+- Expected win rate < 60%
+- Loss exceeds -15% (too risky)
+- Already added to position 2+ times
+- Reversal signals are weak or unclear
+- Only one timeframe shows reversal (need confirmation)
+
+💡 **ADD_POSITION LOGIC:**
+This is an ADVANCED strategy to average down when:
+- Technical analysis strongly suggests imminent reversal
+- Account has sufficient margin buffer
+- Risk is calculated and controlled
+- Multiple confirmation signals align
+
+⚠️ **IMPORTANT:** Adding to losing position is HIGH RISK. 
+Only recommend when technical reversal is VERY STRONG with HIGH CONFIDENCE.
+
 ⏰ **TIME-BASED CONTEXT:**
 - Short-term (<1 hour): Prioritize technical signals over time
 - Medium-term (1-4 hours): Normal assessment window
@@ -3173,31 +2939,6 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 - **Moderate Loss (less than 1 ATR):** 
   Acceptable if technical indicators support recovery
   Stop loss should be used if breakdown continues
-  
-  🎯 **물타기(ADD_POSITION) 고려 상황:**
-  - **현재 손실 중이지만** 다음 조건을 **모두** 만족할 때만 물타기 고려:
-    ✓ 손실이 -5% ~ -15% 범위 (너무 적거나 많으면 안됨)
-    ✓ **강력한 반전 신호**: 4h/1h/15m 최소 2개 타임프레임에서 반전 확인
-    ✓ **추세 재개 신호**: ADX 상승, MACD 골든크로스, RSI 과매도 탈출
-    ✓ **볼륨 확인**: CMF 양전환, 거래량 급증
-    ✓ **핵심 지지선 테스트**: 강력한 지지선 근처에서 반등 시도
-    ✓ **잔여 마진 충분**: 최소 50% 이상 잔여 마진 보유
-    ✓ **포지션 확신도 높음**: confidence ≥ 0.75
-  
-  📊 **물타기 수량 결정 기준:**
-  - **매우 높은 확신 (confidence ≥ 0.85, 승률 ≥ 75%)**: 25-30% 잔여 마진
-  - **높은 확신 (confidence ≥ 0.75, 승률 ≥ 65%)**: 15-20% 잔여 마진  
-  - **중간 확신 (confidence ≥ 0.65, 승률 ≥ 55%)**: 10-15% 잔여 마진
-  - **낮은 확신 (그 외)**: 5-10% 잔여 마진 또는 물타기 안함
-  
-  ⚠️ **물타기 금지 조건:**
-  - 손실이 -20% 초과 (너무 깊은 손실)
-  - 손실이 -3% 미만 (너무 얕은 손실, 의미 없음)
-  - 잔여 마진 50% 미만
-  - 반전 신호가 1개 타임프레임에만 있는 경우
-  - 추세가 여전히 반대 방향으로 강한 경우
-  - ADX 하락 중이거나 25 미만
-  - 이미 물타기를 2회 이상 한 포지션
 
 **For Profit Scenarios:**
 - **Minimal Profit (less than 1 ATR movement):**
@@ -3237,11 +2978,11 @@ weakness. Cut losers when technical breakdown is confirmed.
 - decision: "hold", "close", "partial_close", or "add_position" (물타기)
 - percentage: 0 for hold, 100 for full close, 25-75 for partial, 5-30 for add_position (잔여 마진 %)
 - reason: **MUST be technical and specific, not based on arbitrary percentages**
-- exit_type: "take_profit", "stop_loss", "trend_reversal", "risk_management", "time_stop", "averaging_down", or "none"
+- exit_type: "take_profit", "stop_loss", "trend_reversal", "risk_management", "time_stop", "add_position", or "none"
 - confidence: 0.0 to 1.0 (lower if signals are mixed across timeframes)
 - urgency: "immediate", "soon", "watch", or "none"
-- add_position_margin_percent: 5-30 (물타기 시 잔여 마진의 몇 % 사용할지)
-- expected_win_rate: 0.0-1.0 (물타기 시 예상 승률)
+- add_position_margin_percent: 5-30 (물타기 시 잔여 마진의 몇 % 사용할지, decision="add_position"일 때만)
+- expected_win_rate: 0.0-1.0 (물타기 시 예상 승률, decision="add_position"일 때만)
 
 **Your reason MUST include:**
 1. **Timeframe Analysis:** What each timeframe (5m/1h/4h) is telling you
@@ -3438,52 +3179,6 @@ def execute_position_exit(symbol, decision):
                     exit_amount = abs(contracts)
                 elif decision['decision'] == 'partial_close':
                     exit_amount = abs(contracts) * (decision['percentage'] / 100)
-                elif decision['decision'] == 'add_position':
-                    # 🆕 물타기 로직: 추가 진입
-                    logger.info(f"[{user_name}] 🎯 물타기 신호 감지: {symbol}")
-                    
-                    # 잔여 마진 확인
-                    balance = user_exchange.fetch_balance()
-                    free_margin = balance['USDT']['free']
-                    
-                    # 물타기 수량 계산
-                    margin_percent = decision.get('add_position_margin_percent', 10)
-                    add_position_size = free_margin * (margin_percent / 100)
-                    
-                    # 최소 수량 체크
-                    if add_position_size < 10:
-                        logger.warning(f"[{user_name}] 물타기 수량 너무 작음 (${add_position_size:.2f}) - 스킵")
-                        continue
-                    
-                    # 현재가 조회
-                    ticker = user_exchange.fetch_ticker(symbol)
-                    current_price = ticker['last']
-                    
-                    # 추가 진입 수량 계산
-                    add_amount = add_position_size / current_price
-                    
-                    # 시장가 주문 실행
-                    add_side = 'buy' if side == 'long' else 'sell'
-                    add_order = user_exchange.create_market_order(symbol, add_side, add_amount)
-                    
-                    logger.info(f"[{user_name}] 🎯 물타기 실행: {symbol} {add_side} {add_amount:.6f} @ ${current_price:.2f}")
-                    logger.info(f"[{user_name}] 💰 투입 마진: ${add_position_size:.2f} ({margin_percent}% of free margin)")
-                    
-                    # Primary User의 경우 current_positions 업데이트
-                    if USER_CONFIGS[user_id].get('is_primary', False):
-                        # 평균 진입가 재계산
-                        old_entry_price = position['entry_price']
-                        old_amount = position['amount']
-                        new_entry_price = (old_entry_price * old_amount + current_price * add_amount) / (old_amount + add_amount)
-                        
-                        current_positions[symbol]['entry_price'] = new_entry_price
-                        current_positions[symbol]['amount'] += add_amount
-                        
-                        logger.info(f"✅ 평균 진입가 업데이트: ${old_entry_price:.2f} → ${new_entry_price:.2f}")
-                        logger.info(f"✅ 총 포지션 수량: {old_amount:.6f} → {old_amount + add_amount:.6f}")
-                    
-                    success_count += 1
-                    continue
                 else:
                     continue
                 
@@ -3520,12 +3215,6 @@ def execute_position_exit(symbol, decision):
                 # 전체 종료인 경우
                 record_completed_trade(symbol, position, exit_price, decision.get('exit_type', 'ai_exit'))
                 logger.info(f"✅ Completed trade recorded for {symbol} ({position_type.upper()})")
-                
-                # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
-                if symbol in position_entry_times:
-                    del position_entry_times[symbol]
-                    logger.info(f"🗑️ AI 청산 후 진입 시간 제거: {symbol}")
-                
                 del current_positions[symbol]
             else:
                 # 부분 종료인 경우
@@ -3539,43 +3228,13 @@ def execute_position_exit(symbol, decision):
             logger.error(f"Failed to record completed trade: {e}")
             # 오류가 나도 포지션은 정리
             if decision['decision'] == 'close' and symbol in current_positions:
-                # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
-                if symbol in position_entry_times:
-                    del position_entry_times[symbol]
-                    logger.info(f"🗑️ 오류 처리 청산 후 진입 시간 제거: {symbol}")
-                
                 del current_positions[symbol]
             elif decision['decision'] == 'partial_close' and symbol in current_positions:
                 current_positions[symbol]['amount'] -= position['amount'] * (decision['percentage'] / 100)
         
         # 텔레그램 알림
         if ENABLE_TELEGRAM:
-            if decision['decision'] == 'add_position':
-                # 물타기 알림
-                margin_percent = decision.get('add_position_margin_percent', 10)
-                expected_win_rate = decision.get('expected_win_rate', 0.0)
-                
-                message = f"""
-🎯 <b>AI 물타기 실행 (Multi-User)</b>
-
-<b>Type:</b> {position_type.upper()} 포지션
-<b>Symbol:</b> {symbol}
-<b>Decision:</b> ADD_POSITION (물타기)
-<b>투입 마진:</b> {margin_percent}% of free margin
-<b>예상 승률:</b> {expected_win_rate:.1%}
-<b>성공:</b> {success_count}/{total_users}명
-<b>Reason:</b> {decision['reason']}
-<b>Confidence:</b> {decision['confidence']:.1%}
-
-💡 손실 구간에서 강력한 반전 신호 포착
-⚡ 평균 진입가가 개선되었습니다
-
-⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """.strip()
-                send_telegram_notification(message, 'high')
-            else:
-                # 기존 청산 알림
-                message = f"""
+            message = f"""
 {type_indicator} <b>AI Position Exit (Multi-User)</b>
 
 <b>Type:</b> {position_type.upper()} 포지션
@@ -3589,7 +3248,7 @@ def execute_position_exit(symbol, decision):
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
             """.strip()
-                send_telegram_notification(message, 'high' if decision['urgency'] == 'immediate' else 'normal')
+            send_telegram_notification(message, 'high' if decision['urgency'] == 'immediate' else 'normal')
         
         return success_count > 0
         
@@ -3601,9 +3260,8 @@ def ai_monitoring_cycle():
     """
     AI 모니터링 주기 실행
     🆕 개선: 자동/수동 포지션 모두 모니터링
-    🔥 v8.5 Fixed: 포지션 진입 시간 추적 추가
     """
-    global current_positions, initial_sync_completed, bot_start_time, existing_positions_at_start, positions_already_notified, last_position_check, position_entry_times
+    global current_positions
     
     logger.info("=== AI Position Monitoring Cycle Start ===")
     logger.info(f"⏰ Monitoring interval: {AI_MONITOR_INTERVAL} minutes")
@@ -3627,7 +3285,6 @@ def ai_monitoring_cycle():
     monitored_count = 0
     exit_decisions = []
     
-    # 🔥 v8.9 Fixed: v7 방식으로 단순화 - sync만 믿고 추가 청산 감지 제거!
     for symbol, position in current_positions.copy().items():
         # AI 모니터링이 활성화된 심볼인지 확인
         if not SYMBOL_CONFIG.get(symbol, {}).get('ai_monitoring', True):
@@ -3636,34 +3293,109 @@ def ai_monitoring_cycle():
         position_type = position.get('position_type', 'auto')
         type_indicator = "🤖" if position_type == 'auto' else "🔧"
         
-        # ✅ v7 방식: current_positions에 있는 포지션만 AI 모니터링
         logger.info(f"{type_indicator} Monitoring position: {symbol} ({position_type.upper()})")
         
-        try:
-            # AI 모니터링 실행
-            decision = ai_monitor_position(symbol, position)
-            
-            if decision:
-                monitored_count += 1
-                
-                # 종료 결정인 경우
-                if decision['decision'] in ['close', 'partial_close']:
-                    # 신뢰도와 긴급도 확인
-                    if decision['confidence'] >= 0.6 or decision['urgency'] == 'immediate':
-                        success = execute_position_exit(symbol, decision)
-                        if success:
-                            exit_decisions.append({
-                                'symbol': symbol,
-                                'position_type': position_type,
-                                'decision': decision['decision'],
-                                'reason': decision['reason']
-                            })
-                    else:
-                        logger.info(f"{type_indicator} Exit decision for {symbol} ({position_type.upper()}) not executed due to low confidence ({decision['confidence']:.1%})")
+        # AI 모니터링 실행
+        decision = ai_monitor_position(symbol, position)
         
-        except Exception as monitor_error:
-            logger.error(f"AI 모니터링 오류 ({symbol}): {monitor_error}")
-            continue
+        if decision:
+            monitored_count += 1
+            
+            # 종료 결정인 경우
+            if decision['decision'] in ['close', 'partial_close']:
+                # 신뢰도와 긴급도 확인
+                if decision['confidence'] >= 0.6 or decision['urgency'] == 'immediate':
+                    success = execute_position_exit(symbol, decision)
+                    if success:
+                        exit_decisions.append({
+                            'symbol': symbol,
+                            'position_type': position_type,  # 🆕
+                            'decision': decision['decision'],
+                            'reason': decision['reason']
+                        })
+                else:
+                    logger.info(f"{type_indicator} Exit decision for {symbol} ({position_type.upper()}) not executed due to low confidence ({decision['confidence']:.1%})")
+            
+            # 🆕 물타기 결정인 경우 (v8.9.2 추가)
+            elif decision['decision'] == 'add_position':
+                logger.info(f"[Multi-User] 🎯 물타기 신호 감지: {symbol}")
+                logger.info(f"   → 이유: {decision.get('reason', 'N/A')}")
+                logger.info(f"   → 신뢰도: {decision.get('confidence', 0)*100:.1f}%")
+                logger.info(f"   → 예상 승률: {decision.get('expected_win_rate', 0)*100:.1f}%")
+                
+                # 물타기 수량 계산
+                add_position_margin_percent = decision.get('add_position_margin_percent', 0)
+                if add_position_margin_percent < 5:
+                    logger.warning(f"[Multi-User] 물타기 비율 너무 낮음 ({add_position_margin_percent}%) - 스킵")
+                    continue
+                
+                # 각 유저별로 물타기 실행
+                for user_id, user_exchange in exchanges.items():
+                    user_name = USER_CONFIGS[user_id]['name']
+                    
+                    try:
+                        # 잔여 마진 조회
+                        balance = user_exchange.fetch_balance()
+                        available_margin = float(balance['USDT']['free'])
+                        
+                        if available_margin < 10:
+                            logger.warning(f"[{user_name}] 잔여 마진 부족 (${available_margin:.2f}) - 물타기 스킵")
+                            continue
+                        
+                        # 물타기 수량 계산
+                        add_position_size = available_margin * (add_position_margin_percent / 100)
+                        
+                        if add_position_size < 10:
+                            logger.warning(f"[{user_name}] 물타기 수량 너무 작음 (${add_position_size:.2f}) - 스킵")
+                            continue
+                        
+                        # 현재가 조회
+                        ticker = user_exchange.fetch_ticker(symbol)
+                        current_price = ticker['last']
+                        
+                        # 포지션 방향에 따라 추가 진입
+                        side = position['side']
+                        add_side = 'buy' if side == 'buy' else 'sell'
+                        leverage = SYMBOL_CONFIG[symbol].get('leverage', 10)
+                        
+                        # 물타기 주문 수량 계산 (레버리지 적용)
+                        add_amount = (add_position_size * leverage) / current_price
+                        
+                        logger.info(f"[{user_name}] 🎯 물타기 실행: {symbol} {add_side} {add_amount:.6f} @ ${current_price:.2f}")
+                        logger.info(f"   → 사용 마진: ${add_position_size:.2f} ({add_position_margin_percent}% of ${available_margin:.2f})")
+                        
+                        # 물타기 주문 실행
+                        order = user_exchange.create_market_order(symbol, add_side, add_amount)
+                        logger.info(f"[{user_name}] ✅ 물타기 주문 체결: {order.get('id', 'N/A')}")
+                        
+                        # 텔레그램 알림
+                        if ENABLE_TELEGRAM:
+                            send_telegram_notification(
+                                f"""
+🎯 <b>AI 물타기 실행 (Multi-User)</b>
+
+<b>User:</b> {user_name}
+<b>심볼:</b> {symbol}
+<b>방향:</b> {add_side.upper()}
+<b>Decision:</b> ADD_POSITION (물타기)
+
+<b>추가 진입:</b>
+  - 수량: {add_amount:.6f}
+  - 가격: ${current_price:,.2f}
+  - 사용 마진: ${add_position_size:.2f}
+  - 마진 비율: {add_position_margin_percent}%
+
+<b>이유:</b> {decision.get('reason', 'N/A')}
+<b>신뢰도:</b> {decision.get('confidence', 0)*100:.1f}%
+<b>예상 승률:</b> {decision.get('expected_win_rate', 0)*100:.1f}%
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                                """.strip(),
+                                'success'
+                            )
+                        
+                    except Exception as e:
+                        logger.error(f"[{user_name}] 물타기 실행 오류: {str(e)}", exc_info=True)
         
         # API 제한을 위한 짧은 대기
         time.sleep(2)
@@ -4948,11 +4680,7 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
     if failed_users:
         logger.warning(f"⚠️ 실패한 유저: {', '.join(failed_users)}")
     
-    # Primary User의 주문 정보와 멀티유저 통계 반환
-    if primary_orders:
-        primary_orders['success_count'] = success_count
-        primary_orders['total_users'] = total_users
-    
+    # Primary User의 주문 정보 반환 (기존 코드 호환성)
     return primary_orders
 
 def close_position_for_all_users(symbol):
@@ -5001,7 +4729,7 @@ def close_position_for_all_users(symbol):
     if failed_users:
         logger.warning(f"⚠️ 실패한 유저: {', '.join(failed_users)}")
     
-    return success_count, total_users
+    return success_count
 
 
 def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit_price, 
@@ -5292,8 +5020,7 @@ def update_stop_loss(symbol, new_sl_price, amount):
         logger.error(f"스탑로스 업데이트 오류 ({symbol}): {str(e)}")
 
 def format_position_entry_message(symbol, action, amount, entry_price, sl, tp, pl_ratio, 
-                                 position_size, balance, trailing_stop=None, trailing_activation=None,
-                                 success_count=None, total_users=None):
+                                 position_size, balance, trailing_stop=None, trailing_activation=None):
     """포지션 진입 메시지 포맷팅"""
     direction = "🟢 롱" if action == 'buy' else "🔴 숏"
     
@@ -5313,13 +5040,7 @@ def format_position_entry_message(symbol, action, amount, entry_price, sl, tp, p
 <b>진입가:</b> ${entry_price:,.2f}
 <b>수량:</b> {amount:.4f}
 <b>포지션 크기:</b> ${position_size:,.2f}
-"""
-    
-    # 멀티유저 통계 추가
-    if success_count is not None and total_users is not None:
-        message += f"<b>주문 전달:</b> ✅ {success_count}/{total_users}명\n"
-    
-    message += f"""
+
 <b>리스크 관리:</b>
 • 스탑로스: ${sl:,.2f} (예상 손실: ${potential_loss:,.2f})
 • 테이크프로핏: ${tp:,.2f} (예상 이익: ${potential_profit:,.2f})
@@ -5780,7 +5501,7 @@ def webhook():
                 # AI가 승인한 경우 포지션 청산 실행
                 try:
                     # 🆕 모든 유저의 포지션 청산 및 TP/SL 자동 취소
-                    success_count, total_users = close_position_for_all_users(symbol)
+                    success_count = close_position_for_all_users(symbol)
                     
                     if success_count > 0:
                         # Primary User로 포지션 정보 조회 (메시지 표시용)
@@ -5792,7 +5513,7 @@ def webhook():
 ✅ <b>포지션 청산 완료 (Multi-User)</b>
 
 <b>심볼:</b> {symbol}
-<b>청산 성공:</b> {success_count}/{total_users}명
+<b>청산 성공:</b> {success_count}/{len(exchanges)}명
 <b>청산가:</b> ${current_price:,.2f}
 <b>청산 사유:</b> {data.get('exit_reason', 'Manual close')}
 
@@ -5809,28 +5530,13 @@ def webhook():
                         
                         # 포지션 추적에서 제거
                         if symbol in current_positions:
-                            # 🆕 v8.1: 포지션 종료 기록 및 이벤트 발생
-                            position_data = current_positions[symbol].copy()
-                            position_data['mark_price'] = current_price
-                            
-                            record_position_closure_with_real_pnl(
-                                symbol,
-                                position_data,
-                                close_type=data.get('exit_reason', 'manual')
-                            )
-                            
-                            # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
-                            if symbol in position_entry_times:
-                                del position_entry_times[symbol]
-                                logger.info(f"🗑️ 웹훅 청산 후 진입 시간 제거: {symbol}")
-                            
                             del current_positions[symbol]
                         
                         return jsonify({
                             'status': 'closed',
                             'symbol': symbol,
                             'success_count': success_count,
-                            'total_users': total_users,
+                            'total_users': len(exchanges),
                             'ai_confidence': ai_decision['confidence']
                         }), 200
                     else:
@@ -6059,10 +5765,6 @@ def webhook():
                     'position_type': 'auto'  # 자동 거래 표시
                 }
                 
-                # 🔥 v8.5 Fixed: 포지션 진입 시간 기록 (청산 감지 보호용)
-                position_entry_times[symbol] = datetime.now()
-                logger.info(f"📝 새 포지션 진입 시간 기록: {symbol} at {position_entry_times[symbol]}")
-                
                 # 🔥 포지션 진입 즉시 DB 기록 (대시보드 표시용)
                 try:
                     conn = get_db_connection()
@@ -6091,8 +5793,7 @@ def webhook():
                     symbol, action, orders['adjusted_amount'], orders['actual_entry'],
                     stop_loss_price, take_profit_price,
                     pl_ratio, position_size, usdt_balance,
-                    trailing_stop, trailing_activation,
-                    orders.get('success_count'), orders.get('total_users')
+                    trailing_stop, trailing_activation
                 )
                 
                 if use_ai:
@@ -6167,53 +5868,20 @@ def monitor_status():
 
 @app.route('/ai-monitor/force', methods=['POST'])
 def force_monitor():
-    """
-    즉시 AI 모니터링 실행
-    🔥 v8.9.1 Fixed: v7 방식 - 먼저 sync로 포지션 동기화
-    """
-    try:
-        logger.info("=== 수동 AI 모니터링 요청 ===")
-        
-        # 🔥 v8.9.1 Fixed: v7 방식 - 먼저 거래소와 동기화!
-        sync_count = sync_positions_from_exchange()
-        logger.info(f"🔄 포지션 동기화 완료: {sync_count}개")
-        
-        # 동기화 후에 포지션 체크
-        if not current_positions:
-            logger.warning("⚠️ 동기화 후에도 포지션 없음")
-            return jsonify({
-                'status': 'info',
-                'message': 'No positions found after sync',
-                'positions_monitored': 0,
-                'exit_decisions': []
-            }), 200  # 200 OK로 변경 (에러 아님)
-        
-        # 포지션 타입별 카운트
-        auto_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'auto')
-        manual_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'manual')
-        
-        logger.info(f"📊 모니터링 대상: 총 {len(current_positions)}개 (자동: {auto_count}, 수동: {manual_count})")
-        
-        # AI 모니터링 실행
-        monitored, exits = ai_monitoring_cycle()
-        
-        logger.info(f"✅ 수동 AI 모니터링 완료: {monitored}개 분석, {len(exits)}개 청산 결정")
-        
-        return jsonify({
-            'status': 'success',
-            'positions_monitored': monitored,
-            'exit_decisions': exits,
-            'total_positions': len(current_positions),
-            'auto_positions': auto_count,
-            'manual_positions': manual_count
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"❌ 수동 AI 모니터링 오류: {str(e)}", exc_info=True)
+    """즉시 AI 모니터링 실행"""
+    if not current_positions:
         return jsonify({
             'status': 'error',
-            'message': f'Monitoring error: {str(e)}'
-        }), 500
+            'message': 'No positions to monitor'
+        }), 400
+    
+    monitored, exits = ai_monitoring_cycle()
+    
+    return jsonify({
+        'status': 'success',
+        'positions_monitored': monitored,
+        'exit_decisions': exits
+    }), 200
 
 @app.route('/status', methods=['GET'])
 def status():
@@ -6618,379 +6286,9 @@ def get_trades():
         logger.error(f"거래 조회 오류: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# 🆕 v8.1: 실시간 이벤트 API
-@app.route('/events/unread', methods=['GET'])
-def get_unread_events():
-    """
-    미처리 이벤트 조회 (대시보드용)
-    """
-    try:
-        conn = sqlite3.connect('integrated_trades.db')
-        c = conn.cursor()
-        
-        c.execute("""
-            SELECT id, event_type, symbol, timestamp, data
-            FROM realtime_events
-            WHERE is_processed = 0
-            ORDER BY timestamp DESC
-            LIMIT 50
-        """)
-        
-        events = []
-        for row in c.fetchall():
-            events.append({
-                'id': row[0],
-                'event_type': row[1],
-                'symbol': row[2],
-                'timestamp': row[3],
-                'data': json.loads(row[4]) if row[4] else {}
-            })
-        
-        conn.close()
-        
-        return jsonify({
-            'success': True,
-            'count': len(events),
-            'events': events
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"이벤트 조회 오류: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/events/mark_processed', methods=['POST'])
-def mark_events_processed():
-    """
-    이벤트를 처리됨으로 표시
-    """
-    try:
-        data = request.get_json()
-        event_ids = data.get('event_ids', [])
-        
-        if not event_ids:
-            return jsonify({'error': 'event_ids 필수'}), 400
-        
-        conn = sqlite3.connect('integrated_trades.db')
-        c = conn.cursor()
-        
-        placeholders = ','.join(['?' for _ in event_ids])
-        c.execute(f"""
-            UPDATE realtime_events
-            SET is_processed = 1, processed_at = ?
-            WHERE id IN ({placeholders})
-        """, [datetime.now().isoformat()] + event_ids)
-        
-        conn.commit()
-        conn.close()
-        
-        return jsonify({
-            'success': True,
-            'processed_count': len(event_ids)
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"이벤트 처리 표시 오류: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/system/status', methods=['GET'])
-def get_system_status():
-    """
-    시스템 상태 조회 (대시보드용)
-    """
-    try:
-        return jsonify({
-            'success': True,
-            'status': {
-                'active_positions': len(current_positions),
-                'websocket_enabled': True,
-                'polling_enabled': True,
-                'ai_monitoring_interval': AI_MONITOR_INTERVAL,
-                'active_users': len(exchanges),
-                'server_port': SERVER_PORT,
-            },
-            'positions': [
-                {
-                    'symbol': symbol,
-                    'type': pos.get('position_type', 'manual'),
-                    'side': pos.get('side', 'unknown')
-                }
-                for symbol, pos in current_positions.items()
-            ]
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"시스템 상태 조회 오류: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-# 🆕 v8.1: WebSocket 및 포지션 모니터링 함수
-def start_binance_websocket_listener():
-    """
-    바이낸스 WebSocket User Data Stream
-    TP/SL 체결을 실시간으로 감지 (0.1초 이내)
-    """
-    def websocket_loop():
-        try:
-            # websockets 모듈 체크
-            try:
-                import asyncio
-                import websockets
-            except ImportError:
-                logger.warning("⚠️ websockets 라이브러리가 설치되지 않았습니다")
-                logger.warning("💡 설치 방법: pip install websockets")
-                logger.info("🔄 10초 폴링 모드로만 동작합니다")
-                return
-            
-            logger.info("🌐 바이낸스 WebSocket 연결 시작...")
-            
-            # Listen Key 발급
-            listen_key_response = exchange.fapiPrivatePostListenKey()
-            listen_key = listen_key_response['listenKey']
-            
-            logger.info(f"✅ Listen Key 발급 완료: {listen_key[:10]}...")
-            
-            async def listen_to_websocket():
-                ws_url = f"wss://fstream.binance.com/ws/{listen_key}"
-                
-                async with websockets.connect(ws_url) as websocket:
-                    logger.info("✅ WebSocket 연결 성공 - 실시간 TP/SL 감지 활성화")
-                    
-                    while True:
-                        try:
-                            message = await websocket.recv()
-                            data = json.loads(message)
-                            
-                            # ORDER_TRADE_UPDATE 이벤트 처리
-                            if data.get('e') == 'ORDER_TRADE_UPDATE':
-                                order_data = data['o']
-                                symbol = order_data['s']  # BTCUSDT
-                                order_status = order_data['X']  # FILLED, CANCELED, etc.
-                                order_type = order_data['o']  # TAKE_PROFIT_MARKET, STOP_MARKET
-                                
-                                # TP/SL 체결 감지
-                                if order_status == 'FILLED' and order_type in ['TAKE_PROFIT_MARKET', 'STOP_MARKET']:
-                                    symbol_formatted = symbol.replace('USDT', '/USDT')
-                                    
-                                    logger.info(f"🔔 WebSocket: {symbol_formatted} {order_type} 체결 감지!")
-                                    
-                                    # 메모리에 포지션이 있는 경우만 처리
-                                    if symbol_formatted in current_positions:
-                                        position_data = current_positions[symbol_formatted].copy()
-                                        
-                                        # 체결 가격
-                                        avg_price = float(order_data['ap'])
-                                        position_data['mark_price'] = avg_price
-                                        
-                                        # 종료 타입 결정
-                                        close_type = 'tp' if order_type == 'TAKE_PROFIT_MARKET' else 'sl'
-                                        
-                                        # 실제 PnL 기록 및 이벤트 발생
-                                        realized_pnl = record_position_closure_with_real_pnl(
-                                            symbol_formatted, 
-                                            position_data, 
-                                            close_type=close_type
-                                        )
-                                        
-                                        # 메모리에서 제거
-                                        del current_positions[symbol_formatted]
-                                        
-                                        # 텔레그램 알림
-                                        if ENABLE_TELEGRAM and realized_pnl is not None:
-                                            pnl_sign = "+" if realized_pnl > 0 else ""
-                                            close_type_emoji = "✅" if close_type == 'tp' else "🛑"
-                                            close_type_text = "익절" if close_type == 'tp' else "손절"
-                                            
-                                            message = f"""
-{close_type_emoji} <b>{close_type_text} 체결 (WebSocket)</b>
-
-<b>심볼:</b> {symbol_formatted}
-<b>체결 가격:</b> ${avg_price:.4f}
-<b>실현 손익:</b> {pnl_sign}${realized_pnl:.2f} USD
-<b>체결 시간:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-⚡ 실시간 감지
-                                            """.strip()
-                                            send_telegram_notification(message, 'success' if close_type == 'tp' else 'warning')
-                            
-                            # ACCOUNT_UPDATE 이벤트 (포지션 변경)
-                            elif data.get('e') == 'ACCOUNT_UPDATE':
-                                positions = data.get('a', {}).get('P', [])
-                                
-                                for pos in positions:
-                                    symbol = pos['s']
-                                    position_amt = float(pos['pa'])
-                                    
-                                    symbol_formatted = symbol.replace('USDT', '/USDT')
-                                    
-                                    # 포지션이 0이 되었는데 메모리에는 있는 경우
-                                    if position_amt == 0 and symbol_formatted in current_positions:
-                                        logger.info(f"🔔 WebSocket: {symbol_formatted} 포지션 완전 청산 감지")
-                                        
-                                        position_data = current_positions[symbol_formatted].copy()
-                                        
-                                        # 실제 PnL 기록
-                                        realized_pnl = record_position_closure_with_real_pnl(
-                                            symbol_formatted, 
-                                            position_data, 
-                                            close_type='manual'
-                                        )
-                                        
-                                        # 메모리에서 제거
-                                        del current_positions[symbol_formatted]
-                        
-                        except websockets.exceptions.ConnectionClosed:
-                            logger.warning("⚠️ WebSocket 연결 끊김 - 재연결 시도...")
-                            break
-                        except Exception as e:
-                            logger.error(f"WebSocket 메시지 처리 오류: {str(e)}")
-                            continue
-            
-            # Listen Key 갱신 (30분마다)
-            async def keep_alive():
-                while True:
-                    await asyncio.sleep(1800)  # 30분
-                    try:
-                        exchange.fapiPrivatePutListenKey()
-                        logger.info("🔄 Listen Key 갱신 완료")
-                    except Exception as e:
-                        logger.error(f"Listen Key 갱신 오류: {str(e)}")
-            
-            # 이벤트 루프 실행
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            
-            # 두 태스크 동시 실행
-            loop.run_until_complete(
-                asyncio.gather(
-                    listen_to_websocket(),
-                    keep_alive()
-                )
-            )
-            
-        except Exception as e:
-            logger.error(f"WebSocket 연결 오류: {str(e)}")
-            logger.info("⚠️ WebSocket 없이 10초 폴링 모드로 동작합니다")
-    
-    # 백그라운드 스레드로 실행
-    ws_thread = threading.Thread(target=websocket_loop, daemon=True)
-    ws_thread.start()
-
-def start_position_closure_monitor():
-    """
-    포지션 종료 감지 스레드 - v8.5 Fixed
-    🔥 신규 포지션 30초 보호 + API 재시도 로직
-    """
-    def monitor_loop():
-        global current_positions, position_entry_times, existing_positions_at_start
-        
-        logger.info("🔍 포지션 종료 감지 시작 (10초 간격, 신규 포지션 30초 보호)")
-        
-        while True:
-            try:
-                time.sleep(10)  # 10초마다 체크
-                
-                if not current_positions:
-                    continue
-                
-                # 🔥 v8.5 Fixed: 바이낸스 API 재시도 로직 (3회)
-                actual_positions = None
-                for attempt in range(3):
-                    try:
-                        actual_positions = exchange.fetch_positions()
-                        break
-                    except Exception as e:
-                        if attempt < 2:
-                            logger.warning(f"포지션 조회 재시도 {attempt+1}/3: {str(e)}")
-                            time.sleep(2)
-                        else:
-                            raise e
-                
-                if not actual_positions:
-                    continue
-                
-                # 실제 포지션 목록
-                actual_symbols = {
-                    p['symbol'] for p in actual_positions 
-                    if float(p['info'].get('positionAmt', 0)) != 0
-                }
-                
-                # 메모리에는 있지만 바이낸스에는 없는 포지션 확인
-                for symbol in list(current_positions.keys()):
-                    # 🔥 v8.5 Fixed: 신규 포지션 보호 - 진입 후 30초간 체크 안함
-                    if symbol in position_entry_times:
-                        entry_time = position_entry_times[symbol]
-                        elapsed_seconds = (datetime.now() - entry_time).total_seconds()
-                        
-                        if elapsed_seconds < POSITION_CHECK_DELAY:
-                            logger.debug(f"⏳ {symbol} 신규 포지션 보호 중 ({elapsed_seconds:.0f}/{POSITION_CHECK_DELAY}초)")
-                            continue
-                    
-                    # 포지션이 실제로 없어진 경우만 처리
-                    if symbol not in actual_symbols:
-                        logger.info(f"🔔 {symbol} 포지션 종료 감지 (TP/SL 또는 수동 청산)")
-                        
-                        # 포지션 데이터 가져오기
-                        position_data = current_positions[symbol].copy()
-                        
-                        # 최종 가격 조회 (현재가)
-                        try:
-                            ticker = exchange.fetch_ticker(symbol)
-                            position_data['mark_price'] = ticker['last']
-                        except:
-                            position_data['mark_price'] = position_data.get('entry_price', 0)
-                        
-                        # 실제 PnL 기록 및 이벤트 발생
-                        realized_pnl = record_position_closure_with_real_pnl(
-                            symbol, 
-                            position_data, 
-                            close_type='auto_tpsl'  # TP/SL 자동 체결
-                        )
-                        
-                        # 메모리에서 제거
-                        del current_positions[symbol]
-                        
-                        # 🔥 v8.5 Fixed: 포지션 진입 시간도 제거
-                        if symbol in position_entry_times:
-                            del position_entry_times[symbol]
-                            logger.info(f"🗑️ 청산 후 진입 시간 제거: {symbol}")
-                        
-                        # 텔레그램 알림
-                        if ENABLE_TELEGRAM and realized_pnl is not None:
-                            pnl_sign = "+" if realized_pnl > 0 else ""
-                            message = f"""
-🔔 <b>자동 청산 감지</b>
-
-<b>심볼:</b> {symbol}
-<b>종료 방식:</b> TP/SL 자동 체결
-<b>실현 손익:</b> {pnl_sign}${realized_pnl:.2f} USD
-<b>감지 시간:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-💡 바이낸스에서 자동으로 청산되었습니다.
-                        """.strip()
-                            send_telegram_notification(message, 'info')
-                    
-            except Exception as e:
-                logger.error(f"포지션 종료 감지 오류: {str(e)}")
-                time.sleep(5)  # 오류 시 5초 후 재시도
-    
-    # 백그라운드 스레드로 실행
-    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
-    monitor_thread.start()
-    logger.info("✅ 포지션 종료 감지 스레드 시작 (10초 간격, 신규 포지션 30초 보호)")
-
 def initialize_bot():
-    """봇 초기화 - v8.6 Fixed: v7 방식으로 단순화, 기존 포지션 감지 개선"""
-    global bot_start_time, initial_sync_completed, existing_positions_at_start, positions_already_notified, last_position_check, position_entry_times
-    
-    # 🆕 봇 시작 시간 기록
-    bot_start_time = datetime.now()
-    initial_sync_completed = False
-    existing_positions_at_start = set()  # 🔥 v8.4: 기존 포지션 추적
-    positions_already_notified = set()  # 🔥 v8.4: 알림 추적 초기화
-    last_position_check = {}  # 🔥 v8.4: 체크 시간 초기화
-    position_entry_times = {}  # 🔥 v8.5 Fixed: 포지션 진입 시간 추적 초기화
-    
+    """봇 초기화"""
     logger.info(f"봇 초기화 중... (포트: {SERVER_PORT})")
-    logger.info(f"🕐 봇 시작 시간: {bot_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     
     # 데이터베이스 초기화 (프로그램 시작 시 1회)
     init_db_once()
@@ -7003,26 +6301,15 @@ def initialize_bot():
     except Exception as e:
         logger.error(f"거래소 연결 실패: {str(e)}")
     
-    # 🔄 실제 포지션 동기화 (서버 재시작 시 복구) - v7 방식
+    # 🔄 실제 포지션 동기화 (서버 재시작 시 복구)
     try:
-        logger.info("📌 봇 시작시 기존 포지션 확인 중... (각 심볼 개별 조회)")
         position_count = sync_positions_from_exchange()
         if position_count > 0:
             logger.info(f"✅ {position_count}개의 기존 포지션 복구 완료")
             position_summary = get_position_summary()
             logger.info(f"복구된 포지션:\n{position_summary}")
-            
-            # 복구된 포지션들을 AI 모니터링 대상으로 확인
-            for symbol in current_positions.keys():
-                if SYMBOL_CONFIG.get(symbol, {}).get('ai_monitoring', True):
-                    logger.info(f"   ✅ {symbol}: AI 모니터링 활성화됨")
         else:
             logger.info("복구할 포지션 없음 (새로 시작)")
-        
-        # 🆕 초기 동기화 완료 표시
-        initial_sync_completed = True
-        logger.info("✅ 초기 포지션 동기화 완료 - 이후 청산 감지 알림 활성화")
-        
     except Exception as e:
         logger.error(f"포지션 동기화 실패: {str(e)}")
     
@@ -7072,15 +6359,6 @@ def initialize_bot():
     recording_thread.start()
     logger.info("📊 주기적 데이터 기록 스레드 시작 (5분 간격)")
     
-    # 🆕 v8.1: 바이낸스 WebSocket 리스너 시작 (실시간 TP/SL 감지)
-    try:
-        start_binance_websocket_listener()
-    except Exception as e:
-        logger.warning(f"WebSocket 시작 실패 (폴링 모드로 계속 동작): {str(e)}")
-    
-    # 🆕 v8.1: 포지션 종료 감지 스레드 시작 (백업)
-    start_position_closure_monitor()
-    
     if ENABLE_TELEGRAM:
         # 🆕 포지션 타입별 카운트
         auto_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'auto')
@@ -7091,57 +6369,79 @@ def initialize_bot():
             position_info = f"\n\n<b>복구된 포지션:</b>\n{get_position_summary()}"
         
         startup_message = f"""
-🚀 <b>통합 트레이딩 시스템 v8.6 Enhanced (Fixed) 시작</b>
+🚀 <b>통합 트레이딩 시스템 v7.0 시작 (Multi-User Edition)</b>
 
-<b>🔥 v8.6 Fixed - 기존 포지션 감지 완벽 해결!</b>
-✅ <b>v7 방식 포지션 감지 적용</b>
-  → 각 심볼을 개별적으로 조회 (100% 감지 보장)
-  → 중복 로직 제거 및 코드 단순화
-  → 봇 시작 시 기존 포지션 자동 복구 및 AI 모니터링
+<b>🆕 v7.0 Multi-User 핵심 기능:</b>
+👥 <b>다중 유저 동시 거래</b>
+  → 하나의 서버에서 최대 3명의 계정 관리
+  → Primary User: AI 검증 + DB + 텔레그램
+  → Secondary Users: 바이낸스 주문만 실행
+🗑️ <b>TP/SL 자동 삭제</b>
+  → 포지션 종료 시 해당 심볼의 모든 주문 자동 취소
+  → 수동/자동 청산 모두 적용
+  → 모든 유저에 대해 동시 처리
+🔄 <b>동기화된 거래 실행</b>
+  → TradingView 시그널을 모든 유저에게 전파
+  → 각 유저의 잔고에 맞게 수량 자동 조정
+  → 레버리지 독립 관리
 
-<b>🎯 v8.6 Enhanced - AI 물타기 시스템:</b>
-💪 <b>AI 물타기 기능</b>
-  → 손실 구간에서 강력한 반전 신호 포착 시 추가 진입
-  → 잔여 마진의 5~30% 투입 (확신도/승률 기반)
-  → 평균 진입가 개선으로 수익 전환 가능성 향상
-  → AI 판단: 유지/부분청산/전체청산/물타기 (4가지)
+<b>📊 v6.1 기능 (모두 유지):</b>
 
-<b>✅ v8.5 Fixed - 청산 감지 완벽 해결:</b>
-🔥 <b>신규 포지션 30초 보호</b>
-  → 포지션 진입 시간 추적 시스템
-  → API 지연으로 인한 오감지 완벽 차단
-  → 바이낸스 API 3회 재시도 로직
-
-<b>📊 v7.0 Multi-User 기능 (유지):</b>
-👥 다중 유저 동시 거래
-🗑️ TP/SL 자동 삭제
-🔄 동기화된 거래 실행
+<b>🔥 v6.1 적절한 리스크 관리 개선사항:</b>
+💡 <b>균형잡힌 TP/SL 설정</b>
+  → TP: 최대 7% (권장 3.0-4.0%)
+  → SL: 최대 2% (권장 0.8-2.0%)
+  → 리스크와 수익의 균형
+🚨 <b>스마트한 포지션 종료 기준</b>
+  → 1.5% 이상 수익 시 종료 신호 강화
+  → 최고점 대비 30% 하락 시 수익 보호
+  → 과열 구간 기준 RSI 70/30
+🔧 <b>JSON 파싱 오류 자동 복구</b>
+  → 최소 정보(심볼/액션)로 거래 가능
+  → AI가 TP/SL 및 수량 자동 설정
+  → 긴급 모드에서도 균형잡힌 파라미터 적용
 
 <b>📊 v6.0 핵심 기능 (유지):</b>
 🎯 과매수/과매도 멀티 타임프레임 필터링
+  → 진입 조건 강화: 1시간/4시간봉 과열 구간 자동 차단
+  → 리스크 점수 기반 진입 승인/거부
 💡 매물대 기반 TP/SL 자동 조정
-🚨 추세 역전 조기 신호 감지
+  → 거래량 프로파일 분석으로 현실적 목표가 설정
+  → 지지/저항선 고려한 손절가 최적화
+  → ATR 기반 최소/최대 거리 보장
+🚨 추세 역전 조기 신호 감지 시스템
+  → Divergence, MACD, ADX, CMF 종합 분석
+  → 역전 점수 기반 긴급도 자동 판단
+  → AI 모니터링에 실시간 통합
+
+<b>📊 기존 v5.1 기능 (모두 유지):</b>
+✨ 수동 포지션 자동 감지 및 AI 모니터링
+✨ 포지션 타입 구분 (자동/수동)
+✨ DB 기록 개선 (position_type)
+✅ 마진 부족 100% 방지
+✅ Free Balance 기반 자동 포지션 크기 조정
+✅ 대시보드 완벽 호환
 
 <b>⚙️ 서버 정보:</b>
-<b>서버 포트:</b> {SERVER_PORT}
+<b>서버 포트:</b> {SERVER_PORT} (Multi-User)
 <b>활성 유저:</b> {len(exchanges)}명
 <b>활성 심볼:</b> {len(enabled_symbols)}개
 <b>AI 검증:</b> {len(ai_symbols)}개 심볼
 <b>AI 모니터링:</b> {len(ai_monitor_symbols)}개 심볼
+<b>모니터링 주기:</b> {AI_MONITOR_INTERVAL}분
 <b>현재 포지션:</b> {len(current_positions)}개
   - 🤖 자동: {auto_count}개
   - 🔧 수동: {manual_count}개{position_info}
 
 ✅ 시스템이 정상적으로 시작되었습니다.
-⚡ WebSocket 실시간 감지 활성화
-🔍 백업 폴링 시스템 활성화 (10초, 30초 신규 보호)
-💰 바이낸스 실제 PnL 동기화 활성화
-📊 실시간 대시보드 연동 준비 완료
-🔄 거래소 포지션 자동 동기화 활성화 (v7 방식)
-📊 서버 재시작 시 포지션 자동 복구 (v7 방식)
+🎯 과매수/과매도 필터 활성화
+💡 TP/SL 자동 조정 활성화
+🚨 조기 종료 신호 감지 활성화
+🤖 AI 포지션 모니터링 활성화
+🔧 수동 포지션 자동 감지 활성화
+🔄 거래소 포지션 자동 동기화 활성화
+📊 서버 재시작 시 포지션 자동 복구
 💾 주기적 데이터 기록 활성화 (5분)
-🎯 AI 물타기 시스템 활성화
-🎯 모든 기존 기능 100% 유지
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """.strip()

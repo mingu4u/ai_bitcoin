@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """
-Public Dashboard v8.9.1 Complete - AI 물타기 + 수동 모니터링 에러 해결
+Public Dashboard v8.9.2 - v7 Base + AI 물타기 완벽 통합
 =======================================================
-v8.9.1: AI 모니터링 강제 실행 에러 해결 + AI 물타기 기능 통합
+v8.9.2: v7 안정성 + v8 물타기 기능 완벽 통합
 
 주요 기능:
-1. 🔥 Exchange 연결 문제 해결 (v7.2)
-2. 📊 다중 기간 성과 분석 (v6)
-3. 📈 심볼별 수익 분석 (v6)
-4. 🎯 상세한 그래프와 통계 (v6)
-5. ⚡ 실시간 업데이트 (v7)
-6. 🤖 AI 모니터링 탭 재구현 (v7.4)
-7. 📊 Symbol Analytics 완전 구현 (v7.4)
-8. 🧠 AI Reflection 복원 및 개선 (v7.5)
-9. 💪 AI 물타기 시스템 통합 (v8.9)
-10. 🔧 수동 AI 모니터링 에러 해결 (v8.9.1)
+1. 🔥 v7 안정적인 청산 감지 로직 기반
+2. 📊 다중 기간 성과 분석
+3. 📈 심볼별 수익 분석
+4. 🎯 상세한 그래프와 통계
+5. ⚡ 실시간 업데이트
+6. 🤖 AI 모니터링 탭 (v7 로직)
+7. 📊 Symbol Analytics 완전 구현
+8. 🧠 AI Reflection 복원 및 개선
+9. 💪 AI 물타기 시스템 완벽 통합 (v8.9.2)
+10. 📈 물타기 상세 정보 표시 (margin %, win rate)
+
+v8.9.2 업데이트 (2025-11-24):
+- v7 COMPLETE FIXED 기반 봇과 완벽 호환
+- 물타기 수량(margin %), 예상 승률(win rate) 표시
+- 청산 감지 문제 완전 해결
+- 안정적인 AI 모니터링 표시
 
 작성일: 2025-11-24
 """
@@ -39,7 +45,7 @@ load_dotenv()
 
 # 페이지 설정
 st.set_page_config(
-    page_title="Trading Dashboard v8.9.1",
+    page_title="Trading Dashboard v8.9.2",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -412,14 +418,14 @@ def get_equity_history(current_balance, days=None, lifetime_start_balance=None):
 # ==========================================
 
 def main():
-    st.markdown('<h1 class="main-header">⚡ Automated Trading Dashboard v8.9 + AI 물타기</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">⚡ Trading Dashboard v8.9.2 (V7 Base + AI 물타기)</h1>', unsafe_allow_html=True)
     
     # Realtime Badge
     col1, col2, col3 = st.columns([1.5, 1, 1.5])
     with col2:
         st.markdown('<div class="realtime-badge">🔴 LIVE TRADING</div>', unsafe_allow_html=True)
     with col3:
-        st.markdown('<div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 0.5rem 1rem; border-radius: 20px; font-size: 0.9rem; font-weight: bold; display: inline-block; text-align: center;">💪 AI 물타기 활성</div>', unsafe_allow_html=True)
+        st.markdown('<div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); color: white; padding: 0.5rem 1rem; border-radius: 20px; font-size: 0.9rem; font-weight: bold; display: inline-block; text-align: center;">💪 v7 안정성 + AI 물타기</div>', unsafe_allow_html=True)
     
     # Exchange 초기화 (Session State 활용)
     if 'exchange' not in st.session_state:
@@ -1531,6 +1537,9 @@ def main():
                     confidence,
                     reason,
                     current_price as price,
+                    percentage,
+                    add_position_margin_percent,
+                    expected_win_rate,
                     CASE 
                         WHEN trade_type = 'MANUAL_ENTRY' THEN '🔧 Manual'
                         WHEN reason LIKE '%Manual position%' THEN '🔧 Manual'
@@ -1565,9 +1574,37 @@ def main():
                     ai_df['confidence'] = ai_df['confidence'].apply(lambda x: f"{x:.1f}%")
                     ai_df['price'] = ai_df['price'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
                     
+                    # 물타기 상세 정보 포맷팅 (v8.9.2)
+                    def format_add_position_info(row):
+                        """물타기일 때 상세 정보 표시"""
+                        if row['ai_decision'] == 'add_position':
+                            margin = row['add_position_margin_percent']
+                            win_rate = row['expected_win_rate']
+                            if pd.notna(margin) and pd.notna(win_rate):
+                                return f"💪 {margin}% (승률 {win_rate*100:.0f}%)"
+                            elif pd.notna(margin):
+                                return f"💪 {margin}%"
+                        return ""
+                    
+                    ai_df['add_info'] = ai_df.apply(format_add_position_info, axis=1)
+                    
                     # 컬럼 순서 조정
                     display_columns = ['timestamp', 'position_type', 'symbol', 'decision_icon', 
-                                     'confidence', 'price', 'reason']
+                                     'confidence', 'price', 'add_info', 'reason']
+                    
+                    # 컬럼명 변경
+                    ai_df.rename(columns={
+                        'timestamp': '시간',
+                        'position_type': '타입',
+                        'symbol': '심볼',
+                        'decision_icon': '결정',
+                        'confidence': '신뢰도',
+                        'price': '가격',
+                        'add_info': '물타기 정보',
+                        'reason': '이유'
+                    }, inplace=True)
+                    
+                    display_columns = ['시간', '타입', '심볼', '결정', '신뢰도', '가격', '물타기 정보', '이유']
                     
                     st.dataframe(
                         ai_df[display_columns],
@@ -1643,41 +1680,48 @@ def main():
             - 긴급도에 따라 자동/수동 처리
             """)
         
-        # 💪 AI 물타기 시스템 설명 (v8.9 신규)
+        # 💪 AI 물타기 시스템 설명 (v8.9.2)
         st.markdown("---")
-        st.subheader("💪 AI 물타기 시스템 (v8.9)")
+        st.subheader("💪 AI 물타기 시스템 (v8.9.2 - v7 Base)")
         
-        with st.expander("📖 물타기 시스템 상세 정보", expanded=False):
+        with st.expander("📖 물타기 시스템 상세 정보 (v8.9.2 개선)", expanded=False):
             col_add1, col_add2 = st.columns(2)
             
             with col_add1:
                 st.markdown("""
-                **🎯 물타기 실행 조건:**
+                **🎯 물타기 실행 조건 (v8.9.2):**
                 
                 AI가 다음 조건을 **모두** 만족할 때만 물타기를 제안합니다:
                 
-                1. **강력한 반전 신호 감지**
-                   - 기술적 지표가 명확한 반전 신호
-                   - 과매도/과매수 구간에서 반전 징후
+                1. **현재 손실 구간 (-5% ~ -15%)**
+                   - 너무 이른 물타기 방지 (< -5%)
+                   - 과도한 손실 방지 (> -15%)
                 
-                2. **충분한 잔여 마진**
+                2. **강력한 반전 신호 감지**
+                   - RSI 과매도/과매수 + 반전
+                   - MACD 교차 신호
+                   - 볼린저 밴드 반등
+                   - 다중 타임프레임 확인
+                
+                3. **충분한 잔여 마진 (≥20%)**
                    - 현재 마진의 20% 이상 여유
                    - 물타기 후에도 안전 마진 확보
                 
-                3. **높은 예상 승률**
+                4. **높은 AI 신뢰도 (≥70%)**
                    - AI 분석 신뢰도 70% 이상
                    - 예상 승률 60% 이상
+                   - 다중 지표 확인
                 
-                4. **적절한 손실 구간**
-                   - 현재 손실이 -5% ~ -15% 범위
-                   - 너무 큰 손실은 물타기 제외
+                5. **노출 제한**
+                   - 동일 포지션 물타기 2회 이하
+                   - 과도한 평단가 낮추기 방지
                 """)
             
             with col_add2:
                 st.markdown("""
-                **💰 물타기 수량 결정:**
+                **💰 물타기 수량 결정 (v8.9.2):**
                 
-                AI 확신도에 따라 자동 조절됩니다:
+                AI 신뢰도에 따라 자동 조절됩니다:
                 
                 - **매우 높은 확신 (90%+)**
                   → 잔여 마진의 20-30% 사용
@@ -1688,22 +1732,24 @@ def main():
                 - **중간 확신 (70-80%)**
                   → 잔여 마진의 10-15% 사용
                 
-                - **낮은 확신 (70% 미만)**
+                - **낮은 확신 (<70%)**
                   → 잔여 마진의 5-10% 또는 물타기 안함
                 
                 **⚠️ 물타기 금지 조건:**
-                - 잔여 마진 20% 미만
-                - 승률 예상치 60% 미만
-                - 이미 2회 이상 물타기한 포지션
-                - 손실이 -15% 초과
+                - ❌ 잔여 마진 < 20%
+                - ❌ 예상 승률 < 60%
+                - ❌ 이미 2회 이상 물타기
+                - ❌ 손실 > -15%
+                - ❌ 약한 반전 신호
                 """)
         
         st.success("""
-        💡 **물타기 시스템의 장점:**
-        - 손실 구간에서 평균 단가 개선
-        - AI의 체계적 분석으로 리스크 관리
-        - 자동화된 수량 조절로 과도한 노출 방지
-        - 실시간 시장 분석으로 최적 타이밍 포착
+        💡 **v8.9.2 물타기 시스템 특징:**
+        - ✅ v7 안정성: 청산 감지 문제 완전 해결
+        - ✅ 체계적 리스크 관리: 조건 기반 자동 판단
+        - ✅ 투명한 의사결정: margin %, 예상 승률 표시
+        - ✅ 손실 구간 최적화: -5% ~ -15% 범위에서만 실행
+        - ✅ 다중 안전장치: 여러 금지 조건으로 과도한 노출 방지
         """)
     
     # ==========================================
