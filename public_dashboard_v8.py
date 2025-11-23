@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Public Dashboard v8.9 Complete - AI 물타기 기능 추가
+Public Dashboard v8.9.1 Complete - AI 물타기 + 수동 모니터링 에러 해결
 =======================================================
-v8.9: AI 물타기 기능 통합 + v7의 모든 기능 유지
+v8.9.1: AI 모니터링 강제 실행 에러 해결 + AI 물타기 기능 통합
 
 주요 기능:
 1. 🔥 Exchange 연결 문제 해결 (v7.2)
@@ -14,6 +14,7 @@ v8.9: AI 물타기 기능 통합 + v7의 모든 기능 유지
 7. 📊 Symbol Analytics 완전 구현 (v7.4)
 8. 🧠 AI Reflection 복원 및 개선 (v7.5)
 9. 💪 AI 물타기 시스템 통합 (v8.9)
+10. 🔧 수동 AI 모니터링 에러 해결 (v8.9.1)
 
 작성일: 2025-11-24
 """
@@ -38,7 +39,7 @@ load_dotenv()
 
 # 페이지 설정
 st.set_page_config(
-    page_title="Trading Dashboard v8.9",
+    page_title="Trading Dashboard v8.9.1",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1440,27 +1441,72 @@ def main():
         with col_btn1:
             if st.button("🚀 즉시 AI 모니터링 실행", type="primary"):
                 try:
-                    response = requests.post(f'{TRADING_BOT_URL}/ai-monitor/force', timeout=30)
+                    with st.spinner("AI 모니터링 실행 중..."):
+                        response = requests.post(f'{TRADING_BOT_URL}/ai-monitor/force', timeout=30)
                     
                     if response.status_code == 200:
                         result = response.json()
-                        st.success(f"✅ AI 모니터링 완료: {result.get('positions_monitored', 0)}개 포지션 분석")
-                        if result.get('exit_decisions'):
-                            st.warning(f"⚠️ {len(result['exit_decisions'])}개 청산 결정 발생")
+                        status = result.get('status', 'unknown')
+                        
+                        if status == 'success':
+                            # 성공: 포지션 모니터링 완료
+                            positions_monitored = result.get('positions_monitored', 0)
+                            total_positions = result.get('total_positions', 0)
+                            auto_positions = result.get('auto_positions', 0)
+                            manual_positions = result.get('manual_positions', 0)
                             
-                            # 청산 결정 상세 표시
-                            for decision in result['exit_decisions']:
-                                symbol = decision.get('symbol', 'N/A')
-                                dec = decision.get('decision', {})
-                                st.info(f"📊 {symbol}: {dec.get('decision', 'N/A')} - {dec.get('reason', 'N/A')}")
+                            st.success(
+                                f"✅ AI 모니터링 완료!\n\n"
+                                f"📊 총 {total_positions}개 포지션 (🤖 자동: {auto_positions}, 🔧 수동: {manual_positions})\n"
+                                f"🔍 {positions_monitored}개 분석 완료"
+                            )
+                            
+                            # 청산 결정이 있는 경우
+                            if result.get('exit_decisions'):
+                                st.warning(f"⚠️ {len(result['exit_decisions'])}개 청산 결정 발생")
+                                
+                                # 청산 결정 상세 표시
+                                for decision in result['exit_decisions']:
+                                    symbol = decision.get('symbol', 'N/A')
+                                    decision_type = decision.get('decision', 'N/A')
+                                    reason = decision.get('reason', 'N/A')
+                                    st.info(f"📊 {symbol}: {decision_type} - {reason}")
+                        
+                        elif status == 'info':
+                            # 정보: 포지션 없음 (에러 아님)
+                            message = result.get('message', 'No positions found')
+                            st.info(
+                                f"ℹ️ {message}\n\n"
+                                f"💡 현재 바이낸스에 활성 포지션이 없습니다.\n"
+                                f"포지션 진입 후 다시 시도해주세요."
+                            )
+                        
+                        else:
+                            st.warning(f"⚠️ 알 수 없는 상태: {status}")
+                        
                         st.rerun()
+                    
+                    elif response.status_code == 500:
+                        # 서버 내부 오류
+                        error_data = response.json()
+                        st.error(f"❌ 서버 오류: {error_data.get('message', 'Unknown error')}")
+                    
                     else:
-                        st.error(f"❌ 오류: {response.text}")
+                        # 기타 오류
+                        st.error(f"❌ 오류 (HTTP {response.status_code}): {response.text}")
                         
                 except requests.exceptions.ConnectionError:
-                    st.error("❌ 봇 서버에 연결할 수 없습니다.")
+                    st.error(
+                        "❌ 봇 서버에 연결할 수 없습니다.\n\n"
+                        "💡 봇이 실행 중인지 확인해주세요.\n"
+                        "```bash\n"
+                        "ps aux | grep integrated_trading_system\n"
+                        "```"
+                    )
+                except requests.exceptions.Timeout:
+                    st.error("❌ 요청 시간 초과 (30초). 봇이 응답하지 않습니다.")
                 except Exception as e:
-                    st.error(f"❌ 에러: {str(e)}")
+                    st.error(f"❌ 예상치 못한 에러: {str(e)}")
         
         with col_btn2:
             if st.button("🔄 새로고침"):

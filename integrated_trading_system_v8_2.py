@@ -1,8 +1,15 @@
 """
-Integrated Trading System v8.9 Final Fix (v7 Method)
+Integrated Trading System v8.9.1 Complete (v7 Method + Fixed)
 ================================================
 자동매매봇 - 다중 유저 지원, AI 검증/모니터링 통합 버전
-🔥🔥🔥 v7 방식 완전 적용 - 중복 청산 감지 완전 제거!
+🔥🔥🔥 v7 방식 완전 적용 + 수동 AI 모니터링 에러 해결!
+
+v8.9.1 Complete (2025-11-24):
+- 🔥 /ai-monitor/force 엔드포인트 수정 (v7 방식)
+- 🔥 먼저 sync_positions_from_exchange() 호출
+- 🔥 "No positions to monitor" 에러 해결
+- ✅ 수동 포지션 AI 모니터링 보장
+- ✅ 봇 시작 전 포지션도 정상 감지
 
 v8.9 Final Fix - v7 Method (2025-11-24):
 - 🔥🔥🔥 근본 원인 해결: AI 모니터링 루프의 중복 청산 감지 제거!
@@ -16,20 +23,12 @@ v8.9 Final Fix - v7 Method (2025-11-24):
 핵심 차이점:
 - v8.8 이하: sync + AI 루프에서 또 조회 → 중복 청산 감지 ❌
 - v8.9 (v7 방식): sync만 포지션 동기화 담당 → 청산 감지 안정 ✅
+- v8.9.1: + /ai-monitor/force 엔드포인트 수정 ✅
 
 v8.8 Perfect Fix Ultimate (2025-11-24):
 - 🔥 sync_positions_from_exchange 청산 감지 문제 해결
 - 🔥 봇 시작 후 10분: 기존 포지션 보호
 - 🔥 신규 포지션 30초: 진입 직후 보호 기간
-
-v8.7 Enhanced Perfect Fix (2025-11-23):
-- 🔥 AI 모니터링 루프 청산 감지 문제 해결
-- 🔥 개별 심볼 조회 (v7 방식)
-- 🔥 재시도 로직
-
-v8.6 Enhanced Fixed (2025-11-23):
-- 🔥 v7 방식 포지션 감지 적용
-- 🎯 AI 물타기 기능 유지
 
 v8.6 Enhanced 주요 신규 기능:
 - 🎯 AI 물타기 기능 추가
@@ -6168,20 +6167,53 @@ def monitor_status():
 
 @app.route('/ai-monitor/force', methods=['POST'])
 def force_monitor():
-    """즉시 AI 모니터링 실행"""
-    if not current_positions:
+    """
+    즉시 AI 모니터링 실행
+    🔥 v8.9.1 Fixed: v7 방식 - 먼저 sync로 포지션 동기화
+    """
+    try:
+        logger.info("=== 수동 AI 모니터링 요청 ===")
+        
+        # 🔥 v8.9.1 Fixed: v7 방식 - 먼저 거래소와 동기화!
+        sync_count = sync_positions_from_exchange()
+        logger.info(f"🔄 포지션 동기화 완료: {sync_count}개")
+        
+        # 동기화 후에 포지션 체크
+        if not current_positions:
+            logger.warning("⚠️ 동기화 후에도 포지션 없음")
+            return jsonify({
+                'status': 'info',
+                'message': 'No positions found after sync',
+                'positions_monitored': 0,
+                'exit_decisions': []
+            }), 200  # 200 OK로 변경 (에러 아님)
+        
+        # 포지션 타입별 카운트
+        auto_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'auto')
+        manual_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'manual')
+        
+        logger.info(f"📊 모니터링 대상: 총 {len(current_positions)}개 (자동: {auto_count}, 수동: {manual_count})")
+        
+        # AI 모니터링 실행
+        monitored, exits = ai_monitoring_cycle()
+        
+        logger.info(f"✅ 수동 AI 모니터링 완료: {monitored}개 분석, {len(exits)}개 청산 결정")
+        
+        return jsonify({
+            'status': 'success',
+            'positions_monitored': monitored,
+            'exit_decisions': exits,
+            'total_positions': len(current_positions),
+            'auto_positions': auto_count,
+            'manual_positions': manual_count
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"❌ 수동 AI 모니터링 오류: {str(e)}", exc_info=True)
         return jsonify({
             'status': 'error',
-            'message': 'No positions to monitor'
-        }), 400
-    
-    monitored, exits = ai_monitoring_cycle()
-    
-    return jsonify({
-        'status': 'success',
-        'positions_monitored': monitored,
-        'exit_decisions': exits
-    }), 200
+            'message': f'Monitoring error: {str(e)}'
+        }), 500
 
 @app.route('/status', methods=['GET'])
 def status():
