@@ -1065,8 +1065,7 @@ def main():
                 pnl_percent,
                 holding_time_minutes,
                 close_reason,
-                position_type,
-                realized_pnl_binance
+                position_type
             FROM completed_trades
             {where_clause}
             ORDER BY close_timestamp DESC
@@ -1106,15 +1105,15 @@ def main():
                     lambda x: f"{int(x/60)}h {int(x%60)}m" if x >= 60 else f"{int(x)}m"
                 )
                 
-                # Binance 확인 표시
-                df_trades['verified'] = df_trades['realized_pnl_binance'].apply(
-                    lambda x: '✅' if pd.notna(x) else '📊'
+                # 포지션 타입 표시
+                df_trades['type_icon'] = df_trades['position_type'].apply(
+                    lambda x: '🤖' if x == 'auto' else '🔧' if x == 'manual' else '❓'
                 )
                 
                 # 컬럼 선택 및 표시
-                display_columns = ['close_timestamp', 'symbol', 'side', 'entry_price', 
+                display_columns = ['close_timestamp', 'type_icon', 'symbol', 'side', 'entry_price', 
                                  'exit_price', 'pnl_usdt', 'pnl_percent', 'holding_time', 
-                                 'close_reason', 'verified']
+                                 'close_reason']
                 
                 st.dataframe(
                     df_trades[display_columns],
@@ -1529,36 +1528,78 @@ def main():
             try:
                 conn = sqlite3.connect('integrated_trades.db')
                 
-                ai_query = """
-                SELECT 
-                    timestamp,
-                    symbol,
-                    action as ai_decision,
-                    confidence,
-                    reason,
-                    current_price as price,
-                    percentage,
-                    add_position_margin_percent,
-                    expected_win_rate,
-                    CASE 
-                        WHEN trade_type = 'MANUAL_ENTRY' THEN '🔧 Manual'
-                        WHEN reason LIKE '%Manual position%' THEN '🔧 Manual'
-                        WHEN reason LIKE '%manual%' THEN '🔧 Manual'
-                        ELSE '🤖 Auto'
-                    END as position_type,
-                    CASE 
-                        WHEN action = 'close' THEN '🔴 Close'
-                        WHEN action = 'partial_close' THEN '🟠 Partial'
-                        WHEN action = 'hold' THEN '🟢 Hold'
-                        WHEN action = 'add_position' THEN '💪 Add (물타기)'
-                        ELSE action
-                    END as decision_icon
-                FROM trades
-                WHERE trade_type IN ('AI_MONITOR', 'MANUAL_ENTRY')
-                   OR (ai_decision IS NOT NULL AND ai_decision != '')
-                ORDER BY timestamp DESC
-                LIMIT 50
-                """
+                # 🔍 테이블 컬럼 확인 (v8.9.2 호환성)
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(trades)")
+                columns = [col[1] for col in cursor.fetchall()]
+                
+                # 물타기 관련 컬럼이 있는지 확인
+                has_add_position_fields = 'add_position_margin_percent' in columns and 'expected_win_rate' in columns
+                
+                if has_add_position_fields:
+                    # v8.9.2 봇 - 물타기 정보 포함
+                    ai_query = """
+                    SELECT 
+                        timestamp,
+                        symbol,
+                        action as ai_decision,
+                        confidence,
+                        reason,
+                        current_price as price,
+                        percentage,
+                        add_position_margin_percent,
+                        expected_win_rate,
+                        CASE 
+                            WHEN trade_type = 'MANUAL_ENTRY' THEN '🔧 Manual'
+                            WHEN reason LIKE '%Manual position%' THEN '🔧 Manual'
+                            WHEN reason LIKE '%manual%' THEN '🔧 Manual'
+                            ELSE '🤖 Auto'
+                        END as position_type,
+                        CASE 
+                            WHEN action = 'close' THEN '🔴 Close'
+                            WHEN action = 'partial_close' THEN '🟠 Partial'
+                            WHEN action = 'hold' THEN '🟢 Hold'
+                            WHEN action = 'add_position' THEN '💪 Add (물타기)'
+                            ELSE action
+                        END as decision_icon
+                    FROM trades
+                    WHERE trade_type IN ('AI_MONITOR', 'MANUAL_ENTRY')
+                       OR (ai_decision IS NOT NULL AND ai_decision != '')
+                    ORDER BY timestamp DESC
+                    LIMIT 50
+                    """
+                else:
+                    # 이전 버전 봇 - 물타기 정보 없음
+                    ai_query = """
+                    SELECT 
+                        timestamp,
+                        symbol,
+                        action as ai_decision,
+                        confidence,
+                        reason,
+                        current_price as price,
+                        percentage,
+                        NULL as add_position_margin_percent,
+                        NULL as expected_win_rate,
+                        CASE 
+                            WHEN trade_type = 'MANUAL_ENTRY' THEN '🔧 Manual'
+                            WHEN reason LIKE '%Manual position%' THEN '🔧 Manual'
+                            WHEN reason LIKE '%manual%' THEN '🔧 Manual'
+                            ELSE '🤖 Auto'
+                        END as position_type,
+                        CASE 
+                            WHEN action = 'close' THEN '🔴 Close'
+                            WHEN action = 'partial_close' THEN '🟠 Partial'
+                            WHEN action = 'hold' THEN '🟢 Hold'
+                            WHEN action = 'add_position' THEN '💪 Add (물타기)'
+                            ELSE action
+                        END as decision_icon
+                    FROM trades
+                    WHERE trade_type IN ('AI_MONITOR', 'MANUAL_ENTRY')
+                       OR (ai_decision IS NOT NULL AND ai_decision != '')
+                    ORDER BY timestamp DESC
+                    LIMIT 50
+                    """
                 
                 ai_df = pd.read_sql_query(ai_query, conn)
                 
