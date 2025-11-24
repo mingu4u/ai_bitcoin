@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Public Dashboard v8.3.9.2 - v7 Base + AI 물타기 완벽 통합
-=======================================================
-v8.9.2: v7 안정성 + v8 물타기 기능 완벽 통합
+Public Dashboard v8.9.3 - 늦은 진입 방지 + 유동적 물타기 통합
+============================================================
+v8.9.3: v8.3 Base + Late Entry Prevention + Flexible Averaging
 
 주요 기능:
 1. 🔥 v7 안정적인 청산 감지 로직 기반
@@ -13,16 +13,19 @@ v8.9.2: v7 안정성 + v8 물타기 기능 완벽 통합
 6. 🤖 AI 모니터링 탭 (v7 로직)
 7. 📊 Symbol Analytics 완전 구현
 8. 🧠 AI Reflection 복원 및 개선
-9. 💪 AI 물타기 시스템 완벽 통합 (v8.9.2)
-10. 📈 물타기 상세 정보 표시 (margin %, win rate)
+9. 💪 AI 물타기 시스템 완벽 통합 (v8.9.3)
+10. 🕐 늦은 진입 방지 시스템 (v8.9.3 신규)
+11. 💰 유동적 물타기 금액 계산 (v8.9.3 신규)
 
-v8.9.2 업데이트 (2025-11-24):
-- v7 COMPLETE FIXED 기반 봇과 완벽 호환
-- 물타기 수량(margin %), 예상 승률(win rate) 표시
-- 청산 감지 문제 완전 해결
-- 안정적인 AI 모니터링 표시
+v8.9.3 업데이트 (2025-11-25):
+- 🕐 늦은 진입 방지 (Late Entry Prevention) 표시
+  → 5분봉 과열 체크, 진입 비율 조정
+- 💰 물타기 조건 완화 + 유동적 금액
+  → 손실구간 -3%~-20%, 신뢰도 40%+, 마진 12%+
+- 📊 승률/수익률 보호 전략 강화
+- v8.3 COMPLETE FIXED 기반 봇과 완벽 호환
 
-작성일: 2025-11-24
+작성일: 2025-11-25
 """
 
 import streamlit as st
@@ -45,7 +48,7 @@ load_dotenv()
 
 # 페이지 설정
 st.set_page_config(
-    page_title="Trading Dashboard v8.9.2",
+    page_title="Trading Dashboard v8.9.3",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -1675,7 +1678,7 @@ def main():
     # Tab 5: AI Monitoring (v7.4 신규)
     # ==========================================
     with tab5:
-        st.header("🤖 AI Monitoring Status v8.3")
+        st.header("🤖 AI Monitoring Status v8.9.3")
         
         # AI 모니터링 즉시 실행
         col_btn1, col_btn2, col_btn3 = st.columns([1, 1, 2])
@@ -1765,16 +1768,18 @@ def main():
             try:
                 conn = sqlite3.connect('integrated_trades.db')
                 
-                # 🔍 테이블 컬럼 확인 (v8.9.2 호환성)
+                # 🔍 테이블 컬럼 확인 (v8.9.3 호환성)
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(trades)")
                 columns = [col[1] for col in cursor.fetchall()]
                 
                 # 물타기 관련 컬럼이 있는지 확인
                 has_add_position_fields = 'add_position_margin_percent' in columns and 'expected_win_rate' in columns
+                # v8.9.3 늦은 진입 관련 컬럼 확인
+                has_late_entry_fields = 'late_entry_severity' in columns or 'adjusted_size_ratio' in columns
                 
                 if has_add_position_fields:
-                    # v8.9.2 봇 - 물타기 정보 포함
+                    # v8.9.3 봇 - 물타기 정보 + 늦은 진입 정보 포함
                     ai_query = """
                     SELECT 
                         timestamp,
@@ -1797,10 +1802,18 @@ def main():
                             WHEN action = 'partial_close' THEN '🟠 Partial'
                             WHEN action = 'hold' THEN '🟢 Hold'
                             WHEN action = 'add_position' THEN '💪 Add (물타기)'
+                            WHEN ai_decision = 'reject' AND reason LIKE '%늦은 진입%' THEN '🕐 Late Entry Reject'
                             ELSE action
-                        END as decision_icon
+                        END as decision_icon,
+                        CASE
+                            WHEN reason LIKE '%늦은 진입%' THEN '🕐'
+                            WHEN reason LIKE '%severe%' THEN '🔴'
+                            WHEN reason LIKE '%moderate%' THEN '🟠'
+                            WHEN reason LIKE '%mild%' THEN '🟡'
+                            ELSE ''
+                        END as late_entry_icon
                     FROM trades
-                    WHERE trade_type IN ('AI_MONITOR', 'MANUAL_ENTRY')
+                    WHERE trade_type IN ('AI_MONITOR', 'MANUAL_ENTRY', 'AI_VALIDATION')
                        OR (ai_decision IS NOT NULL AND ai_decision != '')
                     ORDER BY timestamp DESC
                     LIMIT 50
@@ -1830,9 +1843,10 @@ def main():
                             WHEN action = 'hold' THEN '🟢 Hold'
                             WHEN action = 'add_position' THEN '💪 Add (물타기)'
                             ELSE action
-                        END as decision_icon
+                        END as decision_icon,
+                        '' as late_entry_icon
                     FROM trades
-                    WHERE trade_type IN ('AI_MONITOR', 'MANUAL_ENTRY')
+                    WHERE trade_type IN ('AI_MONITOR', 'MANUAL_ENTRY', 'AI_VALIDATION')
                        OR (ai_decision IS NOT NULL AND ai_decision != '')
                     ORDER BY timestamp DESC
                     LIMIT 50
@@ -1852,7 +1866,7 @@ def main():
                     ai_df['confidence'] = ai_df['confidence'].apply(lambda x: f"{x:.1f}%")
                     ai_df['price'] = ai_df['price'].apply(lambda x: f"${x:,.2f}" if pd.notna(x) else "")
                     
-                    # 물타기 상세 정보 포맷팅 (v8.9.2)
+                    # 물타기 상세 정보 포맷팅 (v8.9.3)
                     def format_add_position_info(row):
                         """물타기일 때 상세 정보 표시"""
                         if row['ai_decision'] == 'add_position':
@@ -1866,9 +1880,27 @@ def main():
                     
                     ai_df['add_info'] = ai_df.apply(format_add_position_info, axis=1)
                     
-                    # 컬럼 순서 조정
+                    # 늦은 진입 정보 (v8.9.3)
+                    def format_late_entry_info(row):
+                        """늦은 진입 관련 정보 표시"""
+                        reason = row['reason'] if pd.notna(row['reason']) else ""
+                        if '늦은 진입' in reason or 'Late Entry' in reason:
+                            # reason에서 비율 추출 시도
+                            if 'severe' in reason.lower():
+                                return '🔴 Severe'
+                            elif 'moderate' in reason.lower():
+                                return '🟠 Moderate'
+                            elif 'mild' in reason.lower():
+                                return '🟡 Mild'
+                            else:
+                                return '🕐 Detected'
+                        return ""
+                    
+                    ai_df['late_entry'] = ai_df.apply(format_late_entry_info, axis=1)
+                    
+                    # 컬럼 순서 조정 (늦은 진입 정보 추가)
                     display_columns = ['timestamp', 'position_type', 'symbol', 'decision_icon', 
-                                     'confidence', 'price', 'add_info', 'reason']
+                                     'confidence', 'price', 'add_info', 'late_entry', 'reason']
                     
                     # 컬럼명 변경
                     ai_df.rename(columns={
@@ -1878,11 +1910,12 @@ def main():
                         'decision_icon': '결정',
                         'confidence': '신뢰도',
                         'price': '가격',
-                        'add_info': '물타기 정보',
+                        'add_info': '물타기',
+                        'late_entry': '늦은진입',
                         'reason': '이유'
                     }, inplace=True)
                     
-                    display_columns = ['시간', '타입', '심볼', '결정', '신뢰도', '가격', '물타기 정보', '이유']
+                    display_columns = ['시간', '타입', '심볼', '결정', '신뢰도', '가격', '물타기', '늦은진입', '이유']
                     
                     st.dataframe(
                         ai_df[display_columns],
@@ -1903,16 +1936,17 @@ def main():
             try:
                 conn = sqlite3.connect('integrated_trades.db')
                 
-                # AI 통계 조회
+                # AI 통계 조회 (v8.9.3: 늦은 진입 거부 추가)
                 stats_query = """
                 SELECT 
                     COUNT(*) as total_monitors,
                     SUM(CASE WHEN action = 'close' THEN 1 ELSE 0 END) as close_decisions,
                     SUM(CASE WHEN action = 'hold' THEN 1 ELSE 0 END) as hold_decisions,
                     SUM(CASE WHEN action = 'add_position' THEN 1 ELSE 0 END) as add_decisions,
+                    SUM(CASE WHEN ai_decision = 'reject' AND reason LIKE '%늦은 진입%' THEN 1 ELSE 0 END) as late_entry_rejects,
                     AVG(confidence) * 100 as avg_confidence
                 FROM trades
-                WHERE trade_type = 'AI_MONITOR'
+                WHERE (trade_type = 'AI_MONITOR' OR trade_type = 'AI_VALIDATION')
                   AND timestamp >= datetime('now', '-24 hours')
                 """
                 
@@ -1923,7 +1957,8 @@ def main():
                     st.metric("🔴 청산 권고", stats[1] or 0)
                     st.metric("🟢 보유 권고", stats[2] or 0)
                     st.metric("💪 물타기 실행", stats[3] or 0)
-                    st.metric("🎯 평균 신뢰도", f"{stats[4]:.1f}%" if stats[4] else "N/A")
+                    st.metric("🕐 늦은진입 거부", stats[4] or 0)
+                    st.metric("🎯 평균 신뢰도", f"{stats[5]:.1f}%" if stats[5] else "N/A")
                 else:
                     st.info("24시간 내 모니터링 기록 없음")
                 
@@ -1934,7 +1969,7 @@ def main():
         
         # AI 모니터링 설정 정보
         st.markdown("---")
-        st.subheader("ℹ️ AI 모니터링 정보")
+        st.subheader("ℹ️ AI 모니터링 정보 v8.9.3")
         
         info_col1, info_col2 = st.columns(2)
         
@@ -1945,7 +1980,8 @@ def main():
             - 모든 포지션 분석 (기존/신규)
             - 기술적 지표 기반 판단
             - 위험 관리 자동화
-            - AI 물타기 시스템 통합 (v8.9)
+            - AI 물타기 시스템 통합 (v8.9.3)
+            - 🆕 늦은 진입 방지 시스템
             """)
         
         with info_col2:
@@ -1955,79 +1991,139 @@ def main():
             - 🟠 Partial: 부분 청산
             - 🔴 Close: 전체 청산
             - 💪 Add: 물타기 (추가 진입)
+            - 🕐 Late: 늦은 진입 거부
             - 긴급도에 따라 자동/수동 처리
             """)
         
-        # 💪 AI 물타기 시스템 설명 (v8.9.2)
+        # 💪 AI 물타기 시스템 설명 (v8.9.3)
         st.markdown("---")
-        st.subheader("💪 AI 물타기 시스템 (v8.9.2 - v7 Base)")
+        st.subheader("💪 AI 물타기 시스템 (v8.9.3 - 조건 완화 버전)")
         
-        with st.expander("📖 물타기 시스템 상세 정보 (v8.9.2 개선)", expanded=False):
+        with st.expander("📖 물타기 시스템 상세 정보 (v8.9.3 개선)", expanded=False):
             col_add1, col_add2 = st.columns(2)
             
             with col_add1:
                 st.markdown("""
-                **🎯 물타기 실행 조건 (v8.9.2):**
+                **🎯 물타기 실행 조건 (v8.9.3 완화):**
                 
-                AI가 다음 조건을 **모두** 만족할 때만 물타기를 제안합니다:
+                AI가 다음 조건을 **대부분** 만족할 때 물타기를 제안합니다:
                 
-                1. **현재 손실 구간 (-5% ~ -15%)**
-                   - 너무 이른 물타기 방지 (< -5%)
-                   - 과도한 손실 방지 (> -15%)
+                1. **현재 손실 구간 (-3% ~ -20%)** ✨완화
+                   - 조기 대응 가능 (-3%부터)
+                   - 최적 구간: -5% ~ -12%
+                   - 과도한 손실(-20%+)시 청산 검토
                 
-                2. **강력한 반전 신호 감지**
-                   - RSI 과매도/과매수 + 반전
-                   - MACD 교차 신호
-                   - 볼린저 밴드 반등
-                   - 다중 타임프레임 확인
+                2. **반전 신호 감지 (2개 이상)** ✨완화
+                   - RSI 반전 조짐
+                   - MACD 히스토그램 개선
+                   - 볼린저 밴드 근접
+                   - 1+ 타임프레임 확인
                 
-                3. **충분한 잔여 마진 (≥20%)**
-                   - 현재 마진의 20% 이상 여유
+                3. **충분한 잔여 마진 (≥12%)** ✨완화
+                   - 기존 20% → 12%로 완화
                    - 물타기 후에도 안전 마진 확보
                 
-                4. **높은 AI 신뢰도 (≥70%)**
-                   - AI 분석 신뢰도 70% 이상
-                   - 예상 승률 60% 이상
-                   - 다중 지표 확인
+                4. **AI 신뢰도 (≥40% 단계별)** ✨완화
+                   - Aggressive: 70%+ → 20-30%
+                   - Normal: 55%+ → 12-18%
+                   - Cautious: 40%+ → 6-10%
                 
-                5. **노출 제한**
-                   - 동일 포지션 물타기 2회 이하
-                   - 과도한 평단가 낮추기 방지
+                5. **노출 제한 (3회)** ✨완화
+                   - 기존 2회 → 3회로 증가
+                   - 소량씩 분할 진입
                 """)
             
             with col_add2:
                 st.markdown("""
-                **💰 물타기 수량 결정 (v8.9.2):**
+                **💰 유동적 물타기 금액 결정 (v8.9.3):**
                 
-                AI 신뢰도에 따라 자동 조절됩니다:
+                손실 깊이 + AI 신뢰도 + 반전 강도에 따라 자동 조절:
                 
-                - **매우 높은 확신 (90%+)**
-                  → 잔여 마진의 20-30% 사용
+                - **깊은 손실(-10%~-15%) + 높은 신뢰도(70%+)**
+                  → 잔여 마진의 15-25% 사용
                 
-                - **높은 확신 (80-90%)**
-                  → 잔여 마진의 15-20% 사용
+                - **중간 손실(-5%~-10%) + 높은 신뢰도(70%+)**
+                  → 잔여 마진의 12-20% 사용
                 
-                - **중간 확신 (70-80%)**
-                  → 잔여 마진의 10-15% 사용
+                - **중간 손실(-5%~-10%) + 중간 신뢰도(55-70%)**
+                  → 잔여 마진의 8-15% 사용
                 
-                - **낮은 확신 (<70%)**
-                  → 잔여 마진의 5-10% 또는 물타기 안함
+                - **모든 손실 + 낮은 신뢰도(40-55%)**
+                  → 잔여 마진의 5-10% 사용
                 
-                **⚠️ 물타기 금지 조건:**
-                - ❌ 잔여 마진 < 20%
-                - ❌ 예상 승률 < 60%
-                - ❌ 이미 2회 이상 물타기
-                - ❌ 손실 > -15%
-                - ❌ 약한 반전 신호
+                - **얕은 손실(-3%~-5%)**
+                  → 보수적으로 5-8% (첫 진입)
+                
+                **⚠️ 물타기 금지 조건 (v8.9.3):**
+                - ❌ 잔여 마진 < 12%
+                - ❌ 예상 승률 < 45%
+                - ❌ 이미 3회 이상 물타기
+                - ❌ 손실 > -20%
+                - ❌ 모든 타임프레임 반대
+                """)
+        
+        # 🕐 늦은 진입 방지 시스템 (v8.9.3 신규)
+        st.markdown("---")
+        st.subheader("🕐 늦은 진입 방지 시스템 (v8.9.3 신규)")
+        
+        with st.expander("📖 늦은 진입 방지 상세 정보", expanded=False):
+            col_late1, col_late2 = st.columns(2)
+            
+            with col_late1:
+                st.markdown("""
+                **🚨 늦은 진입 감지 기준:**
+                
+                상위 TF(1H, 4H)에서 신호가 좋아도 하위 TF(5m, 15m)에서
+                이미 과도한 움직임이 있으면 단기 되돌림 위험이 있습니다.
+                
+                **체크 항목:**
+                1. **5분봉 최근 30분 움직임**
+                   - 2%+ 급등/급락 → severe
+                   - 1.2%+ 상승/하락 → moderate
+                   - 0.7%+ 움직임 → mild
+                
+                2. **15분봉 최근 1시간 움직임**
+                   - 2.5%+ → 고점/저점 근접 가능
+                   - 1.5%+ → 주의 필요
+                
+                3. **5분봉 RSI 단기 과열**
+                   - RSI > 75 (롱) / RSI < 25 (숏) → severe
+                   - RSI > 68 / RSI < 32 → moderate
+                
+                4. **볼린저 밴드 위치**
+                   - BB 상단/하단 돌파 → 과열 경고
+                """)
+            
+            with col_late2:
+                st.markdown("""
+                **📊 조치 기준:**
+                
+                | 심각도 | 진입 비율 | 조치 |
+                |--------|-----------|------|
+                | severe (8+) | 0% | 진입 거부 |
+                | moderate (5-8) | 30% | 축소 진입 |
+                | mild (3-5) | 60% | 주의 진입 |
+                | none (<3) | 100% | 정상 진입 |
+                
+                **🎯 장점:**
+                - 상위 TF 좋은 신호도 하위 TF 과열시 보호
+                - 자동으로 진입 비율 조정
+                - 풀백 대기 시점 계산
+                - 승률 & 수익률 보호
+                
+                **💡 예시:**
+                > 1H/4H에서 롱 신호 감지
+                > 5분봉에서 이미 1.5% 상승 + RSI 72
+                > → "moderate" 판정 → 30%만 진입
                 """)
         
         st.success("""
-        💡 **v8.9.2 물타기 시스템 특징:**
-        - ✅ v7 안정성: 청산 감지 문제 완전 해결
-        - ✅ 체계적 리스크 관리: 조건 기반 자동 판단
-        - ✅ 투명한 의사결정: margin %, 예상 승률 표시
-        - ✅ 손실 구간 최적화: -5% ~ -15% 범위에서만 실행
-        - ✅ 다중 안전장치: 여러 금지 조건으로 과도한 노출 방지
+        💡 **v8.9.3 핵심 개선사항:**
+        - ✅ 물타기 조건 완화: 더 유연한 진입 기회
+        - ✅ 유동적 금액: 손실/신뢰도/반전강도 연동
+        - ✅ 늦은 진입 방지: 단기 과열 자동 체크
+        - ✅ 진입 비율 조정: 상황에 맞는 포지션 사이즈
+        - ✅ 승률 & 수익률 보호: 불리한 타이밍 회피
         """)
     
     # ==========================================
@@ -2527,7 +2623,8 @@ def main():
         st.markdown("---")
         
         # 정보
-        st.caption("Trading Dashboard v8.9 + AI 물타기 시스템")
+        st.caption("Trading Dashboard v8.9.3")
+        st.caption("🕐 늦은진입방지 + 💰 유동적물타기")
         st.caption("© 2025 Automated Trading System")
 
 if __name__ == "__main__":

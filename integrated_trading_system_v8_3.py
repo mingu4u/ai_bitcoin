@@ -1,29 +1,35 @@
 """
-Integrated Trading System v8.3 (V7 Base + Add Position)
-================================================
-자동매매봇 - v7의 안정적인 로직 + v8 물타기 기능
-🔥 청산 감지 문제 완전 해결: v7의 검증된 로직 사용
-💪 물타기 기능: v8의 AI 물타기 시스템 추가
+Integrated Trading System v8.9.3 (V8.3 Base + Late Entry Prevention + Flexible Averaging)
+===========================================================================================
+자동매매봇 - v8.3 기반 + 늦은 진입 방지 + 유동적 물타기
 
-v8.3 (2025-11-24):
+🔥 v8.9.3 핵심 개선사항 (2025-11-25):
+1. 🕐 늦은 진입 방지 (Late Entry Prevention)
+   - 5분봉 데이터 추가 분석
+   - 단기 과열 체크 (RSI, BB, 최근 움직임)
+   - 상위 TF vs 하위 TF 괴리 감지
+   - 진입 비율 자동 조정 (0~100%)
+   - severe 과열 시 진입 거부
+
+2. 💰 물타기 조건 완화 + 유동적 금액
+   - 손실 구간: -5%~-15% → -3%~-20%
+   - 신뢰도: 70% → 40% (단계별)
+   - 마진: 20% → 12%
+   - 횟수: 2회 → 3회
+   - 금액: 손실 깊이 + 신뢰도 + 반전강도 연동
+
+3. 📊 승률 & 수익률 보호 전략
+   - 상위 TF 신호 우선
+   - 하위 TF 과열 시 축소 진입
+   - 풀백 대기 권장 시스템
+
+v8.3 (2025-11-24) 기반:
 - 🔥 v7 COMPLETE FIXED 기반으로 재작성
 - 🔥 안정적인 sync_positions_from_exchange (v7)
 - 🔥 안정적인 ai_monitoring_cycle (v7)
 - 💪 AI 물타기 기능 추가 (v8)
 - ✅ 청산 감지 문제 완전 해결
 - ✅ 단순하고 명확한 로직
-
-v7 COMPLETE FIXED (Original):
-- 검증된 안정적인 AI 모니터링
-- 수동 포지션 자동 감지
-- 완벽한 포지션 동기화
-- 청산 감지 오류 없음
-
-v8 Add Position Feature:
-- 🎯 AI 물타기 기능
-- 🎯 물타기 수량: 잔여 마진의 5~30%
-- 🎯 AI 판단: 유지/부분청산/전체청산/물타기 (4가지)
-- 🎯 체계적 리스크 관리
 """
 
 from flask import Flask, request, jsonify
@@ -1332,6 +1338,419 @@ def check_overbought_oversold_multi_timeframe(df_15min, df_hourly, df_4h, action
     }
 
 
+# ============ 🆕 v8.9.3: 늦은 진입 방지 (Late Entry Prevention) ============
+def check_late_entry_risk(df_5min, df_15min, df_hourly, action, current_price):
+    """
+    🚨 단기 타임프레임에서 이미 상당한 움직임이 있었는지 체크
+    상위 TF(1H, 4H) 신호가 좋아도 5분/15분에서 이미 과도한 돌파 후라면
+    단기적인 되돌림이 올 수 있음 → 진입 축소 또는 대기
+    
+    Returns:
+        dict: {
+            'is_late': bool,
+            'severity': str ('none', 'mild', 'moderate', 'severe'),
+            'adjusted_size_ratio': float (0.0 ~ 1.0),
+            'warnings': list,
+            'recommendation': str,
+            'wait_for_pullback': bool,
+            'pullback_target': float or None
+        }
+    """
+    warnings = []
+    severity_score = 0
+    
+    try:
+        # === 1. 최근 5분봉 급등/급락 체크 (30분간 = 6개 캔들) ===
+        recent_5m_closes = df_5min['close'].tail(6).values
+        recent_5m_move = ((recent_5m_closes[-1] - recent_5m_closes[0]) / recent_5m_closes[0]) * 100
+        
+        if action == 'buy':
+            # 롱 진입인데 이미 5분봉에서 상승한 경우
+            if recent_5m_move > 2.0:
+                severity_score += 4
+                warnings.append(f"🔴 5분봉 30분간 {recent_5m_move:.2f}% 급등 - 되돌림 고위험")
+            elif recent_5m_move > 1.2:
+                severity_score += 3
+                warnings.append(f"🟠 5분봉 30분간 {recent_5m_move:.2f}% 상승 - 주의")
+            elif recent_5m_move > 0.7:
+                severity_score += 1.5
+                warnings.append(f"🟡 5분봉 30분간 {recent_5m_move:.2f}% 상승 중")
+        else:  # sell
+            if recent_5m_move < -2.0:
+                severity_score += 4
+                warnings.append(f"🔴 5분봉 30분간 {abs(recent_5m_move):.2f}% 급락 - 반등 고위험")
+            elif recent_5m_move < -1.2:
+                severity_score += 3
+                warnings.append(f"🟠 5분봉 30분간 {abs(recent_5m_move):.2f}% 하락 - 주의")
+            elif recent_5m_move < -0.7:
+                severity_score += 1.5
+                warnings.append(f"🟡 5분봉 30분간 {abs(recent_5m_move):.2f}% 하락 중")
+        
+        # === 2. 최근 15분봉 움직임 체크 (1시간 = 4개 캔들) ===
+        recent_15m_closes = df_15min['close'].tail(4).values
+        recent_15m_move = ((recent_15m_closes[-1] - recent_15m_closes[0]) / recent_15m_closes[0]) * 100
+        
+        if action == 'buy':
+            if recent_15m_move > 2.5:
+                severity_score += 3
+                warnings.append(f"🔴 15분봉 1시간간 {recent_15m_move:.2f}% 상승 - 고점 근접 가능")
+            elif recent_15m_move > 1.5:
+                severity_score += 2
+                warnings.append(f"🟠 15분봉 1시간간 {recent_15m_move:.2f}% 상승")
+        else:
+            if recent_15m_move < -2.5:
+                severity_score += 3
+                warnings.append(f"🔴 15분봉 1시간간 {abs(recent_15m_move):.2f}% 하락 - 저점 근접 가능")
+            elif recent_15m_move < -1.5:
+                severity_score += 2
+                warnings.append(f"🟠 15분봉 1시간간 {abs(recent_15m_move):.2f}% 하락")
+        
+        # === 3. 5분봉 RSI 단기 과열 체크 ===
+        rsi_5m = df_5min['rsi'].iloc[-1] if 'rsi' in df_5min.columns else 50
+        rsi_5m_prev = df_5min['rsi'].iloc[-3] if len(df_5min) >= 3 else rsi_5m
+        
+        if action == 'buy':
+            if rsi_5m > 75:
+                severity_score += 3
+                warnings.append(f"🔴 5분봉 RSI 과열 ({rsi_5m:.1f}) - 즉시 진입 위험")
+            elif rsi_5m > 68:
+                severity_score += 2
+                warnings.append(f"🟠 5분봉 RSI 높음 ({rsi_5m:.1f})")
+            # RSI가 급격히 상승한 경우
+            if rsi_5m - rsi_5m_prev > 15:
+                severity_score += 1.5
+                warnings.append(f"⚡ 5분봉 RSI 급상승 ({rsi_5m_prev:.0f}→{rsi_5m:.0f})")
+        else:
+            if rsi_5m < 25:
+                severity_score += 3
+                warnings.append(f"🔴 5분봉 RSI 과냉 ({rsi_5m:.1f}) - 즉시 진입 위험")
+            elif rsi_5m < 32:
+                severity_score += 2
+                warnings.append(f"🟠 5분봉 RSI 낮음 ({rsi_5m:.1f})")
+            if rsi_5m_prev - rsi_5m > 15:
+                severity_score += 1.5
+                warnings.append(f"⚡ 5분봉 RSI 급하락 ({rsi_5m_prev:.0f}→{rsi_5m:.0f})")
+        
+        # === 4. 15분봉 RSI 체크 ===
+        rsi_15m = df_15min['rsi'].iloc[-1] if 'rsi' in df_15min.columns else 50
+        
+        if action == 'buy':
+            if rsi_15m > 72:
+                severity_score += 2
+                warnings.append(f"🟠 15분봉 RSI 과열 ({rsi_15m:.1f})")
+            elif rsi_15m > 65:
+                severity_score += 1
+        else:
+            if rsi_15m < 28:
+                severity_score += 2
+                warnings.append(f"🟠 15분봉 RSI 과냉 ({rsi_15m:.1f})")
+            elif rsi_15m < 35:
+                severity_score += 1
+        
+        # === 5. 볼린저 밴드 위치 체크 (5분봉) ===
+        if 'bb_bbh' in df_5min.columns and 'bb_bbl' in df_5min.columns:
+            bb_upper = df_5min['bb_bbh'].iloc[-1]
+            bb_lower = df_5min['bb_bbl'].iloc[-1]
+            bb_middle = (bb_upper + bb_lower) / 2
+            bb_width = bb_upper - bb_lower
+            
+            # BB 위치 계산 (-1 ~ 1)
+            if bb_width > 0:
+                bb_position = (current_price - bb_middle) / (bb_width / 2)
+                
+                if action == 'buy':
+                    if bb_position > 1.0:  # 상단 돌파
+                        severity_score += 2.5
+                        warnings.append(f"🔴 5분봉 BB 상단 돌파 ({bb_position:.2f})")
+                    elif bb_position > 0.8:
+                        severity_score += 1.5
+                        warnings.append(f"🟠 5분봉 BB 상단 근접 ({bb_position:.2f})")
+                else:
+                    if bb_position < -1.0:
+                        severity_score += 2.5
+                        warnings.append(f"🔴 5분봉 BB 하단 돌파 ({bb_position:.2f})")
+                    elif bb_position < -0.8:
+                        severity_score += 1.5
+                        warnings.append(f"🟠 5분봉 BB 하단 근접 ({bb_position:.2f})")
+        
+        # === 6. 상위 TF vs 하위 TF 모멘텀 괴리 체크 ===
+        # 1시간봉은 아직 시작인데 5분봉이 이미 과열
+        rsi_1h = df_hourly['rsi'].iloc[-1] if 'rsi' in df_hourly.columns else 50
+        
+        if action == 'buy':
+            # 1H RSI가 아직 낮은데(상승 초기) 5분봉은 이미 과열
+            if rsi_1h < 55 and rsi_5m > 70:
+                severity_score += 2
+                warnings.append(f"⏰ 1H RSI({rsi_1h:.0f}) 아직 낮은데 5m({rsi_5m:.0f}) 선행 과열")
+        else:
+            if rsi_1h > 45 and rsi_5m < 30:
+                severity_score += 2
+                warnings.append(f"⏰ 1H RSI({rsi_1h:.0f}) 아직 높은데 5m({rsi_5m:.0f}) 선행 과냉")
+        
+        # === 최종 판단 ===
+        if severity_score >= 8:
+            severity = 'severe'
+            adjusted_size_ratio = 0.0  # 진입 금지
+            wait_for_pullback = True
+            recommendation = "🚫 진입 대기 - 풀백 후 재시도"
+        elif severity_score >= 5:
+            severity = 'moderate'
+            adjusted_size_ratio = 0.3  # 30%만 진입
+            wait_for_pullback = True
+            recommendation = "⚠️ 축소 진입 (30%) - 나머지는 풀백 대기"
+        elif severity_score >= 3:
+            severity = 'mild'
+            adjusted_size_ratio = 0.6  # 60% 진입
+            wait_for_pullback = False
+            recommendation = "📊 주의하며 축소 진입 (60%)"
+        else:
+            severity = 'none'
+            adjusted_size_ratio = 1.0  # 100% 진입 가능
+            wait_for_pullback = False
+            recommendation = "✅ 진입 타이밍 적절"
+        
+        # === 풀백 목표가 계산 ===
+        pullback_target = None
+        if wait_for_pullback:
+            ema20_5m = df_5min['ema_20'].iloc[-1] if 'ema_20' in df_5min.columns else current_price
+            
+            if action == 'buy':
+                # EMA20 또는 0.5% 하락 지점
+                pullback_target = min(ema20_5m, current_price * 0.995)
+            else:
+                pullback_target = max(ema20_5m, current_price * 1.005)
+        
+        # 로그
+        if severity_score > 0:
+            logger.info(f"🕐 늦은 진입 체크 - Score: {severity_score:.1f}, Severity: {severity}")
+            for w in warnings[:3]:
+                logger.info(f"   {w}")
+        
+        return {
+            'is_late': severity_score >= 5,
+            'severity': severity,
+            'severity_score': severity_score,
+            'adjusted_size_ratio': adjusted_size_ratio,
+            'warnings': warnings,
+            'recommendation': recommendation,
+            'wait_for_pullback': wait_for_pullback,
+            'pullback_target': pullback_target,
+            'recent_5m_move': recent_5m_move,
+            'recent_15m_move': recent_15m_move,
+            'rsi_5m': rsi_5m,
+            'rsi_15m': rsi_15m
+        }
+        
+    except Exception as e:
+        logger.error(f"늦은 진입 체크 오류: {e}")
+        return {
+            'is_late': False,
+            'severity': 'none',
+            'severity_score': 0,
+            'adjusted_size_ratio': 1.0,
+            'warnings': [f"체크 오류: {str(e)}"],
+            'recommendation': "⚠️ 체크 실패 - 기본 진입",
+            'wait_for_pullback': False,
+            'pullback_target': None
+        }
+
+
+# ============ 🆕 v8.9.3: 물타기 조건 완화 설정 ============
+AVERAGING_CONFIG_V893 = {
+    # 손실 구간 완화 (-5%~-15% → -3%~-20%)
+    'loss_range': {
+        'min': -3.0,       # 최소 손실 (너무 이르면 안됨)
+        'max': -20.0,      # 최대 손실 (너무 늦으면 위험)
+        'optimal_start': -5.0,  # 최적 물타기 시작점
+        'optimal_end': -12.0,   # 최적 물타기 종료점
+    },
+    
+    # 신뢰도 기준 완화 (70% → 40% 단계별)
+    'confidence_tiers': {
+        'aggressive': {'min_confidence': 0.70, 'margin_ratio': (0.20, 0.30)},  # 70%+ → 20-30%
+        'normal':     {'min_confidence': 0.55, 'margin_ratio': (0.12, 0.18)},  # 55%+ → 12-18%
+        'cautious':   {'min_confidence': 0.40, 'margin_ratio': (0.06, 0.10)},  # 40%+ → 6-10%
+    },
+    
+    # 마진 요구 완화 (20% → 12%)
+    'min_remaining_margin_pct': 0.12,
+    
+    # 물타기 횟수 증가 (2회 → 3회)
+    'max_averaging_count': 3,
+    
+    # 예상 승률 요구 완화 (60% → 45%)
+    'min_expected_win_rate': 0.45,
+}
+
+
+def calculate_dynamic_averaging_amount(position_info, ai_analysis, free_margin, total_margin):
+    """
+    🆕 v8.9.3: 손실률 + AI 신뢰도 + 반전 강도에 따라 유동적으로 물타기 금액 결정
+    
+    Returns:
+        dict: {
+            'should_average': bool,
+            'margin_percent': int (5-30),
+            'amount_usdt': float,
+            'reasoning': str,
+            'risk_level': str
+        }
+    """
+    config = AVERAGING_CONFIG_V893
+    
+    try:
+        # 현재 손실률 (레버리지 적용 PnL)
+        pnl_percent = position_info.get('pnl_percent', 0)
+        averaging_count = position_info.get('averaging_count', 0)
+        
+        # AI 분석 정보
+        confidence = ai_analysis.get('confidence', 0.5)
+        expected_win_rate = ai_analysis.get('expected_win_rate', 0.5)
+        reversal_strength = ai_analysis.get('reversal_strength', 0.5)
+        
+        # === 1. 기본 조건 체크 ===
+        # 잔여 마진 체크
+        margin_ratio = free_margin / total_margin if total_margin > 0 else 0
+        if margin_ratio < config['min_remaining_margin_pct']:
+            return {
+                'should_average': False,
+                'margin_percent': 0,
+                'amount_usdt': 0,
+                'reasoning': f"잔여 마진 부족 ({margin_ratio*100:.1f}% < {config['min_remaining_margin_pct']*100}%)",
+                'risk_level': 'blocked'
+            }
+        
+        # 물타기 횟수 체크
+        if averaging_count >= config['max_averaging_count']:
+            return {
+                'should_average': False,
+                'margin_percent': 0,
+                'amount_usdt': 0,
+                'reasoning': f"물타기 한도 초과 ({averaging_count}/{config['max_averaging_count']}회)",
+                'risk_level': 'blocked'
+            }
+        
+        # 손실 구간 체크
+        if pnl_percent > config['loss_range']['min']:
+            return {
+                'should_average': False,
+                'margin_percent': 0,
+                'amount_usdt': 0,
+                'reasoning': f"손실이 너무 작음 ({pnl_percent:.1f}% > {config['loss_range']['min']}%)",
+                'risk_level': 'too_early'
+            }
+        
+        if pnl_percent < config['loss_range']['max']:
+            return {
+                'should_average': False,
+                'margin_percent': 0,
+                'amount_usdt': 0,
+                'reasoning': f"손실이 과도함 ({pnl_percent:.1f}% < {config['loss_range']['max']}%) - 청산 검토",
+                'risk_level': 'too_late'
+            }
+        
+        # 예상 승률 체크
+        if expected_win_rate < config['min_expected_win_rate']:
+            return {
+                'should_average': False,
+                'margin_percent': 0,
+                'amount_usdt': 0,
+                'reasoning': f"예상 승률 낮음 ({expected_win_rate*100:.0f}% < {config['min_expected_win_rate']*100}%)",
+                'risk_level': 'low_probability'
+            }
+        
+        # === 2. 유동적 비율 계산 ===
+        # 기본 비율 (손실 깊이에 따라)
+        loss_range = config['loss_range']
+        if pnl_percent >= loss_range['optimal_start']:
+            base_ratio = 0.08  # 얕은 손실: 보수적
+        elif pnl_percent >= loss_range['optimal_end']:
+            # 최적 구간: 손실 깊이에 비례하여 증가
+            depth_factor = abs(pnl_percent - loss_range['optimal_start']) / abs(loss_range['optimal_end'] - loss_range['optimal_start'])
+            base_ratio = 0.08 + (depth_factor * 0.12)  # 8% ~ 20%
+        else:
+            base_ratio = 0.10  # 깊은 손실: 오히려 보수적
+        
+        # === 3. 신뢰도 기반 보정 ===
+        tiers = config['confidence_tiers']
+        if confidence >= tiers['aggressive']['min_confidence']:
+            tier = 'aggressive'
+            confidence_multiplier = 1.3
+            min_ratio, max_ratio = tiers['aggressive']['margin_ratio']
+        elif confidence >= tiers['normal']['min_confidence']:
+            tier = 'normal'
+            confidence_multiplier = 1.0
+            min_ratio, max_ratio = tiers['normal']['margin_ratio']
+        elif confidence >= tiers['cautious']['min_confidence']:
+            tier = 'cautious'
+            confidence_multiplier = 0.7
+            min_ratio, max_ratio = tiers['cautious']['margin_ratio']
+        else:
+            return {
+                'should_average': False,
+                'margin_percent': 0,
+                'amount_usdt': 0,
+                'reasoning': f"신뢰도 너무 낮음 ({confidence*100:.0f}%)",
+                'risk_level': 'low_confidence'
+            }
+        
+        # === 4. 반전 신호 강도 보정 ===
+        reversal_multiplier = 0.8 + (reversal_strength * 0.4)  # 0.8 ~ 1.2
+        
+        # === 5. 최종 비율 계산 ===
+        final_ratio = base_ratio * confidence_multiplier * reversal_multiplier
+        final_ratio = max(min_ratio, min(final_ratio, max_ratio))  # 범위 제한
+        
+        # 금액 계산
+        amount_usdt = free_margin * final_ratio
+        margin_percent = int(final_ratio * 100)
+        
+        # 최소 금액 체크
+        if amount_usdt < 10:
+            return {
+                'should_average': False,
+                'margin_percent': margin_percent,
+                'amount_usdt': amount_usdt,
+                'reasoning': f"물타기 금액 너무 작음 (${amount_usdt:.2f})",
+                'risk_level': 'insufficient'
+            }
+        
+        # 리스크 레벨 결정
+        if final_ratio >= 0.20:
+            risk_level = 'aggressive'
+        elif final_ratio >= 0.12:
+            risk_level = 'normal'
+        else:
+            risk_level = 'cautious'
+        
+        reasoning = (
+            f"손실 {pnl_percent:.1f}% / 신뢰도 {confidence*100:.0f}% / "
+            f"반전강도 {reversal_strength:.1f} / 승률 {expected_win_rate*100:.0f}% → "
+            f"{tier} tier ({margin_percent}%)"
+        )
+        
+        return {
+            'should_average': True,
+            'margin_percent': margin_percent,
+            'amount_usdt': amount_usdt,
+            'reasoning': reasoning,
+            'risk_level': risk_level,
+            'tier': tier,
+            'base_ratio': base_ratio,
+            'final_ratio': final_ratio
+        }
+        
+    except Exception as e:
+        logger.error(f"물타기 금액 계산 오류: {e}")
+        return {
+            'should_average': False,
+            'margin_percent': 0,
+            'amount_usdt': 0,
+            'reasoning': f"계산 오류: {str(e)}",
+            'risk_level': 'error'
+        }
+
+
 # ============ 🆕 추가 기능 2: 매물대 기반 TP/SL 조정 함수 ============
 def calculate_volume_profile_levels(df, num_levels=5):
     """
@@ -2025,7 +2444,7 @@ def extract_ai_response(response):
 
 # ============ Market Data Collection ============
 def get_market_data(symbol):
-    """특정 심볼의 시장 데이터를 수집"""
+    """특정 심볼의 시장 데이터를 수집 - v8.9.3: 5분봉 추가"""
     try:
         # 현재가격
         ticker = exchange.fetch_ticker(symbol)
@@ -2034,14 +2453,36 @@ def get_market_data(symbol):
         # 오더북 데이터
         orderbook = exchange.fetch_order_book(symbol, limit=10)
         
-        # 5분봉 데이터 (더 많이 가져오기 - ATR 계산 위해)
+        # 🆕 v8.9.3: 5분봉 데이터 추가 (단기 과열 체크용)
+        df_5min = pd.DataFrame(
+            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100),
+            columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        )
+        df_5min['timestamp'] = pd.to_datetime(df_5min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
+        df_5min = df_5min.set_index('timestamp')
+        df_5min = df_5min.dropna()
+        df_5min = add_indicators(df_5min)
+        
+        # 5분봉 ATR NaN 처리
+        if 'atr' in df_5min.columns:
+            df_5min['atr'] = df_5min['atr'].fillna(method='bfill')
+            if df_5min['atr'].isna().any():
+                default_atr = (df_5min['high'] - df_5min['low']).rolling(14).mean().iloc[-1]
+                if pd.isna(default_atr) or default_atr == 0:
+                    default_atr = current_price * 0.001
+                df_5min['atr'] = df_5min['atr'].fillna(default_atr)
+            df_5min.loc[df_5min['atr'] == 0, 'atr'] = current_price * 0.001
+        
+        df_5min = df_5min.tail(30)  # 최근 30개 (2.5시간)
+        
+        # 15분봉 데이터
         df_15min = pd.DataFrame(
-            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=150),  # 15분봉으로 변경
+            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=150),
             columns=['timestamp', 'open', 'high', 'low', 'close', 'volume']
         )
         df_15min['timestamp'] = pd.to_datetime(df_15min['timestamp'], unit='ms').dt.tz_localize('UTC').dt.tz_convert('Asia/Seoul')
         df_15min = df_15min.set_index('timestamp')
-        df_15min = df_15min.dropna()  # dropna(df) → df.dropna() 수정
+        df_15min = df_15min.dropna()
         df_15min = add_indicators(df_15min)
         
         # ATR NaN 처리 (tail 전에 수행)
@@ -2119,6 +2560,7 @@ def get_market_data(symbol):
         return {
             'current_price': current_price,
             'orderbook': orderbook,
+            'df_5min': df_5min,  # 🆕 v8.9.3: 5분봉 추가
             'df_15min': df_15min,
             'df_hourly': df_hourly,
             'df_4h': df_4h,
@@ -2949,63 +3391,66 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 - Profit target still has room with momentum intact
 
 ═══════════════════════════════════════════
-💪 **ADD POSITION (물타기) STRATEGY**
+💪 **ADD POSITION (물타기) STRATEGY v8.9.3**
 ═══════════════════════════════════════════
 
-🎯 **WHEN TO CONSIDER ADD_POSITION (물타기):**
+🎯 **WHEN TO CONSIDER ADD_POSITION (물타기) - 조건 완화됨:**
 
-**Only consider adding to position when All these conditions are met:**
+**Consider adding to position when MOST of these conditions are met:**
 
-1. **Currently in LOSS territory** (-5%~ leveraged P&L)
-   - Too early (<-5%): wait for better confirmation
+1. **Currently in LOSS territory** (-3% ~ -20% leveraged P&L)
+   - Optimal range: -5% ~ -12% (최적 물타기 구간)
+   - Too early (<-3%): wait for better confirmation
+   - Too late (>-20%): consider exit instead
 
-
-2. **Strong reversal signals detected:**
-{'   - RSI oversold (<30) AND starting to turn up' if side == 'buy' else '   - RSI overbought (>70) AND starting to turn down'}
-{'   - MACD showing bullish crossover' if side == 'buy' else '   - MACD showing bearish crossover'}
-{'   - Price bouncing from Bollinger lower band' if side == 'buy' else '   - Price bouncing from Bollinger upper band'}
-   - CMF turning positive (money flowing in)
-   - Multiple timeframes showing reversal confirmation
+2. **Reversal signals detected (2개 이상 충족):**
+{'   - RSI showing signs of reversal (not necessarily < 30)' if side == 'buy' else '   - RSI showing signs of reversal (not necessarily > 70)'}
+{'   - MACD histogram starting to improve' if side == 'buy' else '   - MACD histogram starting to improve'}
+{'   - Price near support / Bollinger lower area' if side == 'buy' else '   - Price near resistance / Bollinger upper area'}
+   - CMF showing improvement or turning
+   - At least 1 timeframe showing reversal signs
 
 3. **Sufficient remaining margin:**
    - Free Balance: ${free_margin:,.2f} USDT
-   - Must have at least 15% of total balance  # v8.3 free
+   - Must have at least 12% of total balance (완화: 20% → 12%)
    - Risk management: ensure account can handle additional exposure
 
-4. **High confidence in reversal:**
-   - AI confidence ≥ 60%  # v8.3
-   - Expected win rate ≥ 50%  # v8.3
-   - Multi-timeframe confirmation (2+ timeframes align)
+4. **Reasonable confidence in reversal:**
+   - AI confidence ≥ 40% (완화: 70% → 40% 단계별)
+   - Expected win rate ≥ 45% (완화: 60% → 45%)
+   - At least 1 timeframe showing support
 
 5. **Not already over-exposed:**
-   - This is the FIRST or SECOND add_position for this trade
-   - Position hasn't been added to more than twice already
+   - Maximum 3 add_positions per trade (완화: 2회 → 3회)
+   - Each add uses smaller % progressively
 
-📊 **ADD_POSITION SIZING:**
+📊 **ADD_POSITION SIZING (유동적 금액 결정):**
 
-Based on your confidence level:
-- **Very High Confidence (90%+)**: Use 20-30% of remaining margin
-- **High Confidence (80-90%)**: Use 15-20% of remaining margin
-- **Medium Confidence (70-80%)**: Use 10-15% of remaining margin
-- **Low Confidence (<70%)**: Use 5-10% or DON'T add
+Based on loss depth AND confidence level:
+- **Deep Loss (-10% ~ -15%) + High Confidence (70%+)**: 15-25% of remaining margin
+- **Moderate Loss (-5% ~ -10%) + High Confidence (70%+)**: 12-20% of remaining margin  
+- **Moderate Loss (-5% ~ -10%) + Medium Confidence (55-70%)**: 8-15% of remaining margin
+- **Any Loss + Low Confidence (40-55%)**: 5-10% of remaining margin
+- **Shallow Loss (-3% ~ -5%)**: 5-8% (conservative start)
 
 ⚠️ **NEVER ADD POSITION IF:**
-- Free margin < 20% of total balance
-- Expected win rate < 60%
-- Loss exceeds -15% (too risky)
-- Already added to position 2+ times
-- Reversal signals are weak or unclear
-- Only one timeframe shows reversal (need confirmation)
+- Free margin < 12% of total balance
+- Expected win rate < 45%
+- Loss exceeds -20% (too risky, consider exit)
+- Already added to position 3+ times
+- ALL timeframes show against position
+- No reversal signals at all
 
-💡 **ADD_POSITION LOGIC:**
-This is an ADVANCED strategy to average down when:
-- Technical analysis strongly suggests imminent reversal
+💡 **ADD_POSITION LOGIC v8.9.3:**
+This is a FLEXIBLE strategy to average down when:
+- Technical analysis suggests possible reversal
 - Account has sufficient margin buffer
-- Risk is calculated and controlled
-- Multiple confirmation signals align
+- Risk is progressively managed (smaller adds as loss deepens)
+- At least some confirmation signals present
 
-⚠️ **IMPORTANT:** Adding to losing position is HIGH RISK. 
-Only recommend when technical reversal is STRONG with HIGH CONFIDENCE.
+⚠️ **KEY PRINCIPLE:** 
+Start small, add progressively. First물타기 is smallest, subsequent adds can increase if reversal confirms.
+Better to enter multiple small positions than one large risky add.
 
 ⏰ **TIME-BASED CONTEXT:**
 - Short-term (<1 hour): Prioritize technical signals over time
@@ -3402,18 +3847,12 @@ def ai_monitoring_cycle():
                 else:
                     logger.info(f"{type_indicator} Exit decision for {symbol} ({position_type.upper()}) not executed due to low confidence ({decision['confidence']:.1%})")
             
-            # 🆕 물타기 결정인 경우 (v8.3 추가)
+            # 🆕 물타기 결정인 경우 (v8.9.3 개선)
             elif decision['decision'] == 'add_position':
                 logger.info(f"[Multi-User] 🎯 물타기 신호 감지: {symbol}")
                 logger.info(f"   → 이유: {decision.get('reason', 'N/A')}")
                 logger.info(f"   → 신뢰도: {decision.get('confidence', 0)*100:.1f}%")
                 logger.info(f"   → 예상 승률: {decision.get('expected_win_rate', 0)*100:.1f}%")
-                
-                # 물타기 수량 계산
-                add_position_margin_percent = decision.get('add_position_margin_percent', 0)
-                if add_position_margin_percent < 5:
-                    logger.warning(f"[Multi-User] 물타기 비율 너무 낮음 ({add_position_margin_percent}%) - 스킵")
-                    continue
                 
                 # 각 유저별로 물타기 실행
                 for user_id, user_exchange in exchanges.items():
@@ -3423,13 +3862,37 @@ def ai_monitoring_cycle():
                         # 잔여 마진 조회
                         balance = user_exchange.fetch_balance()
                         available_margin = float(balance['USDT']['free'])
+                        total_margin = float(balance['USDT']['total'])
                         
                         if available_margin < 10:
                             logger.warning(f"[{user_name}] 잔여 마진 부족 (${available_margin:.2f}) - 물타기 스킵")
                             continue
                         
-                        # 물타기 수량 계산
-                        add_position_size = available_margin * (add_position_margin_percent / 100)
+                        # 🆕 v8.9.3: 유동적 물타기 금액 계산
+                        position_info_for_avg = {
+                            'pnl_percent': position.get('pnl_percent', 0),
+                            'averaging_count': position.get('averaging_count', 0)
+                        }
+                        
+                        ai_analysis_for_avg = {
+                            'confidence': decision.get('confidence', 0.5),
+                            'expected_win_rate': decision.get('expected_win_rate', 0.5),
+                            'reversal_strength': decision.get('confidence', 0.5)  # 반전 강도 = 신뢰도 사용
+                        }
+                        
+                        averaging_calc = calculate_dynamic_averaging_amount(
+                            position_info_for_avg, 
+                            ai_analysis_for_avg, 
+                            available_margin, 
+                            total_margin
+                        )
+                        
+                        if not averaging_calc['should_average']:
+                            logger.warning(f"[{user_name}] 물타기 조건 미충족: {averaging_calc['reasoning']}")
+                            continue
+                        
+                        add_position_margin_percent = averaging_calc['margin_percent']
+                        add_position_size = averaging_calc['amount_usdt']
                         
                         if add_position_size < 10:
                             logger.warning(f"[{user_name}] 물타기 수량 너무 작음 (${add_position_size:.2f}) - 스킵")
@@ -3449,29 +3912,38 @@ def ai_monitoring_cycle():
                         
                         logger.info(f"[{user_name}] 🎯 물타기 실행: {symbol} {add_side} {add_amount:.6f} @ ${current_price:.2f}")
                         logger.info(f"   → 사용 마진: ${add_position_size:.2f} ({add_position_margin_percent}% of ${available_margin:.2f})")
+                        logger.info(f"   → 계산 근거: {averaging_calc['reasoning']}")
+                        logger.info(f"   → 리스크 레벨: {averaging_calc['risk_level']}")
                         
                         # 물타기 주문 실행
                         order = user_exchange.create_market_order(symbol, add_side, add_amount)
                         logger.info(f"[{user_name}] ✅ 물타기 주문 체결: {order.get('id', 'N/A')}")
                         
+                        # 물타기 횟수 증가
+                        if symbol in current_positions:
+                            current_positions[symbol]['averaging_count'] = position.get('averaging_count', 0) + 1
+                        
                         # 텔레그램 알림
                         if ENABLE_TELEGRAM:
                             send_telegram_notification(
                                 f"""
-🎯 <b>AI 물타기 실행 (Multi-User)</b>
+🎯 <b>AI 물타기 실행 v8.9.3 (Multi-User)</b>
 
 <b>User:</b> {user_name}
 <b>심볼:</b> {symbol}
 <b>방향:</b> {add_side.upper()}
 <b>Decision:</b> ADD_POSITION (물타기)
 
-<b>추가 진입:</b>
+<b>📊 유동적 금액 계산:</b>
+  - 사용 마진: ${add_position_size:.2f} ({add_position_margin_percent}%)
   - 수량: {add_amount:.6f}
   - 가격: ${current_price:,.2f}
-  - 사용 마진: ${add_position_size:.2f}
-  - 마진 비율: {add_position_margin_percent}%
+  - 리스크: {averaging_calc['risk_level']}
 
-<b>이유:</b> {decision.get('reason', 'N/A')}
+<b>📈 판단 근거:</b>
+{averaging_calc['reasoning']}
+
+<b>이유:</b> {decision.get('reason', 'N/A')[:100]}
 <b>신뢰도:</b> {decision.get('confidence', 0)*100:.1f}%
 <b>예상 승률:</b> {decision.get('expected_win_rate', 0)*100:.1f}%
 
@@ -3540,7 +4012,8 @@ def stop_ai_monitoring():
 # ============ AI Decision Making (개선 버전) ============
 def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_data=None):
     """
-    AI를 사용하여 거래 신호를 검증 - 개선 버전
+    AI를 사용하여 거래 신호를 검증 - v8.9.3 개선 버전
+    🆕 늦은 진입 방지 (Late Entry Prevention) 추가
     Pydantic 검증 및 에러 처리 강화
     """
     
@@ -3554,6 +4027,7 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
         reflection = generate_reflection(recent_trades_df, market_data)
         
         # Technical Indicators 준비
+        df_5min = market_data.get('df_5min')  # 🆕 v8.9.3: 5분봉 추가
         df_15min = market_data['df_15min']
         df_hourly = market_data['df_hourly'] 
         df_4h = market_data['df_4h']
@@ -3581,6 +4055,59 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
         # ATR 추출
         atr_15min = safe_get_atr(df_15min, market_data['current_price'])
         atr_hourly = safe_get_atr(df_hourly, market_data['current_price'])
+
+        # 🆕 v8.9.3: 늦은 진입 방지 체크 (buy/sell 액션일 때만)
+        late_entry_risk = None
+        late_entry_warning = ""
+        adjusted_size_ratio = 1.0  # 기본값: 100% 진입
+        
+        if action in ['buy', 'sell'] and df_5min is not None:
+            late_entry_risk = check_late_entry_risk(
+                df_5min, df_15min, df_hourly, action, market_data['current_price']
+            )
+            
+            if late_entry_risk['is_late']:
+                logger.warning(f"🕐 늦은 진입 감지 - {symbol} {action}")
+                logger.warning(f"   심각도: {late_entry_risk['severity']}")
+                logger.warning(f"   권장: {late_entry_risk['recommendation']}")
+                
+                # 진입 비율 조정
+                adjusted_size_ratio = late_entry_risk['adjusted_size_ratio']
+                
+                # severe인 경우 진입 거부
+                if late_entry_risk['severity'] == 'severe':
+                    logger.warning(f"🚫 늦은 진입 심각 - 진입 거부")
+                    return {
+                        "decision": "reject",
+                        "modified_action": "hold",
+                        "percentage": 0,
+                        "reason": f"늦은 진입 위험 심각 ({late_entry_risk['recommendation']}). "
+                                  f"5분봉 최근 움직임: {late_entry_risk.get('recent_5m_move', 0):.2f}%, "
+                                  f"RSI(5m): {late_entry_risk.get('rsi_5m', 50):.0f}",
+                        "stop_loss_price": 0.0,
+                        "take_profit_price": 0.0,
+                        "pl_ratio": 0.0,
+                        "confidence": 0.0,
+                        "late_entry_info": late_entry_risk
+                    }
+                
+                # moderate/mild인 경우 경고 메시지 추가
+                late_entry_warning = f"""
+🕐 **LATE ENTRY WARNING (v8.9.3):**
+- Severity: {late_entry_risk['severity'].upper()}
+- 5분봉 최근 30분 움직임: {late_entry_risk.get('recent_5m_move', 0):.2f}%
+- 15분봉 최근 1시간 움직임: {late_entry_risk.get('recent_15m_move', 0):.2f}%
+- 5분봉 RSI: {late_entry_risk.get('rsi_5m', 50):.1f}
+- 15분봉 RSI: {late_entry_risk.get('rsi_15m', 50):.1f}
+- 권장 진입 비율: {adjusted_size_ratio*100:.0f}%
+- 경고: {', '.join(late_entry_risk.get('warnings', [])[:3])}
+
+⚠️ **ACTION REQUIRED:**
+- 단기 과열로 인해 진입 비율을 {adjusted_size_ratio*100:.0f}%로 축소하세요
+- percentage 필드에 {int(adjusted_size_ratio * 100)} 이하로 설정하세요
+- 풀백 대기가 권장되면 modify 또는 reject을 고려하세요
+"""
+                logger.info(f"   → 진입 비율 조정: {adjusted_size_ratio*100:.0f}%")
 
         # 🆕 과매수/과매도 체크 (buy/sell 액션일 때만)
         overbought_oversold_risk = None
@@ -4010,7 +4537,7 @@ The reflection above provides:
 - Actionable recommendations for entry/exit timing
 
 Use these insights to validate the current signal. If the reflection indicates that similar signals have failed, be more conservative. If certain patterns have succeeded, increase confidence accordingly.
-
+{late_entry_warning}
 **🔄 BALANCED VALIDATION FRAMEWORK (v2.0):**
 
 ⚠️ **HIGH RISK - STRONG REJECTION CONDITIONS:**
