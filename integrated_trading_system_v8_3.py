@@ -2954,11 +2954,11 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 
 🎯 **WHEN TO CONSIDER ADD_POSITION (물타기):**
 
-**Only consider adding to position when ALL these conditions are met:**
+**Only consider adding to position when All these conditions are met:**
 
-1. **Currently in LOSS territory** (-5% to -15% leveraged P&L)
+1. **Currently in LOSS territory** (-5%~ leveraged P&L)
    - Too early (<-5%): wait for better confirmation
-   - Too late (>-15%): risk too high
+
 
 2. **Strong reversal signals detected:**
 {'   - RSI oversold (<30) AND starting to turn up' if side == 'buy' else '   - RSI overbought (>70) AND starting to turn down'}
@@ -3005,7 +3005,7 @@ This is an ADVANCED strategy to average down when:
 - Multiple confirmation signals align
 
 ⚠️ **IMPORTANT:** Adding to losing position is HIGH RISK. 
-Only recommend when technical reversal is VERY STRONG with HIGH CONFIDENCE.
+Only recommend when technical reversal is STRONG with HIGH CONFIDENCE.
 
 ⏰ **TIME-BASED CONTEXT:**
 - Short-term (<1 hour): Prioritize technical signals over time
