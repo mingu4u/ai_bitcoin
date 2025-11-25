@@ -1,27 +1,29 @@
 """
-Integrated Trading System v8.9.3 (V8.3 Base + Late Entry Prevention + Flexible Averaging)
-===========================================================================================
-자동매매봇 - v8.3 기반 + 늦은 진입 방지 + 유동적 물타기
+Integrated Trading System v8.9.4 (V8.3 Base + Smart Exit + Position Reversal)
+=============================================================================
+자동매매봇 - v8.3 기반 + 스마트 청산 + 포지션 전환 + 간소화 프롬프트
 
-🔥 v8.9.3 핵심 개선사항 (2025-11-25):
-1. 🕐 늦은 진입 방지 (Late Entry Prevention)
-   - 5분봉 데이터 추가 분석
-   - 단기 과열 체크 (RSI, BB, 최근 움직임)
-   - 상위 TF vs 하위 TF 괴리 감지
-   - 진입 비율 자동 조정 (0~100%)
-   - severe 과열 시 진입 거부
+🔥 v8.9.4 핵심 개선사항 (2025-11-25):
+1. 🎯 낮은 수익률 민감 반응 (Smart Exit)
+   - 진입 20분 이후, 0~3% 구간에서 민감하게 반응
+   - 손실 전환 가능성 조기 감지
+   - 승률/수익 보존 우선
 
-2. 💰 물타기 조건 완화 + 유동적 금액
-   - 손실 구간: -5%~-15% → -3%~-20%
-   - 신뢰도: 70% → 40% (단계별)
-   - 마진: 20% → 12%
-   - 횟수: 2회 → 3회
-   - 금액: 손실 깊이 + 신뢰도 + 반전강도 연동
+2. 🔄 과매수/과매도 포지션 전환 (Reverse)
+   - 롱인데 RSI 과매수(70+) → 숏 전환 검토
+   - 숏인데 RSI 과매도(30-) → 롱 전환 검토
+   - AI가 reverse 결정 시 자동 전환
 
-3. 📊 승률 & 수익률 보호 전략
-   - 상위 TF 신호 우선
-   - 하위 TF 과열 시 축소 진입
-   - 풀백 대기 권장 시스템
+3. 📝 AI 프롬프트 대폭 간소화
+   - DeepSeek LLM 이해도 향상
+   - 핵심 지표만 제공
+   - 명확한 결정 기준
+
+4. 💰 물타기 조건 완화 + 유동적 금액 (v8.9.3 유지)
+   - 손실 구간: -3%~-20%
+   - 신뢰도: 40% (단계별)
+   - 마진: 12%+
+   - 횟수: 3회
 
 v8.3 (2025-11-24) 기반:
 - 🔥 v7 COMPLETE FIXED 기반으로 재작성
@@ -135,13 +137,13 @@ class ClosePositionDecision(BaseModel):
     urgency: str = Field(..., pattern="^(immediate|soon|normal|low)$")
 
 class PositionExitDecision(BaseModel):
-    """포지션 종료/추가 진입 결정용 모델 - 물타기 기능 추가"""
-    decision: str = Field(..., pattern="^(hold|close|partial_close|add_position)$")
+    """포지션 종료/추가 진입/전환 결정용 모델 - v8.9.4 reverse 추가"""
+    decision: str = Field(..., pattern="^(hold|close|partial_close|add_position|reverse)$")
     percentage: int = Field(..., ge=0, le=100)
     reason: str = Field(..., min_length=1)
     exit_type: str = Field(
         ..., 
-        pattern="^(take_profit|stop_loss|trend_reversal|risk_management|time_stop|add_position|none)$"
+        pattern="^(take_profit|stop_loss|trend_reversal|risk_management|time_stop|add_position|overbought_reversal|oversold_reversal|none)$"
     )
     confidence: float = Field(..., ge=0.0, le=1.0)
     urgency: str = Field(..., pattern="^(immediate|soon|watch|none)$")
@@ -3225,7 +3227,7 @@ def ai_monitor_position(symbol, position_info):
 {
     "decision": "hold",
     "percentage": 0,
-    "reason": "Strong momentum continues, no reversal signals detected",
+    "reason": "Momentum intact, no exit signals",
     "exit_type": "none",
     "confidence": 0.85,
     "urgency": "none",
@@ -3233,312 +3235,135 @@ def ai_monitor_position(symbol, position_info):
     "expected_win_rate": 0.0
 }"""
 
+        # v8.9.4: 낮은 수익률 민감 반응 체크 (20분 이후)
+        low_profit_warning = ""
+        should_be_sensitive = False
+        if holding_time >= 20 and 0 <= pnl_percent <= 3:
+            should_be_sensitive = True
+            low_profit_warning = f"""
+⚠️ **LOW PROFIT SENSITIVE MODE** (v8.9.4):
+- Holding time: {holding_time:.0f} min (>20min)
+- Current PnL: {pnl_percent:+.2f}% (0~3% zone)
+- Risk: Position may turn negative soon
+- Action: Be more sensitive to exit signals
+- Priority: Protect win rate and small profits
+"""
+
+        # v8.9.4: 과매수/과매도 전환 체크
+        overbought_oversold_warning = ""
+        rsi_15m = df_15min['rsi'].iloc[-1]
+        rsi_1h = df_hourly['rsi'].iloc[-1]
+        
+        if side == 'buy' and (rsi_15m > 70 or rsi_1h > 70):
+            overbought_oversold_warning = f"""
+🔄 **OVERBOUGHT ALERT - CONSIDER REVERSE** (v8.9.4):
+- Position: LONG
+- 15m RSI: {rsi_15m:.1f} {'⚠️ OVERBOUGHT' if rsi_15m > 70 else ''}
+- 1h RSI: {rsi_1h:.1f} {'⚠️ OVERBOUGHT' if rsi_1h > 70 else ''}
+- Consider: REVERSE to SHORT position
+- exit_type: "overbought_reversal"
+"""
+        elif side == 'sell' and (rsi_15m < 30 or rsi_1h < 30):
+            overbought_oversold_warning = f"""
+🔄 **OVERSOLD ALERT - CONSIDER REVERSE** (v8.9.4):
+- Position: SHORT  
+- 15m RSI: {rsi_15m:.1f} {'⚠️ OVERSOLD' if rsi_15m < 30 else ''}
+- 1h RSI: {rsi_1h:.1f} {'⚠️ OVERSOLD' if rsi_1h < 30 else ''}
+- Consider: REVERSE to LONG position
+- exit_type: "oversold_reversal"
+"""
+
         prompt = f"""
-You are an elite AI position manager monitoring an active {side.upper()} position for {symbol}. Your mission is to protect profits, minimize losses, and identify optimal exit points using multi-timeframe analysis.
-
-**CRITICAL CONTEXT:**
-This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIED impact on P&L.
-
-🚨 **EARLY REVERSAL DETECTION SYSTEM:**
-{'═' * 43}
-→ Reversal Risk Score: {early_exit_signals['reversal_score']}/15
-→ Should Exit: {'YES ⚠️' if early_exit_signals['should_exit'] else 'NO ✅'}
-→ Urgency Level: {early_exit_signals['urgency'].upper()}
-→ Confidence: {early_exit_signals['confidence']:.1%}
-
-→ Detected Signals ({len(early_exit_signals['signals'])}):
-{chr(10).join(['  • ' + sig for sig in early_exit_signals['signals']]) if early_exit_signals['signals'] else '  • No reversal signals detected'}
-
-💡 **INTERPRETATION:**
-  • Score ≥ 10: IMMEDIATE exit recommended
-  • Score 7-9: EXIT SOON (strong reversal signals)
-  • Score 4-6: WATCH closely (early warning)
-  • Score < 4: No significant reversal risk
-
-{'⚠️ WARNING: Multiple reversal signals detected! Consider this heavily in your decision.' if early_exit_signals['should_exit'] else '✅ No major reversal concerns detected. Focus on other technical factors.'}
-{'═' * 43}
+You are a crypto position manager. Analyze this {side.upper()} position and decide what to do.
 
 ═══════════════════════════════════════════
-💼 **POSITION STATUS**
+📊 POSITION INFO
 ═══════════════════════════════════════════
-→ Position Details:
-  • Type: {position_type.upper()} ({type_indicator})
-  • Direction: {side.upper()}
-  • Entry Price: ${entry_price:,.2f}
-  • Current Price: ${current_price:,.2f}
-  • Position Size: {amount:.4f} ({position_size_usdt:,.2f} USDT)
-  • Leverage: {leverage}x
-
-→ Performance Metrics:
-  • Price Change: {price_change_percent:+.2f}%
-  • **LEVERAGED P&L: {pnl_percent:+.2f}%** ({pnl_usdt:+,.2f} USDT)
-  • Holding Time: {holding_time:.0f} minutes ({holding_hours:.1f} hours)
-
-→ Risk Management:
-  • Stop Loss: {'$' + f'{stop_loss:,.2f}' if stop_loss else 'Not Set'} {'(' + f'{distance_to_sl:.2f}%' + ' away)' if stop_loss else ''}
-  • Take Profit: {'$' + f'{take_profit:,.2f}' if take_profit else 'Not Set'} {'(' + f'{distance_to_tp:.2f}%' + ' away)' if take_profit else ''}
-
-→ Account Context:
-  • Total Balance: ${total_margin:,.2f} USDT
-  • Free Balance: ${free_margin:,.2f} USDT
-  • Position Impact on Account: {(pnl_usdt / total_margin * 100) if total_margin > 0 else 0:+.2f}%
+Symbol: {symbol}
+Direction: {side.upper()}
+Entry: ${entry_price:,.2f}
+Current: ${current_price:,.2f}
+Leverage: {leverage}x
+PnL: {pnl_percent:+.2f}% (${pnl_usdt:+,.2f})
+Holding: {holding_time:.0f} min ({holding_hours:.1f}h)
+Free Margin: ${free_margin:,.2f}
+{low_profit_warning}
+{overbought_oversold_warning}
 
 ═══════════════════════════════════════════
-📊 **MULTI-TIMEFRAME TECHNICAL ANALYSIS**
+📈 KEY INDICATORS (Simple View)
 ═══════════════════════════════════════════
+15min:
+  RSI: {df_15min['rsi'].iloc[-1]:.1f} {'[OVERBOUGHT]' if df_15min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_15min['rsi'].iloc[-1] < 30 else ''}
+  MACD: {df_15min['macd_diff'].iloc[-1]:.4f} {'[BULLISH]' if df_15min['macd_diff'].iloc[-1] > 0 else '[BEARISH]'}
+  ADX: {df_15min['adx'].iloc[-1]:.1f} {'[STRONG]' if df_15min['adx'].iloc[-1] > 25 else '[WEAK]'}
 
-→ **15-MINUTE CHART (Immediate Momentum)**
-═══════════════════════════════════════════
-  Momentum Indicators:
-  • RSI(14): {df_15min['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_15min['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_15min['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
-  • Stochastic %K: {df_15min['stoch_k'].iloc[-1]:.2f}, %D: {df_15min['stoch_d'].iloc[-1]:.2f}
-  • Williams %R: {df_15min['williams_r'].iloc[-1]:.2f}
-  • PPO: {df_15min['ppo'].iloc[-1]:.2f}
+1hour:
+  RSI: {df_hourly['rsi'].iloc[-1]:.1f} {'[OVERBOUGHT]' if df_hourly['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_hourly['rsi'].iloc[-1] < 30 else ''}
+  MACD: {df_hourly['macd_diff'].iloc[-1]:.4f} {'[BULLISH]' if df_hourly['macd_diff'].iloc[-1] > 0 else '[BEARISH]'}
+  ADX: {df_hourly['adx'].iloc[-1]:.1f}
 
-  Trend Analysis:
-  • MACD: {df_15min['macd'].iloc[-1]:.2f}
-  • MACD Signal: {df_15min['macd_signal'].iloc[-1]:.2f}
-  • MACD Diff: {df_15min['macd_diff'].iloc[-1]:.2f} {'[BULLISH]' if df_15min['macd_diff'].iloc[-1] > 0 else '[BEARISH]'}
-  • ADX: {df_15min['adx'].iloc[-1]:.2f} {'[STRONG TREND]' if df_15min['adx'].iloc[-1] > 25 else '[WEAK TREND]'}
-  • DI+: {df_15min['di_plus'].iloc[-1]:.2f} vs DI-: {df_15min['di_minus'].iloc[-1]:.2f}
+4hour:
+  RSI: {df_4h['rsi'].iloc[-1]:.1f}
+  MACD: {df_4h['macd_diff'].iloc[-1]:.4f} {'[BULLISH]' if df_4h['macd_diff'].iloc[-1] > 0 else '[BEARISH]'}
 
-  Price Position:
-  • Bollinger Upper: ${df_15min['bb_bbh'].iloc[-1]:.2f}
-  • Bollinger Middle: ${df_15min['bb_bbm'].iloc[-1]:.2f}
-  • Bollinger Lower: ${df_15min['bb_bbl'].iloc[-1]:.2f}
-  • Current Position: {((current_price - df_15min['bb_bbl'].iloc[-1]) / (df_15min['bb_bbh'].iloc[-1] - df_15min['bb_bbl'].iloc[-1]) * 100):.0f}% of band
-  • ATR(14): {atr_15min:.4f} (volatility indicator)
-
-  Volume & Flow:
-  • CMF(20): {df_15min['cmf'].iloc[-1]:.2f} {'[BUYING PRESSURE]' if df_15min['cmf'].iloc[-1] > 0 else '[SELLING PRESSURE]'}
-
-→ **1-HOUR CHART (Medium-term Trend)**
-═══════════════════════════════════════════
-  Momentum:
-  • RSI(14): {df_hourly['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_hourly['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_hourly['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
-
-  Trend:
-  • MACD: {df_hourly['macd'].iloc[-1]:.2f}
-  • MACD Signal: {df_hourly['macd_signal'].iloc[-1]:.2f}
-  • ADX: {df_hourly['adx'].iloc[-1]:.2f} {'[STRONG]' if df_hourly['adx'].iloc[-1] > 25 else '[WEAK]'}
-  • DI+: {df_hourly['di_plus'].iloc[-1]:.2f} vs DI-: {df_hourly['di_minus'].iloc[-1]:.2f}
-
-  Price:
-  • Bollinger Middle: ${df_hourly['bb_bbm'].iloc[-1]:.2f}
-  • ATR: {atr_hourly:.4f}
-
-  Volume:
-  • CMF: {df_hourly['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_hourly['cmf'].iloc[-1] > 0 else '[SELLING]'}
-
-→ **4-HOUR CHART (Primary Trend)**
-═══════════════════════════════════════════
-  Momentum:
-  • RSI(14): {df_4h['rsi'].iloc[-1]:.2f} {'[OVERBOUGHT]' if df_4h['rsi'].iloc[-1] > 70 else '[OVERSOLD]' if df_4h['rsi'].iloc[-1] < 30 else '[NEUTRAL]'}
-
-  Trend:
-  • MACD: {df_4h['macd'].iloc[-1]:.2f}
-  • MACD Signal: {df_4h['macd_signal'].iloc[-1]:.2f}
-  • ADX: {df_4h['adx'].iloc[-1]:.2f} {'[STRONG]' if df_4h['adx'].iloc[-1] > 25 else '[WEAK]'}
-  • DI+: {df_4h['di_plus'].iloc[-1]:.2f} vs DI-: {df_4h['di_minus'].iloc[-1]:.2f}
-
-  Volume:
-  • CMF: {df_4h['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_4h['cmf'].iloc[-1] > 0 else '[SELLING]'}
+Reversal Score: {early_exit_signals['reversal_score']}/15 {'⚠️ HIGH' if early_exit_signals['reversal_score'] >= 7 else ''}
 
 ═══════════════════════════════════════════
-🎯 **EXIT DECISION FRAMEWORK**
+🎯 DECISION RULES (v8.9.4 - SIMPLE)
 ═══════════════════════════════════════════
 
-**For {'LONG' if side == 'buy' else 'SHORT'} Position:**
+**1. CLOSE (100%) - Exit immediately when:**
+- Reversal score >= 10
+- PnL < -10% with no recovery signs
+- Multiple timeframes against position
+- {'RSI > 75 with MACD bearish' if side == 'buy' else 'RSI < 25 with MACD bullish'}
 
-**Context for Decision Making:**
-- Current ATR (5m): {atr_15min:.4f} - Use this as volatility baseline
-- Price volatility is relative to this asset's normal movement
-- Consider timeframe alignment more than absolute profit percentages
+**2. PARTIAL_CLOSE (25-75%) - Take some profit when:**
+- Good profit (>5%) + early reversal signs
+- Reversal score 7-9
+- Mixed signals across timeframes
 
-⚠️ **IMMEDIATE EXIT SIGNALS (Close 100%):**
-{'- 15m MACD bearish crossover + RSI declining from overbought zone' if side == 'buy' else '- 15m MACD bullish crossover + RSI rising from oversold zone'}
-{'- 1h DI- crosses above DI+ (definitive trend reversal)' if side == 'buy' else '- 1h DI+ crosses above DI- (definitive trend reversal)'}
-{'- CMF turning negative across 2+ timeframes (money flowing out)' if side == 'buy' else '- CMF turning positive across 2+ timeframes (money flowing in)'}
-{'- Price breaks below 1h Bollinger lower band with volume' if side == 'buy' else '- Price breaks above 1h Bollinger upper band with volume'}
-- Significant profit + multiple reversal confirmations across timeframes
-- Stop loss being approached with momentum clearly against position
-- Strong bearish/bullish divergence on multiple timeframes
+**3. REVERSE - Flip position when:**
+- {'LONG but RSI > 70 on multiple timeframes → close and go SHORT' if side == 'buy' else 'SHORT but RSI < 30 on multiple timeframes → close and go LONG'}
+- Strong momentum against current position
+- Use exit_type: "overbought_reversal" or "oversold_reversal"
 
-🔴 **STRONG EXIT SIGNALS (Close 75-100%):**
-{'- 15m RSI dropping sharply from overbought (>70) back below 50' if side == 'buy' else '- 15m RSI rising sharply from oversold (<30) back above 50'}
-- 4h trend weakening (ADX declining, was strong but now <25)
-- MACD histogram consistently shrinking for multiple bars
-- Substantial profit achieved + momentum showing fatigue
-- Extended holding time with diminishing momentum
-{'- Price struggling to break resistance despite multiple attempts' if side == 'buy' else '- Price struggling to break support despite multiple attempts'}
+**4. ADD_POSITION (물타기) - Add to losing position when:**
+- PnL between -3% and -15%
+- RSI showing reversal signs
+- Free margin >= 12%
+- Max 3 times per trade
+- Set add_position_margin_percent: 5-20
 
-🟡 **PARTIAL EXIT SIGNALS (Close 25-50%):**
-- Approaching take profit zone with early reversal indicators
-- Price consolidating at key resistance/support levels
-- Mixed signals: some timeframes bullish, others neutral/bearish
-- Reasonable profit secured + uncertain near-term direction
-- Risk management: preserve gains while maintaining exposure
-- Time decay: long holding period without meaningful progress
+**5. HOLD - Keep position when:**
+- Trend intact
+- No strong reversal signals
+- Momentum supporting position
 
-✅ **HOLD SIGNALS:**
-- All timeframes showing alignment with position direction
-- Strong trend indicators: ADX >25 and rising
-{'- DI+ clearly dominating DI- and expanding' if side == 'buy' else '- DI- clearly dominating DI+ and expanding'}
-- MACD histogram expanding with strong momentum
-- No reversal divergences detected on any timeframe
-- CMF positive and strengthening (money flow supporting direction)
-- Price respecting trend structure (higher lows for longs, lower highs for shorts)
-- Profit target still has room with momentum intact
+**6. LOW PROFIT MODE (0~3% after 20min):**
+{'⚠️ ACTIVE - Be extra careful! Small profits can turn to losses.' if should_be_sensitive else 'Not active'}
+- Exit at first sign of weakness
+- Dont wait for larger profit
 
 ═══════════════════════════════════════════
-💪 **ADD POSITION (물타기) STRATEGY v8.9.3**
+📋 RESPONSE FORMAT
 ═══════════════════════════════════════════
-
-🎯 **WHEN TO CONSIDER ADD_POSITION (물타기) - 조건 완화됨:**
-
-**Consider adding to position when MOST of these conditions are met:**
-
-1. **Currently in LOSS territory** (-3% ~ -20% leveraged P&L)
-   - Optimal range: -5% ~ -12% (최적 물타기 구간)
-   - Too early (<-3%): wait for better confirmation
-   - Too late (>-20%): consider exit instead
-
-2. **Reversal signals detected (2개 이상 충족):**
-{'   - RSI showing signs of reversal (not necessarily < 30)' if side == 'buy' else '   - RSI showing signs of reversal (not necessarily > 70)'}
-{'   - MACD histogram starting to improve' if side == 'buy' else '   - MACD histogram starting to improve'}
-{'   - Price near support / Bollinger lower area' if side == 'buy' else '   - Price near resistance / Bollinger upper area'}
-   - CMF showing improvement or turning
-   - At least 1 timeframe showing reversal signs
-
-3. **Sufficient remaining margin:**
-   - Free Balance: ${free_margin:,.2f} USDT
-   - Must have at least 12% of total balance (완화: 20% → 12%)
-   - Risk management: ensure account can handle additional exposure
-
-4. **Reasonable confidence in reversal:**
-   - AI confidence ≥ 40% (완화: 70% → 40% 단계별)
-   - Expected win rate ≥ 45% (완화: 60% → 45%)
-   - At least 1 timeframe showing support
-
-5. **Not already over-exposed:**
-   - Maximum 3 add_positions per trade (완화: 2회 → 3회)
-   - Each add uses smaller % progressively
-
-📊 **ADD_POSITION SIZING (유동적 금액 결정):**
-
-Based on loss depth AND confidence level:
-- **Deep Loss (-10% ~ -15%) + High Confidence (70%+)**: 15-25% of remaining margin
-- **Moderate Loss (-5% ~ -10%) + High Confidence (70%+)**: 12-20% of remaining margin  
-- **Moderate Loss (-5% ~ -10%) + Medium Confidence (55-70%)**: 8-15% of remaining margin
-- **Any Loss + Low Confidence (40-55%)**: 5-10% of remaining margin
-- **Shallow Loss (-3% ~ -5%)**: 5-8% (conservative start)
-
-⚠️ **NEVER ADD POSITION IF:**
-- Free margin < 12% of total balance
-- Expected win rate < 45%
-- Loss exceeds -20% (too risky, consider exit)
-- Already added to position 3+ times
-- ALL timeframes show against position
-- No reversal signals at all
-
-💡 **ADD_POSITION LOGIC v8.9.3:**
-This is a FLEXIBLE strategy to average down when:
-- Technical analysis suggests possible reversal
-- Account has sufficient margin buffer
-- Risk is progressively managed (smaller adds as loss deepens)
-- At least some confirmation signals present
-
-⚠️ **KEY PRINCIPLE:** 
-Start small, add progressively. First물타기 is smallest, subsequent adds can increase if reversal confirms.
-Better to enter multiple small positions than one large risky add.
-
-⏰ **TIME-BASED CONTEXT:**
-- Short-term (<1 hour): Prioritize technical signals over time
-- Medium-term (1-4 hours): Normal assessment window
-- Extended (4-8 hours): Evaluate if momentum justifies continued holding
-- Long-term (>8 hours): Question opportunity cost if minimal progress
-- Very long (>24 hours): Seriously reconsider unless strong structural trend
-
-💰 **PROFIT/LOSS ASSESSMENT (Relative to Volatility):**
-**For Loss Scenarios:**
-- **Severe Loss (multiple ATR against position):** 
-  Exit immediately unless extremely strong reversal signals on multiple timeframes
-  
-- **Significant Loss (1-2 ATR against position):** 
-  Monitor very closely, exit if momentum doesn't reverse soon
-  
-- **Moderate Loss (less than 1 ATR):** 
-  Acceptable if technical indicators support recovery
-  Stop loss should be used if breakdown continues
-
-**For Profit Scenarios:**
-- **Minimal Profit (less than 1 ATR movement):**
-  Hold unless clear reversal signals - still early in potential move
-  
-- **Moderate Profit (1-2 ATR movement):**
-  Consider partial exit if reversal hints appear
-  Full hold if momentum remains strong
-  
-- **Substantial Profit (2-3 ATR movement):**
-  Strong candidate for partial profit-taking
-  Watch for exhaustion signals
-  
-- **Exceptional Profit (>3 ATR movement):**
-  Secure significant portion unless momentum extraordinarily strong
-  Use trailing stops to protect gains
-
-**Key Principle:** 
-Don't exit profitable positions just because of arbitrary profit levels. 
-Exit when TECHNICAL SIGNALS indicate momentum exhaustion or reversal,
-not when hitting a percentage target. Let winners run until they show
-weakness. Cut losers when technical breakdown is confirmed.
-
-═══════════════════════════════════════════
-📋 **RESPONSE REQUIREMENTS**
-═══════════════════════════════════════════
-
-**CRITICAL INSTRUCTIONS:**
-1. You MUST respond with ONLY a valid JSON object
-2. Do NOT include any text before or after the JSON
-3. Do NOT use markdown code blocks (no ```)
-4. Follow this EXACT structure:
+Return ONLY this JSON (no other text):
 
 {json_template}
 
-**Field Requirements:**
-- decision: "hold", "close", "partial_close", or "add_position" (물타기)
-- percentage: 0 for hold, 100 for full close, 25-75 for partial, 5-30 for add_position (잔여 마진 %)
-- reason: **MUST be technical and specific, not based on arbitrary percentages**
-- exit_type: "take_profit", "stop_loss", "trend_reversal", "risk_management", "time_stop", "add_position", or "none"
-- confidence: 0.0 to 1.0 (lower if signals are mixed across timeframes)
-- urgency: "immediate", "soon", "watch", or "none"
-- add_position_margin_percent: 5-30 (물타기 시 잔여 마진의 몇 % 사용할지, decision="add_position"일 때만)
-- expected_win_rate: 0.0-1.0 (물타기 시 예상 승률, decision="add_position"일 때만)
+Fields:
+- decision: "hold" | "close" | "partial_close" | "add_position" | "reverse"
+- percentage: 0 (hold), 100 (close/reverse), 25-75 (partial), 5-20 (add_position margin%)
+- reason: Short explanation (1-2 sentences)
+- exit_type: "take_profit" | "stop_loss" | "trend_reversal" | "risk_management" | "overbought_reversal" | "oversold_reversal" | "add_position" | "none"
+- confidence: 0.0-1.0
+- urgency: "immediate" | "soon" | "watch" | "none"
+- add_position_margin_percent: 0-30 (only for add_position)
+- expected_win_rate: 0.0-1.0 (only for add_position)
 
-**Your reason MUST include:**
-1. **Timeframe Analysis:** What each timeframe (5m/1h/4h) is telling you
-2. **Trend Assessment:** Is trend intact, weakening, or reversing?
-3. **Momentum Evaluation:** MACD, RSI, ADX readings and their direction
-4. **Volume Confirmation:** CMF showing money flow direction
-5. **Volatility Context:** How current move compares to ATR baseline
-6. **Key Level Analysis:** Support/resistance, Bollinger band position
-7. **Leveraged PnL Context:** Current profit/loss relative to volatility
-8. **Divergence Check:** Any bearish/bullish divergences detected?
-
-**DO NOT:**
-- Make decisions based solely on reaching a percentage profit target
-- Exit profitable positions just because "profit is high enough"
-- Ignore strong technical momentum just to "secure profits"
-- Use arbitrary rules like "always exit at X%"
-
-**DO:**
-- Exit when technical indicators show momentum exhaustion
-- Hold strong trends even with large profits if momentum persists
-- Cut losses quickly when breakdown is technically confirmed
-- Let ATR guide what's "normal" vs "extended" movement
-- Prioritize multi-timeframe confirmation over single signals
-
-Return ONLY the JSON object. Start with {{ and end with }}
+Return ONLY JSON. Start with {{ end with }}
 """
 
         # AI API 호출
@@ -3549,35 +3374,26 @@ Return ONLY the JSON object. Start with {{ and end with }}
             messages=[
                 {
                     "role": "system",
-                    "content": """You are an elite crypto position manager specializing in leveraged futures trading with adaptive risk management.
+                    "content": """You are a crypto position manager. Return ONLY valid JSON.
 
-CRITICAL RULES:
-1. ONLY return valid JSON - no explanations, no reasoning, no markdown
-2. Start your response with { and end with }
-3. Follow the exact JSON schema provided
-4. Be decisive but prudent - leveraged positions require careful management
-5. Consider multi-timeframe analysis before making exit decisions
-6. Account for leverage amplification in all profit/loss calculations
+RULES:
+1. Return ONLY JSON - no text, no markdown, no explanation
+2. Start with { and end with }
+3. Be decisive - leveraged positions need quick decisions
 
-ADAPTIVE DECISION FRAMEWORK:
-- Each asset has unique volatility - use ATR as baseline, not fixed percentages
-- Exits should be driven by TECHNICAL SIGNALS, not arbitrary profit targets
-- Let winning trades run until momentum shows exhaustion
-- Cut losing trades when technical breakdown is confirmed
-- Consider timeframe hierarchy: 4h trend > 1h momentum > 5m noise
-- Volatility matters: 5% move in BTC ≠ 5% move in altcoin
+DECISIONS (v8.9.4):
+- "hold": Keep position, momentum intact
+- "close": Exit 100%, clear reversal signals
+- "partial_close": Exit 25-75%, mixed signals
+- "add_position": Add to losing position (물타기), reversal signs detected
+- "reverse": Close and flip direction (overbought/oversold reversal)
 
-PRIORITY OBJECTIVES:
-1. Protect Capital: Exit when multiple timeframes show reversal
-2. Maximize Profits: Hold while momentum and trend remain strong
-3. Manage Risk: Balance profit preservation vs. opportunity cost
-4. Respect Market Structure: Support/resistance, trendlines, key levels
-5. Adapt to Volatility: High ATR assets need wider tolerance
-
-DECISION PHILOSOPHY:
-"Don't exit because you hit a profit target. Exit because the market 
-tells you the move is over. Don't hold a loser hoping. Exit when 
-technical breakdown is clear. Be patient with winners, ruthless with losers."
+KEY RULES:
+- Exit on TECHNICAL signals, not arbitrary profit %
+- Low profit (0-3%) after 20min = be extra careful
+- Overbought LONG (RSI>70) = consider REVERSE to SHORT
+- Oversold SHORT (RSI<30) = consider REVERSE to LONG
+- Loss -3% to -15% with reversal signs = consider ADD_POSITION
 
 Your response must be a single JSON object."""
                 },
@@ -3846,6 +3662,112 @@ def ai_monitoring_cycle():
                         })
                 else:
                     logger.info(f"{type_indicator} Exit decision for {symbol} ({position_type.upper()}) not executed due to low confidence ({decision['confidence']:.1%})")
+            
+            # 🆕 v8.9.4: 포지션 전환 (reverse) 결정
+            elif decision['decision'] == 'reverse':
+                logger.info(f"[Multi-User] 🔄 포지션 전환 신호 감지: {symbol}")
+                logger.info(f"   → 이유: {decision.get('reason', 'N/A')}")
+                logger.info(f"   → 신뢰도: {decision.get('confidence', 0)*100:.1f}%")
+                logger.info(f"   → 긴급도: {decision.get('urgency', 'N/A')}")
+                
+                # 신뢰도 확인 (60% 이상 또는 immediate 긴급도)
+                if decision['confidence'] >= 0.6 or decision['urgency'] == 'immediate':
+                    current_side = position['side']
+                    new_side = 'sell' if current_side == 'buy' else 'buy'
+                    
+                    logger.info(f"   → 현재 방향: {current_side.upper()} → 새 방향: {new_side.upper()}")
+                    
+                    for user_id, user_exchange in exchanges.items():
+                        user_name = USER_CONFIGS[user_id]['name']
+                        
+                        try:
+                            # 1. 기존 포지션 청산
+                            logger.info(f"[{user_name}] 🔴 기존 {current_side.upper()} 포지션 청산 중...")
+                            close_decision = {
+                                'decision': 'close',
+                                'percentage': 100,
+                                'reason': f"Position reversal: {decision.get('reason', 'Overbought/Oversold reversal')}",
+                                'exit_type': decision.get('exit_type', 'trend_reversal'),
+                                'confidence': decision['confidence'],
+                                'urgency': 'immediate'
+                            }
+                            
+                            # execute_position_exit 사용 (특정 유저용)
+                            close_side = 'sell' if current_side == 'buy' else 'buy'
+                            amount = position['amount']
+                            
+                            order = user_exchange.create_market_order(symbol, close_side, amount)
+                            logger.info(f"[{user_name}] ✅ 기존 포지션 청산 완료: {order.get('id', 'N/A')}")
+                            
+                            # 2. 잠시 대기 후 반대 포지션 진입
+                            time.sleep(1)
+                            
+                            # 잔고 확인
+                            balance = user_exchange.fetch_balance()
+                            available_margin = float(balance['USDT']['free'])
+                            
+                            if available_margin < 20:
+                                logger.warning(f"[{user_name}] 마진 부족 - 반대 포지션 진입 스킵")
+                                continue
+                            
+                            # 반대 포지션 사이즈 계산 (기존 포지션의 70%)
+                            symbol_config = SYMBOL_CONFIG.get(symbol, {})
+                            leverage = symbol_config.get('leverage', 10)
+                            
+                            ticker = user_exchange.fetch_ticker(symbol)
+                            current_price = ticker['last']
+                            
+                            # 기존 포지션 크기의 70%로 진입 (리스크 관리)
+                            new_position_usdt = (amount * current_price / leverage) * 0.7
+                            new_position_usdt = min(new_position_usdt, available_margin * 0.3)  # 최대 30%
+                            new_amount = (new_position_usdt * leverage) / current_price
+                            
+                            logger.info(f"[{user_name}] 🟢 새 {new_side.upper()} 포지션 진입 중...")
+                            logger.info(f"   → 수량: {new_amount:.6f} (기존의 70%)")
+                            logger.info(f"   → 마진: ${new_position_usdt:.2f}")
+                            
+                            new_order = user_exchange.create_market_order(symbol, new_side, new_amount)
+                            logger.info(f"[{user_name}] ✅ 새 포지션 진입 완료: {new_order.get('id', 'N/A')}")
+                            
+                            # 텔레그램 알림
+                            if ENABLE_TELEGRAM:
+                                send_telegram_notification(
+                                    f"""
+🔄 <b>포지션 전환 실행 (v8.9.4)</b>
+
+<b>User:</b> {user_name}
+<b>심볼:</b> {symbol}
+<b>전환:</b> {current_side.upper()} → {new_side.upper()}
+
+<b>📊 청산 포지션:</b>
+  - 방향: {current_side.upper()}
+  - 수량: {amount:.6f}
+
+<b>📈 신규 포지션:</b>
+  - 방향: {new_side.upper()}
+  - 수량: {new_amount:.6f}
+  - 마진: ${new_position_usdt:.2f}
+
+<b>이유:</b> {decision.get('reason', 'N/A')[:100]}
+<b>Exit Type:</b> {decision.get('exit_type', 'N/A')}
+<b>신뢰도:</b> {decision.get('confidence', 0)*100:.1f}%
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                                    """.strip(),
+                                    'warning'
+                                )
+                            
+                            exit_decisions.append({
+                                'symbol': symbol,
+                                'position_type': position_type,
+                                'decision': 'reverse',
+                                'reason': f"{current_side.upper()} → {new_side.upper()}: {decision.get('reason', 'N/A')}"
+                            })
+                            
+                        except Exception as e:
+                            logger.error(f"[{user_name}] 포지션 전환 오류: {str(e)}", exc_info=True)
+                else:
+                    logger.info(f"{type_indicator} Reverse decision for {symbol} not executed due to low confidence ({decision['confidence']:.1%})")
             
             # 🆕 물타기 결정인 경우 (v8.9.3 개선)
             elif decision['decision'] == 'add_position':
