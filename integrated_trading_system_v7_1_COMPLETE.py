@@ -1,51 +1,50 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║              INTEGRATED TRADING SYSTEM v7.2 STRICT                           ║
+║              INTEGRATED TRADING SYSTEM v7.2 COMPREHENSIVE                    ║
 ║                   Multi-User Crypto Trading Bot                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  Version: 7.2.0 STRICT                                                       ║
+║  Version: 7.2.0                                                              ║
 ║  Last Updated: 2025-11-26                                                    ║
 ║  Base Version: v7.1 ENHANCED                                                 ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║                        v7.2 CHANGELOG (STRICT MODE)                          ║
+║                     v7.2 CHANGELOG (COMPREHENSIVE MODE)                      ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  🚨 핵심 철학: "애매하면 무조건 REJECT!"                                      ║
+║  🎯 핵심 철학: "종합적으로 판단, 단일 지표로 REJECT 금지!"                   ║
 ║                                                                              ║
-║  1. 진입 기준 대폭 강화:                                                      ║
-║     - APPROVE 기준: 60% → 75% 이상 필수                                      ║
-║     - REJECT 기준: 65% 미만 = 무조건 REJECT                                  ║
-║     - MODIFY 범위: 65-74% (더 좁아짐)                                        ║
-║     - 최소 Risk/Reward 비율: 2.0 이상 필수                                   ║
+║  1. 위험 점수 시스템 (RISK SCORE) 도입:                                      ║
+║     - 개별 조건이 아닌 종합 점수로 평가                                      ║
+║     - 타임프레임별 가중치: 4h > 1h > 15m                                     ║
+║     - Risk Score 0-4: 정상 진행                                              ║
+║     - Risk Score 5-7: MODIFY (축소 진입)                                     ║
+║     - Risk Score ≥ 8: REJECT                                                 ║
 ║                                                                              ║
-║  2. 역방향 진입 기준 강화:                                                    ║
-║     - 기존: 2개 신호 또는 5점 → 변경: 3개 신호 또는 8점 이상 필수            ║
-║     - 조건 미달 시 REVERSE 대신 REJECT                                       ║
+║  2. 15분봉 RSI 조건 완화:                                                    ║
+║     - 15m RSI 70-75: +1점 (기존: 즉시 REJECT)                                ║
+║     - 15m RSI > 80: +2점 (극단만 높은 점수)                                  ║
+║     - Stochastic Fast 15m Cross 진입에 적합                                  ║
 ║                                                                              ║
-║  3. 즉시 REJECT 조건 추가 (Any ONE of these → REJECT):                       ║
-║     - BUY: 15m RSI>70 OR 1h RSI>65 OR 4h RSI>60                             ║
-║     - BUY: 4h ADX<20 OR 4h DI->DI+ OR CMF 2+개 음수                         ║
-║     - SELL: 15m RSI<30 OR 1h RSI<35 OR 4h RSI<40                            ║
-║     - SELL: 4h ADX<20 OR 4h DI+>DI- OR CMF 2+개 양수                        ║
+║  3. 타임프레임별 역할 명확화:                                                ║
+║     - 15m: 진입 타이밍 (Entry timing)                                        ║
+║     - 1h: 중기 추세 (Medium-term trend)                                      ║
+║     - 4h: 장기 방향 (Long-term direction) - 가장 중요                        ║
 ║                                                                              ║
-║  4. MANDATORY Requirements 도입:                                             ║
-║     - BUY: 4h 상승 추세(DI+>DI- AND ADX>20) 필수                            ║
-║     - BUY: 1h RSI 30-65 범위 필수                                            ║
-║     - BUY: 15m RSI < 70 필수                                                 ║
-║     - SELL: 4h 하락 추세(DI->DI+ AND ADX>20) 필수                           ║
-║     - SELL: 1h RSI 35-70 범위 필수                                           ║
-║     - SELL: 15m RSI > 30 필수                                                ║
+║  4. R:R 비율 조정:                                                           ║
+║     - 최소 요구: 2.0 → 1.8                                                   ║
+║     - 권장: 2.0 이상                                                         ║
 ║                                                                              ║
-║  5. 포지션 사이즈 제한:                                                       ║
-║     - 최대 50% (이전 100%)                                                   ║
-║     - Score 85-100: 40-50%                                                   ║
-║     - Score 75-84: 30-40%                                                    ║
-║     - Score 65-74: 20-30% (MODIFY)                                           ║
+║  5. 즉시 REJECT 조건 축소:                                                   ║
+║     - 4h RSI > 75 (buy) / < 25 (sell) - 극단만                              ║
+║     - 4h 강한 반대 추세 (DI 차이 10+ AND ADX > 25)                          ║
+║     - 이중 BB 돌파 (4h AND 1h 동시)                                         ║
 ║                                                                              ║
-║  6. 보수적 마인드셋 프롬프트:                                                 ║
-║     - "WHEN IN DOUBT, REJECT" 원칙 강조                                      ║
-║     - 자본 보존 우선, 수익 추구 차선                                         ║
-║     - 모든 거래를 잡으려 하지 말 것                                          ║
-║     - 품질 > 수량                                                            ║
+║  6. APPROVAL SCORE 기준:                                                     ║
+║     - APPROVE: ≥ 75점                                                        ║
+║     - MODIFY: 70-74점                                                        ║
+║     - REJECT: < 70점                                                         ║
+║                                                                              ║
+║  7. 역방향 진입 기준 유지:                                                   ║
+║     - 3개 극단 신호 또는 8점 이상 필요                                       ║
+║     - 조건 미달 시 REJECT                                                    ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║  v7.1 기능 유지:                                                             ║
 ║  - Peak Profit Tracking 시스템                                               ║
@@ -4073,11 +4072,11 @@ Your response must be a single JSON object."""
 {
     "decision": "approve",
     "modified_action": "sell",
-    "percentage": 30,
-    "reason": "Strong bearish indicators with score 78/100. Mandatory: 4h DI->DI+ (✓), 1h RSI 52 (✓), 15m RSI 45 (✓). Primary: 4h downtrend +25, 1h RSI optimal +15, below SMA +10 = 50. Secondary: CMF negative +12, MACD bearish +8 = 20. Bonus: Volume +5 = 5. R:R = 2.5 meets minimum.",
+    "percentage": 35,
+    "reason": "RISK SCORE: 3/8 (4h RSI 58 +0, 1h CMF -0.08 +0, 15m RSI 68 +0). APPROVAL SCORE: 78/100 (4h DI->DI+ with ADX 28 +25, 1h RSI 48 in zone +15, trend aligned +10, CMF negative 1h+4h +10, MACD bearish +8, no support nearby +7). R:R 2.3 meets 1.8 minimum. Comprehensive evaluation shows strong downtrend with good entry timing.",
     "stop_loss_price": 186.42,
     "take_profit_price": 166.11,
-    "pl_ratio": 2.5,
+    "pl_ratio": 2.3,
     "confidence": 0.78
 }"""
 
@@ -4224,25 +4223,76 @@ If you're not highly confident in the setup, REJECT and wait for a better opport
 A 50% win rate with 2:1 risk/reward is profitable - we don't need to enter every signal!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-⛔ **IMMEDIATE REJECTION CONDITIONS (Any ONE of these → REJECT):**
+⛔ **ABSOLUTE REJECTION CONDITIONS (Instant REJECT - Non-negotiable):**
 
-For BUY Signals - REJECT if:
-1. **RSI Overbought:** 15m RSI > 70 OR 1h RSI > 65 OR 4h RSI > 60
-2. **No Clear Trend:** 4h ADX < 20 (weak/no trend = no edge)
-3. **Against Major Trend:** 4h DI- > DI+ (downtrend on higher timeframe)
-4. **Money Flow Against:** CMF negative on 2+ timeframes
-5. **Resistance Nearby:** Price within 1% of Bollinger Upper on 1h or 4h
-6. **MACD Divergence:** Bearish divergence visible on any timeframe
-7. **Volume Weakness:** Declining volume with rising price
+For BUY Signals - INSTANT REJECT only if:
+- 4h RSI > 75 (extreme overbought on major timeframe)
+- 4h DI- > DI+ by more than 10 AND ADX > 25 (strong downtrend)
+- Price above 4h Bollinger Upper AND above 1h Bollinger Upper (double extreme)
 
-For SELL Signals - REJECT if:
-1. **RSI Oversold:** 15m RSI < 30 OR 1h RSI < 35 OR 4h RSI < 40
-2. **No Clear Trend:** 4h ADX < 20 (weak/no trend = no edge)
-3. **Against Major Trend:** 4h DI+ > DI- (uptrend on higher timeframe)
-4. **Money Flow Against:** CMF positive on 2+ timeframes
-5. **Support Nearby:** Price within 1% of Bollinger Lower on 1h or 4h
-6. **MACD Divergence:** Bullish divergence visible on any timeframe
-7. **Volume Weakness:** Declining volume with falling price
+For SELL Signals - INSTANT REJECT only if:
+- 4h RSI < 25 (extreme oversold on major timeframe)
+- 4h DI+ > DI- by more than 10 AND ADX > 25 (strong uptrend)
+- Price below 4h Bollinger Lower AND below 1h Bollinger Lower (double extreme)
+
+📊 **RISK SCORE SYSTEM (Comprehensive Evaluation):**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Instead of rejecting on single conditions, calculate TOTAL RISK SCORE.
+**REJECT if Risk Score ≥ 8 points | MODIFY if Risk Score 5-7 | PROCEED if Risk Score 0-4**
+
+For BUY Signals - Risk Points:
+**Higher Timeframe Issues (Weighted More):**
+- 4h RSI > 65: +3 points (overbought zone)
+- 4h RSI > 70: +4 points (strong overbought)
+- 4h ADX < 20: +3 points (no clear trend)
+- 4h DI- > DI+: +3 points (against major trend)
+- 4h CMF < -0.1: +2 points (money outflow)
+
+**Medium Timeframe Issues:**
+- 1h RSI > 70: +2 points (overbought)
+- 1h RSI > 75: +3 points (strong overbought)
+- 1h CMF < -0.1: +1 point (money outflow)
+- 1h MACD bearish cross: +2 points
+
+**Short Timeframe Issues (Weighted Less - can be volatile):**
+- 15m RSI > 75: +1 point (note: 70-75 is acceptable for Stoch Fast signals)
+- 15m RSI > 80: +2 points (extreme only)
+- 15m CMF < -0.15: +1 point
+
+**Multiple Timeframe Alignment Issues:**
+- CMF negative on 2+ timeframes: +2 points
+- RSI > 65 on 2+ timeframes: +2 points
+- Price near BB upper on 2+ timeframes: +2 points
+
+For SELL Signals - Risk Points:
+**Higher Timeframe Issues (Weighted More):**
+- 4h RSI < 35: +3 points (oversold zone)
+- 4h RSI < 30: +4 points (strong oversold)
+- 4h ADX < 20: +3 points (no clear trend)
+- 4h DI+ > DI-: +3 points (against major trend)
+- 4h CMF > 0.1: +2 points (money inflow)
+
+**Medium Timeframe Issues:**
+- 1h RSI < 30: +2 points (oversold)
+- 1h RSI < 25: +3 points (strong oversold)
+- 1h CMF > 0.1: +1 point (money inflow)
+- 1h MACD bullish cross: +2 points
+
+**Short Timeframe Issues (Weighted Less):**
+- 15m RSI < 25: +1 point (note: 25-30 is acceptable for Stoch Fast signals)
+- 15m RSI < 20: +2 points (extreme only)
+- 15m CMF > 0.15: +1 point
+
+**Multiple Timeframe Alignment Issues:**
+- CMF positive on 2+ timeframes: +2 points
+- RSI < 35 on 2+ timeframes: +2 points
+- Price near BB lower on 2+ timeframes: +2 points
+
+**Risk Score Decision:**
+- Risk Score 0-4: Proceed with normal evaluation
+- Risk Score 5-7: MODIFY with reduced position (30% max)
+- Risk Score ≥ 8: REJECT (too risky)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 🔄 **v7.2 STRICT REVERSE ENTRY CONDITIONS:**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -4265,120 +4315,120 @@ For SELL Signals - REJECT if:
 → IF only 1-2 conditions: **DECISION = "reject" (not enough for reverse)**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-✅ **STRICT APPROVAL CRITERIA - WEIGHTED SCORING (Must score ≥ 75%):**
+✅ **APPROVAL SCORING (After Risk Score Check):**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Only proceed to approval scoring if Risk Score < 8
 
-For BUY Signals (APPROVE only if total score ≥ 75 points):
-**MANDATORY Requirements (Must have ALL - each is 0 or disqualifying):**
-- 4h trend bullish: DI+ > DI- AND ADX > 20 → Required
-- 1h momentum acceptable: RSI 30-65 → Required
-- No extreme overbought: 15m RSI < 70 → Required
-
-**Primary Factors (max 50 points):**
-- 4h ADX > 25 with DI+ > DI- → Strong uptrend (+25 points)
-- 1h RSI in optimal zone (40-55) → Good entry timing (+15 points)
-- Price above 1h SMA/EMA with room to move (+10 points)
+For BUY Signals (APPROVE if total score ≥ 70 points):
+**Primary Factors (max 50 points) - Higher Timeframe Focus:**
+- 4h DI+ > DI- with ADX > 20 → Uptrend confirmed (+20 points)
+- 4h ADX > 25 → Strong trend (+5 bonus)
+- 1h RSI in favorable zone (35-60) → Good entry timing (+15 points)
+- 1h trend alignment (price > SMA, MACD positive) (+10 points)
 
 **Secondary Factors (max 30 points):**
-- CMF positive on 1h AND 4h → Strong money inflow (+12 points)
-- MACD bullish alignment on 4h (+8 points)
-- No immediate resistance within 2% (+5 points)
+- CMF positive on 1h AND 4h → Money inflow confirmed (+10 points)
+- 4h MACD bullish or neutral (+8 points)
+- No immediate resistance within 1.5x ATR (+7 points)
 - ADX rising (trend strengthening) (+5 points)
 
 **Bonus Factors (max 20 points):**
-- 4h MACD histogram increasing (+5 points)
 - Volume above 20-period average (+5 points)
 - Breaking key resistance level (+5 points)
+- 15m entry timing good (Stoch cross valid) (+5 points)
 - Positive market sentiment (+5 points)
 
-For SELL Signals (APPROVE only if total score ≥ 75 points):
-**MANDATORY Requirements (Must have ALL):**
-- 4h trend bearish: DI- > DI+ AND ADX > 20 → Required
-- 1h momentum acceptable: RSI 35-70 → Required
-- No extreme oversold: 15m RSI > 30 → Required
-
-**Primary Factors (max 50 points):**
-- 4h ADX > 25 with DI- > DI+ → Strong downtrend (+25 points)
-- 1h RSI in optimal zone (45-60) → Good entry timing (+15 points)
-- Price below 1h SMA/EMA with room to move (+10 points)
+For SELL Signals (APPROVE if total score ≥ 70 points):
+**Primary Factors (max 50 points) - Higher Timeframe Focus:**
+- 4h DI- > DI+ with ADX > 20 → Downtrend confirmed (+20 points)
+- 4h ADX > 25 → Strong trend (+5 bonus)
+- 1h RSI in favorable zone (40-65) → Good entry timing (+15 points)
+- 1h trend alignment (price < SMA, MACD negative) (+10 points)
 
 **Secondary Factors (max 30 points):**
-- CMF negative on 1h AND 4h → Strong money outflow (+12 points)
-- MACD bearish alignment on 4h (+8 points)
-- No immediate support within 2% (+5 points)
+- CMF negative on 1h AND 4h → Money outflow confirmed (+10 points)
+- 4h MACD bearish or neutral (+8 points)
+- No immediate support within 1.5x ATR (+7 points)
 - ADX rising (trend strengthening) (+5 points)
 
 **Bonus Factors (max 20 points):**
-- 4h MACD histogram decreasing (+5 points)
 - Volume above 20-period average (+5 points)
 - Breaking key support level (+5 points)
+- 15m entry timing good (Stoch cross valid) (+5 points)
 - Negative market sentiment (+5 points)
-
-🎯 **STRICT RISK-REWARD REQUIREMENTS:**
-
-**Minimum Requirements (REJECT if not met):**
-- Risk/Reward Ratio: Minimum 2.0 (aim for 2.5+)
-- Stop Loss: Within 1.5-2x ATR (not too wide)
-- Take Profit: At least 2x the stop loss distance
-
-**Position Size Recommendations:**
-- Score 85-100: Use 40-50% position (high confidence)
-- Score 75-84: Use 30-40% position (good confidence)
-- Score 65-74: MODIFY with 20-30% position (marginal)
-- Score < 65: REJECT (insufficient edge)
-
-**🚨 DECISION FRAMEWORK (STRICT):**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-1. **APPROVE:** Score ≥ 75%, ALL mandatory requirements met, R:R ≥ 2.0
-2. **MODIFY:** Score 65-74%, Most requirements met, suggest smaller size
-3. **REJECT:** Score < 65% OR ANY mandatory requirement failed OR R:R < 2.0
-4. **REVERSE:** Score ≥ 75% for opposite direction WITH 3+ extreme signals or 8+ points
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**⚠️ CONSERVATIVE MINDSET (v7.2):**
+🎯 **RISK-REWARD REQUIREMENTS:**
+
+**Minimum Requirements:**
+- Risk/Reward Ratio: Minimum 1.8 (aim for 2.0+)
+- Stop Loss: Within 1.5-2.5x ATR
+- Take Profit: At least 1.8x the stop loss distance
+
+**Position Size Based on Scores:**
+- Approval Score 85+ AND Risk Score 0-2: Use 40-50% position
+- Approval Score 75-84 AND Risk Score 0-4: Use 30-40% position
+- Approval Score 70-74 OR Risk Score 5-7: Use 20-30% position (MODIFY)
+- Approval Score < 70 OR Risk Score ≥ 8: REJECT
+
+**🚨 DECISION FRAMEWORK (v7.2 COMPREHENSIVE):**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Step 1: Check ABSOLUTE REJECTION conditions → If met, instant REJECT
+Step 2: Calculate RISK SCORE → If ≥ 8, REJECT
+Step 3: Calculate APPROVAL SCORE → Must be ≥ 70 for approval
+Step 4: Determine position size based on both scores
+
+**Final Decision:**
+- APPROVE: Risk Score ≤ 4 AND Approval Score ≥ 75 AND R:R ≥ 1.8
+- MODIFY: Risk Score 5-7 OR Approval Score 70-74, use smaller position
+- REJECT: Risk Score ≥ 8 OR Approval Score < 70 OR R:R < 1.8 OR Absolute conditions met
+- REVERSE: 3+ extreme signals with Approval Score ≥ 70 for opposite direction
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**⚠️ KEY PRINCIPLES (v7.2):**
+- **Comprehensive evaluation** - Don't reject on single indicators
+- **Weight by timeframe** - 4h > 1h > 15m (higher TF more important)
+- **15m is entry timing, not trend** - Stoch Fast cross on 15m is for entry, not direction
 - Missing a good trade is better than taking a bad trade
-- If ANY doubt exists about the setup, REJECT
-- Don't chase entries - wait for clean setups
-- Quality over quantity: fewer trades with higher win rate
-- Protect capital first, profits second
-- When conditions are "mixed" or "unclear", the answer is REJECT
-- **v7.2: If reverse signals detected but not strong enough (< 3 signals or < 8 points), REJECT instead of reverse!**
+- When Risk Score is borderline (6-7), lean toward MODIFY rather than REJECT
+- When Approval Score is borderline (68-72), consider market context
+- **v7.2: Calculate RISK SCORE first, then APPROVAL SCORE if risk is acceptable**
 
-**CRITICAL INSTRUCTIONS (v7.2 STRICT MODE):**
+**CRITICAL INSTRUCTIONS (v7.2 COMPREHENSIVE MODE):**
 1. You MUST respond with ONLY a valid JSON object
 2. Do NOT include any text before or after the JSON
 3. Do NOT use markdown code blocks (no ```)
-4. Calculate your confidence score based on the STRICT criteria above
-5. **DEFAULT TO REJECT** - Only approve when you're highly confident (score ≥ 75%)
-6. **v7.2: REVERSE only when 3+ extreme signals OR 8+ points - otherwise REJECT!**
-7. **When conditions are "mixed", "unclear", or "marginal" → REJECT**
-8. **R:R ratio must be ≥ 2.0 for any entry (approve, modify, or reverse)**
+4. **STEP 1:** Calculate RISK SCORE first (sum of risk points based on indicators)
+5. **STEP 2:** If Risk Score < 8, calculate APPROVAL SCORE
+6. **STEP 3:** Make decision based on both scores
+7. **DON'T reject on single indicator** - evaluate comprehensively
+8. **15m timeframe is for entry timing** - 1h/4h are for trend direction
+9. **R:R ratio must be ≥ 1.8** for any entry
 
 {json_template}
 
-**Field Requirements (v7.2 STRICT Updated):**
+**Field Requirements (v7.2 Updated):**
 - decision: must be "approve", "reject", "modify", or "reverse"
 - modified_action: must be "buy", "sell", or "hold" (for reverse: use OPPOSITE of original signal)
-- percentage: integer between 10 and 50 (smaller sizes for safety, max 50% even for high confidence)
-- reason: string explaining the decision with SCORE CALCULATION
-- stop_loss_price: number (use ATR-based calculation, 1.5-2x ATR)
-- take_profit_price: number (MUST be at least 2x the stop loss distance)
-- pl_ratio: number between 2.0 and 5.0 (minimum 2.0 required for any entry)
-- confidence: number between 0.0 and 1.0 (score/100)
+- percentage: integer between 10 and 50 (based on Risk Score + Approval Score)
+- reason: string explaining the decision with BOTH Risk Score AND Approval Score breakdown
+- stop_loss_price: number (use ATR-based calculation, 1.5-2.5x ATR)
+- take_profit_price: number (MUST be at least 1.8x the stop loss distance)
+- pl_ratio: number between 1.8 and 5.0 (minimum 1.8 required)
+- confidence: number between 0.0 and 1.0 (based on scores)
 
-**DECISION TYPES EXPLAINED (v7.2 STRICT):**
-1. **"approve"** - Execute the original signal ONLY if score ≥ 75% AND all mandatory requirements met
-2. **"reject"** - DEFAULT choice when conditions are unclear, mixed, or score < 65%
-3. **"modify"** - Score 65-74%, enter with smaller position (20-30%)
-4. **"reverse"** - Enter OPPOSITE direction ONLY when 3+ extreme signals OR 8+ reverse points
-   - If extreme conditions detected but < 3 signals and < 8 points → USE REJECT instead!
+**DECISION TYPES EXPLAINED (v7.2):**
+1. **"approve"** - Risk Score ≤ 4 AND Approval Score ≥ 75 AND R:R ≥ 1.8
+2. **"reject"** - Risk Score ≥ 8 OR Approval Score < 70 OR Absolute rejection conditions met
+3. **"modify"** - Risk Score 5-7 OR Approval Score 70-74, enter with smaller position (20-30%)
+4. **"reverse"** - 3+ extreme signals with conditions for opposite direction
 
 Your reason MUST include:
-- Calculated score breakdown (which factors earned points)
-- Which MANDATORY requirements passed/failed
-- Key supporting and opposing factors
-- Why R:R ratio meets the ≥ 2.0 requirement
-- **v7.2: If rejecting, explain which specific condition(s) caused the rejection**
-- **v7.2: If considering reverse but rejecting, explain why conditions weren't strong enough**
+- **RISK SCORE CALCULATION:** List which risk factors apply and total points (e.g., "Risk Score: 5/8 - 4h RSI 68 (+3), 1h CMF -0.12 (+1), 15m RSI 72 (+1)")
+- **APPROVAL SCORE CALCULATION:** List which approval factors apply (e.g., "Approval Score: 72/100 - 4h uptrend +20, 1h RSI 52 +15...")
+- **Key factors for/against the trade**
+- **R:R justification**
+- **v7.2: Explain comprehensive evaluation, not single-indicator rejection**
 
 Return ONLY the JSON object. Start with {{ and end with }}
 """
@@ -4391,16 +4441,16 @@ Return ONLY the JSON object. Start with {{ and end with }}
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a CONSERVATIVE crypto trading AI validator with STRICT entry criteria.
+                    "content": """You are a professional crypto trading AI validator using COMPREHENSIVE EVALUATION.
 
 CRITICAL RULES:
 1. ONLY return valid JSON - no explanations, no reasoning, no markdown
 2. Start your response with { and end with }
 3. Follow the exact JSON schema provided
-4. DEFAULT TO REJECT - Only approve when highly confident (score ≥ 75%)
-5. "When in doubt, REJECT" - unclear or mixed conditions = REJECT
-6. Minimum R:R ratio of 2.0 required for any entry
-7. Protect capital first - missing a trade is better than losing money
+4. **EVALUATE COMPREHENSIVELY** - Don't reject on single indicators
+5. Calculate RISK SCORE first, then APPROVAL SCORE if risk is acceptable
+6. 15m timeframe is for entry timing - focus on 1h/4h for trend direction
+7. Minimum R:R ratio of 1.8 required for any entry
 
 Your response must be a single JSON object."""
                 },
