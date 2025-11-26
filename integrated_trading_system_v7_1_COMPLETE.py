@@ -1,50 +1,58 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║              INTEGRATED TRADING SYSTEM v7.1 ENHANCED                         ║
+║              INTEGRATED TRADING SYSTEM v7.2 STRICT                           ║
 ║                   Multi-User Crypto Trading Bot                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  Version: 7.1.0                                                              ║
-║  Last Updated: 2025-01-XX                                                    ║
-║  Base Version: v7.0 COMPLETE_FIXED                                           ║
+║  Version: 7.2.0 STRICT                                                       ║
+║  Last Updated: 2025-11-26                                                    ║
+║  Base Version: v7.1 ENHANCED                                                 ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║                          v7.1 CHANGELOG                                       ║
+║                        v7.2 CHANGELOG (STRICT MODE)                          ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  1. 과매수/과매도 판단 강화 (check_overbought_oversold_multi_timeframe):        ║
-║     - RSI 기준 강화: 75/25 (기존 70/30)                                       ║
-║     - 멀티 타임프레임 Stochastic 분석 추가                                    ║
-║     - Williams %R 극단값 체크 추가                                            ║
-║     - CMF 반대 신호 체크 (매수인데 자금유출 등)                               ║
-║     - MACD/DI 크로스 실시간 감지                                              ║
-║     - 볼린저 밴드 멀티 타임프레임 확인                                        ║
+║  🚨 핵심 철학: "애매하면 무조건 REJECT!"                                      ║
 ║                                                                              ║
-║  2. 반대 진입 판단 강화:                                                       ║
-║     - 반대 진입 기준 완화: 3개 → 2개 신호 OR reverse_strength >= 5점           ║
-║     - reverse_strength 점수 시스템 도입 (0-15점)                              ║
-║     - AI 프롬프트에 MANDATORY REVERSE CONDITIONS 명시                         ║
+║  1. 진입 기준 대폭 강화:                                                      ║
+║     - APPROVE 기준: 60% → 75% 이상 필수                                      ║
+║     - REJECT 기준: 65% 미만 = 무조건 REJECT                                  ║
+║     - MODIFY 범위: 65-74% (더 좁아짐)                                        ║
+║     - 최소 Risk/Reward 비율: 2.0 이상 필수                                   ║
 ║                                                                              ║
-║  3. Peak Profit Tracking 시스템 (신규):                                       ║
-║     - position_peak_profits 전역 변수로 최고 수익률 추적                       ║
-║     - 수익 되돌림 감지: Peak > 2% AND Drawdown > 25% → 경고                  ║
-║     - Peak > 2% AND Drawdown > 40% → 즉시 청산 권고                          ║
+║  2. 역방향 진입 기준 강화:                                                    ║
+║     - 기존: 2개 신호 또는 5점 → 변경: 3개 신호 또는 8점 이상 필수            ║
+║     - 조건 미달 시 REVERSE 대신 REJECT                                       ║
 ║                                                                              ║
-║  4. 지지부진 포지션 감지:                                                      ║
-║     - 30분+ 보유, <1% 수익 → 경고                                            ║
-║     - 60분+ 보유, <1.5% 수익 → 강한 경고                                     ║
-║     - 120분+ 보유, <2% 수익 → 청산 권고                                      ║
+║  3. 즉시 REJECT 조건 추가 (Any ONE of these → REJECT):                       ║
+║     - BUY: 15m RSI>70 OR 1h RSI>65 OR 4h RSI>60                             ║
+║     - BUY: 4h ADX<20 OR 4h DI->DI+ OR CMF 2+개 음수                         ║
+║     - SELL: 15m RSI<30 OR 1h RSI<35 OR 4h RSI<40                            ║
+║     - SELL: 4h ADX<20 OR 4h DI+>DI- OR CMF 2+개 양수                        ║
 ║                                                                              ║
-║  5. 역전 신호 감지 민감도 향상:                                               ║
-║     - 임계값 완화: immediate 10→8점, soon 7→5점, watch 4→3점                 ║
-║     - MACD 모멘텀 급격 약화 감지, RSI 과열권 탈출 감지                        ║
-║     - BB 중간선 돌파, ADX 25 하향 돌파 감지                                   ║
+║  4. MANDATORY Requirements 도입:                                             ║
+║     - BUY: 4h 상승 추세(DI+>DI- AND ADX>20) 필수                            ║
+║     - BUY: 1h RSI 30-65 범위 필수                                            ║
+║     - BUY: 15m RSI < 70 필수                                                 ║
+║     - SELL: 4h 하락 추세(DI->DI+ AND ADX>20) 필수                           ║
+║     - SELL: 1h RSI 35-70 범위 필수                                           ║
+║     - SELL: 15m RSI > 30 필수                                                ║
 ║                                                                              ║
-║  6. PositionExitDecision 모델 업데이트:                                       ║
-║     - exit_type에 "profit_protection", "stagnation" 추가                     ║
+║  5. 포지션 사이즈 제한:                                                       ║
+║     - 최대 50% (이전 100%)                                                   ║
+║     - Score 85-100: 40-50%                                                   ║
+║     - Score 75-84: 30-40%                                                    ║
+║     - Score 65-74: 20-30% (MODIFY)                                           ║
 ║                                                                              ║
-║  7. AI 프롬프트 대폭 개선:                                                     ║
-║     - OVERBOUGHT/OVERSOLD ANALYSIS 섹션 추가                                  ║
-║     - PROFIT TRACKING & ALERTS 섹션 추가                                     ║
-║     - TIME-BASED STAGNATION RULES 추가                                       ║
-║     - PROFIT PROTECTION RULES 추가                                           ║
+║  6. 보수적 마인드셋 프롬프트:                                                 ║
+║     - "WHEN IN DOUBT, REJECT" 원칙 강조                                      ║
+║     - 자본 보존 우선, 수익 추구 차선                                         ║
+║     - 모든 거래를 잡으려 하지 말 것                                          ║
+║     - 품질 > 수량                                                            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  v7.1 기능 유지:                                                             ║
+║  - Peak Profit Tracking 시스템                                               ║
+║  - 지지부진 포지션 감지 (30/60/120분 규칙)                                   ║
+║  - 역전 신호 감지 민감도                                                     ║
+║  - OVERBOUGHT/OVERSOLD ANALYSIS                                              ║
+║  - PROFIT TRACKING & ALERTS                                                  ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -3727,11 +3735,14 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
                 df_15min, df_hourly, df_4h, action
             )
             
-            # 🆕 v7.1 반대 진입 기회 감지 (기준 완화: 2개 신호 또는 5점 이상)
+            # 🆕 v7.2 반대 진입 기회 감지 (기준 강화: 3개 신호 또는 8점 이상)
             if overbought_oversold_risk.get('reverse_opportunity', False):
                 reverse_signals = overbought_oversold_risk.get('reverse_signals', [])
                 reverse_strength = overbought_oversold_risk.get('reverse_strength', 0)
                 reverse_strength_points = overbought_oversold_risk.get('reverse_strength_points', 0)
+                
+                # 🆕 v7.2: 역방향 진입도 더 엄격하게 - 3개 이상 또는 8점 이상만 허용
+                is_strong_reverse = len(reverse_signals) >= 3 or reverse_strength_points >= 8
                 
                 reverse_entry_condition = f"""
 🔄🔄🔄 **REVERSE ENTRY OPPORTUNITY DETECTED!** 🔄🔄🔄
@@ -3750,23 +3761,25 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
 
 **Reverse Strength Score:** {reverse_strength_points}/15 ({reverse_strength:.1%})
 
-**v7.1 MANDATORY REVERSE CONDITIONS:**
-{chr(10).join(['  ✅' if any(sig in s for s in reverse_signals) else '  ❌' for sig in ['RSI', 'stoch', 'williams']])}
+**v7.2 STRICT REVERSE CONDITIONS (Must meet 3+ signals OR 8+ points):**
+{'🟢 STRONG REVERSE SIGNAL - Reverse entry allowed!' if is_strong_reverse else '🟡 WEAK REVERSE SIGNAL - Consider REJECT instead of reverse'}
 - RSI extreme (>80 for buy / <20 for sell): {overbought_oversold_risk['scores'].get('rsi_1h', 50):.1f}
 - Stochastic extreme (>90 for buy / <10 for sell): {overbought_oversold_risk['scores'].get('stoch_1h', 50):.1f}  
 - Williams %R extreme (>-10 for buy / <-90 for sell): {overbought_oversold_risk['scores'].get('williams_15m', -50):.1f}
 
-**IF YOU DETECT 2+ EXTREME SIGNALS, YOU MUST:**
-1. Set decision = "reverse"
-2. Set modified_action = "{'sell' if action == 'buy' else 'buy'}"
-3. Use conservative position size (30-50%)
-4. Set tight stop loss (counter-trend trade)
+**v7.2 DECISION GUIDELINE:**
+{'✅ IF 3+ EXTREME SIGNALS OR 8+ POINTS → Use decision = "reverse"' if is_strong_reverse else '❌ INSUFFICIENT FOR REVERSE → Use decision = "reject" instead!'}
+- If reversing: Set modified_action = "{'sell' if action == 'buy' else 'buy'}"
+- Use conservative position size (30-40% max)
+- Set tight stop loss (counter-trend trade is risky)
 
-⚠️ WARNING: Approving the original {action.upper()} signal in this EXTREME {'OVERBOUGHT' if action == 'buy' else 'OVERSOLD'} 
-condition is VERY RISKY and likely to result in LOSS!
+⚠️ WARNING: {'REVERSE entry is justified but still risky!' if is_strong_reverse else 'REJECT the signal - conditions not strong enough for any entry!'}
 {'═' * 50}
 """
-                logger.warning(f"🔄🔄 v7.1 반대 진입 기회 감지! - {symbol} {action} → {'sell' if action == 'buy' else 'buy'}")
+                if is_strong_reverse:
+                    logger.warning(f"🔄🔄 v7.2 강한 반대 진입 신호! - {symbol} {action} → {'sell' if action == 'buy' else 'buy'}")
+                else:
+                    logger.warning(f"⛔ v7.2 약한 반대 신호 - REJECT 권장! - {symbol} {action}")
                 logger.warning(f"   극단 신호 ({len(reverse_signals)}개): {', '.join(reverse_signals)}")
                 logger.warning(f"   Reverse Strength: {reverse_strength:.1%} ({reverse_strength_points}점)")
             
@@ -4061,11 +4074,11 @@ Your response must be a single JSON object."""
     "decision": "approve",
     "modified_action": "sell",
     "percentage": 30,
-    "reason": "Strong bearish indicators",
+    "reason": "Strong bearish indicators with score 78/100. Mandatory: 4h DI->DI+ (✓), 1h RSI 52 (✓), 15m RSI 45 (✓). Primary: 4h downtrend +25, 1h RSI optimal +15, below SMA +10 = 50. Secondary: CMF negative +12, MACD bearish +8 = 20. Bonus: Volume +5 = 5. R:R = 2.5 meets minimum.",
     "stop_loss_price": 186.42,
     "take_profit_price": 166.11,
     "pl_ratio": 2.5,
-    "confidence": 0.75
+    "confidence": 0.78
 }"""
 
         # message_data 문자열 변환
@@ -4078,7 +4091,13 @@ Your response must be a single JSON object."""
         
         # 프롬프트 구성
         prompt = f"""
-You are an elite crypto trading AI validator specializing in multi-timeframe technical analysis. Your mission is to identify profitable trading opportunities while managing risk through appropriate position sizing, leverage, and stop-loss/take-profit levels.
+You are a CONSERVATIVE crypto trading AI validator with STRICT entry criteria. Your primary mission is CAPITAL PRESERVATION. You only approve trades with HIGH PROBABILITY of success and FAVORABLE risk/reward ratios.
+
+**🚨 CORE PRINCIPLE: "WHEN IN DOUBT, REJECT!"**
+- Missing a good trade is ALWAYS better than taking a bad trade
+- If conditions are "mixed", "unclear", or "marginal" → REJECT
+- Protect capital first, profits second
+- Only enter when you're HIGHLY CONFIDENT (score ≥ 75%)
 
 **ACCOUNT & TRADING CONFIGURATION (REFERENCE ONLY):**
 - Leverage: {leverage}x
@@ -4089,7 +4108,7 @@ You are an elite crypto trading AI validator specializing in multi-timeframe tec
 - Available for New Positions: ${free_margin:,.2f} USDT
 - Max Position Size (based on config): ${total_margin * (position_size_percent / 100):,.2f} USDT
 
-Note: Risk is managed through position size ({position_size_percent}%), leverage ({leverage}x), and SL/TP settings. These parameters provide safety even in moderate market conditions.
+Note: Even with position sizing and leverage, BAD ENTRIES lead to losses. Your job is to filter out low-probability setups.
 
 **SIGNAL TO VALIDATE:**
 - Symbol: {symbol}
@@ -4196,161 +4215,170 @@ Use these insights to validate the current signal. If the reflection indicates t
 ''' if overbought_oversold_risk else '→ Analysis: Not applicable for this action type'}
 ═══════════════════════════════════════════
 
-**🔄 BALANCED VALIDATION FRAMEWORK (v2.0):**
+**🔒 v7.2 STRICT VALIDATION FRAMEWORK (CONSERVATIVE APPROACH):**
 
-⚠️ **HIGH RISK - STRONG REJECTION CONDITIONS:**
+⚠️ **CORE PHILOSOPHY: "WHEN IN DOUBT, REJECT!"**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+The best trade is often NO TRADE. Preserving capital is more important than catching every move.
+If you're not highly confident in the setup, REJECT and wait for a better opportunity.
+A 50% win rate with 2:1 risk/reward is profitable - we don't need to enter every signal!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-For BUY Signals (Reject only if MULTIPLE conditions are true):
-1. **Extreme Overbought Combination:**
-   - 15m RSI > 85 AND 1h RSI > 75 AND 4h RSI > 70 → Severely overextended
-   - Price > 1h Bollinger Upper + 2*ATR → Extreme deviation
+⛔ **IMMEDIATE REJECTION CONDITIONS (Any ONE of these → REJECT):**
 
-2. **Clear Reversal Signals:**
-   - Strong bearish divergence on multiple timeframes
-   - DI- strongly crossing above DI+ on BOTH 1h and 4h
-   - CMF strongly negative on ALL timeframes with increasing magnitude
+For BUY Signals - REJECT if:
+1. **RSI Overbought:** 15m RSI > 70 OR 1h RSI > 65 OR 4h RSI > 60
+2. **No Clear Trend:** 4h ADX < 20 (weak/no trend = no edge)
+3. **Against Major Trend:** 4h DI- > DI+ (downtrend on higher timeframe)
+4. **Money Flow Against:** CMF negative on 2+ timeframes
+5. **Resistance Nearby:** Price within 1% of Bollinger Upper on 1h or 4h
+6. **MACD Divergence:** Bearish divergence visible on any timeframe
+7. **Volume Weakness:** Declining volume with rising price
 
-3. **No Trend Support:**
-   - 4h ADX < 15 AND declining → Very weak/no trend
-   - All timeframes showing opposite signals → Complete misalignment
+For SELL Signals - REJECT if:
+1. **RSI Oversold:** 15m RSI < 30 OR 1h RSI < 35 OR 4h RSI < 40
+2. **No Clear Trend:** 4h ADX < 20 (weak/no trend = no edge)
+3. **Against Major Trend:** 4h DI+ > DI- (uptrend on higher timeframe)
+4. **Money Flow Against:** CMF positive on 2+ timeframes
+5. **Support Nearby:** Price within 1% of Bollinger Lower on 1h or 4h
+6. **MACD Divergence:** Bullish divergence visible on any timeframe
+7. **Volume Weakness:** Declining volume with falling price
 
-For SELL Signals (Reject only if MULTIPLE conditions are true):
-1. **Extreme Oversold Combination:**
-   - 15m RSI < 15 AND 1h RSI < 25 AND 4h RSI < 30 → Severely oversold
-   - Price < 1h Bollinger Lower - 2*ATR → Extreme deviation
+🔄 **v7.2 STRICT REVERSE ENTRY CONDITIONS:**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**For BUY signal + EXTREME OVERBOUGHT (must have 3+ of these OR 8+ points):**
+- RSI 1h > 80 (extreme overbought)
+- Stochastic 1h > 90 (extreme overbought)
+- Williams %R 15m > -10 (extreme overbought)
+- MACD Death Cross on 1h (momentum turning)
+- Price above BB upper on BOTH 15m AND 1h
+→ IF 3+ conditions met: **DECISION = "reverse", modified_action = "sell"**
+→ IF only 1-2 conditions: **DECISION = "reject" (not enough for reverse)**
 
-2. **Clear Reversal Signals:**
-   - Strong bullish divergence on multiple timeframes
-   - DI+ strongly crossing above DI- on BOTH 1h and 4h
-   - CMF strongly positive on ALL timeframes with increasing magnitude
+**For SELL signal + EXTREME OVERSOLD (must have 3+ of these OR 8+ points):**
+- RSI 1h < 20 (extreme oversold)
+- Stochastic 1h < 10 (extreme oversold)
+- Williams %R 15m < -90 (extreme oversold)
+- MACD Golden Cross on 1h (momentum turning)
+- Price below BB lower on BOTH 15m AND 1h
+→ IF 3+ conditions met: **DECISION = "reverse", modified_action = "buy"**
+→ IF only 1-2 conditions: **DECISION = "reject" (not enough for reverse)**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-3. **No Trend Support:**
-   - 4h ADX < 15 AND declining → Very weak/no trend
-   - All timeframes showing opposite signals → Complete misalignment
+✅ **STRICT APPROVAL CRITERIA - WEIGHTED SCORING (Must score ≥ 75%):**
 
-🔄 **v7.1 MANDATORY REVERSE ENTRY CONDITIONS:**
-═══════════════════════════════════════════
-**For BUY signal + EXTREME OVERBOUGHT (must have 2+ of these):**
-- RSI 1h > 80
-- Stochastic 1h > 90
-- Williams %R 15m > -10
-- MACD Death Cross on 1h
-- Price above BB upper on both 15m and 1h
-→ **DECISION = "reverse", modified_action = "sell"**
+For BUY Signals (APPROVE only if total score ≥ 75 points):
+**MANDATORY Requirements (Must have ALL - each is 0 or disqualifying):**
+- 4h trend bullish: DI+ > DI- AND ADX > 20 → Required
+- 1h momentum acceptable: RSI 30-65 → Required
+- No extreme overbought: 15m RSI < 70 → Required
 
-**For SELL signal + EXTREME OVERSOLD (must have 2+ of these):**
-- RSI 1h < 20
-- Stochastic 1h < 10
-- Williams %R 15m < -90
-- MACD Golden Cross on 1h
-- Price below BB lower on both 15m and 1h
-→ **DECISION = "reverse", modified_action = "buy"**
-═══════════════════════════════════════════
+**Primary Factors (max 50 points):**
+- 4h ADX > 25 with DI+ > DI- → Strong uptrend (+25 points)
+- 1h RSI in optimal zone (40-55) → Good entry timing (+15 points)
+- Price above 1h SMA/EMA with room to move (+10 points)
 
-✅ **FLEXIBLE APPROVAL CRITERIA - WEIGHTED SCORING:**
+**Secondary Factors (max 30 points):**
+- CMF positive on 1h AND 4h → Strong money inflow (+12 points)
+- MACD bullish alignment on 4h (+8 points)
+- No immediate resistance within 2% (+5 points)
+- ADX rising (trend strengthening) (+5 points)
 
-For BUY Signals (Approve if score ≥ 60%):
-**Primary Factors (Higher Timeframe Focus):**
-- 4h trend direction: DI+ > DI- → Uptrend confirmed (+25 points) [중장기 가중치 상향]
-- 1h momentum not extreme: RSI 25-80 → Room to move (+25 points) [중기 가중치 상향]
-- Price action favorable: Above key MA or bounce from support (+15 points)
+**Bonus Factors (max 20 points):**
+- 4h MACD histogram increasing (+5 points)
+- Volume above 20-period average (+5 points)
+- Breaking key resistance level (+5 points)
+- Positive market sentiment (+5 points)
 
-**Secondary Factors (10 points each):**
-- 115m entry timing good: Not at immediate resistance (+10)
-- CMF positive on 2+ timeframes → Money flowing in (+10)
-- ADX > 18 on 1h or 4h timeframe → Trend strength (+12 if 4h, +10 if 1h) [중장기 보너스]
-- No strong divergences visible (+10)
+For SELL Signals (APPROVE only if total score ≥ 75 points):
+**MANDATORY Requirements (Must have ALL):**
+- 4h trend bearish: DI- > DI+ AND ADX > 20 → Required
+- 1h momentum acceptable: RSI 35-70 → Required
+- No extreme oversold: 15m RSI > 30 → Required
 
-**Bonus Factors (5 points each):**
-- 4h MACD bullish alignment (+7) [중장기 보너스]
-- 1h volume increasing (+6) [중기 보너스]
-- Market sentiment supportive (+5)
-- Breaking key level with conviction (+5)
-- Retesting previous resistance as support (+5)
+**Primary Factors (max 50 points):**
+- 4h ADX > 25 with DI- > DI+ → Strong downtrend (+25 points)
+- 1h RSI in optimal zone (45-60) → Good entry timing (+15 points)
+- Price below 1h SMA/EMA with room to move (+10 points)
 
-For SELL Signals (Approve if score ≥ 60%):
-**Primary Factors (Higher Timeframe Focus):**
-- 4h trend direction: DI- > DI+ → Downtrend confirmed (+25 points) [중장기 가중치 상향]
-- 1h momentum not extreme: RSI 20-75 → Room to move (+25 points) [중기 가중치 상향]
-- Price action favorable: Below key MA or rejection from resistance (+15 points)
+**Secondary Factors (max 30 points):**
+- CMF negative on 1h AND 4h → Strong money outflow (+12 points)
+- MACD bearish alignment on 4h (+8 points)
+- No immediate support within 2% (+5 points)
+- ADX rising (trend strengthening) (+5 points)
 
-**Secondary Factors (10 points each):**
-- 115m entry timing good: Not at immediate support (+10)
-- CMF negative on 2+ timeframes → Money flowing out (+10)
-- ADX > 18 on 1h or 4h timeframe → Trend strength (+12 if 4h, +10 if 1h) [중장기 보너스]
-- No strong divergences visible (+10)
+**Bonus Factors (max 20 points):**
+- 4h MACD histogram decreasing (+5 points)
+- Volume above 20-period average (+5 points)
+- Breaking key support level (+5 points)
+- Negative market sentiment (+5 points)
 
-**Bonus Factors (5 points each):**
-- 4h MACD bearish alignment (+7) [중장기 보너스]
-- 1h volume increasing (+6) [중기 보너스]
-- Market sentiment supportive (+5)
-- Breaking key level with conviction (+5)
-- Retesting previous support as resistance (+5)
+🎯 **STRICT RISK-REWARD REQUIREMENTS:**
 
-🎯 **RISK-ADJUSTED DECISION MAKING:**
+**Minimum Requirements (REJECT if not met):**
+- Risk/Reward Ratio: Minimum 2.0 (aim for 2.5+)
+- Stop Loss: Within 1.5-2x ATR (not too wide)
+- Take Profit: At least 2x the stop loss distance
 
-**Position Size Recommendations Based on Confidence:**
-- High Confidence (80-100 points): Use full position size
-- Good Confidence (70-79 points): Use 75% position size
-- Moderate Confidence (60-69 points): Use 50% position size
-- Low Confidence (below 60): Reject or suggest waiting
+**Position Size Recommendations:**
+- Score 85-100: Use 40-50% position (high confidence)
+- Score 75-84: Use 30-40% position (good confidence)
+- Score 65-74: MODIFY with 20-30% position (marginal)
+- Score < 65: REJECT (insufficient edge)
 
-**Dynamic Stop Loss & Take Profit:**
-- Use ATR-based stops: 1.5-2.5x ATR from entry
-- Risk-reward ratio flexible: 1.0-3.0 based on market structure
-- Consider support/resistance levels over fixed percentages
-- Tighter stops for lower confidence trades
+**🚨 DECISION FRAMEWORK (STRICT):**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. **APPROVE:** Score ≥ 75%, ALL mandatory requirements met, R:R ≥ 2.0
+2. **MODIFY:** Score 65-74%, Most requirements met, suggest smaller size
+3. **REJECT:** Score < 65% OR ANY mandatory requirement failed OR R:R < 2.0
+4. **REVERSE:** Score ≥ 75% for opposite direction WITH 3+ extreme signals or 8+ points
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-**DECISION FRAMEWORK:**
-1. **APPROVE:** Score ≥ 60%, acceptable risk/reward
-2. **REJECT:** High risk conditions met OR score < 50%
-3. **MODIFY:** Score 50-59%, suggest reduced position or wait
+**⚠️ CONSERVATIVE MINDSET (v7.2):**
+- Missing a good trade is better than taking a bad trade
+- If ANY doubt exists about the setup, REJECT
+- Don't chase entries - wait for clean setups
+- Quality over quantity: fewer trades with higher win rate
+- Protect capital first, profits second
+- When conditions are "mixed" or "unclear", the answer is REJECT
+- **v7.2: If reverse signals detected but not strong enough (< 3 signals or < 8 points), REJECT instead of reverse!**
 
-**IMPORTANT MINDSET SHIFT:**
-- We're not looking for perfect setups, but favorable risk/reward opportunities
-- Risk is managed through position sizing, stops, and leverage - not just entry selection
-- A 60% win rate with proper risk management is profitable
-- Focus on catching moves early rather than waiting for perfect confirmation
-- Accept that some trades will lose - that's why we use risk management
-- **v7.1: If extreme overbought/oversold detected, STRONGLY consider REVERSE entry!**
-
-**CRITICAL INSTRUCTIONS:**
+**CRITICAL INSTRUCTIONS (v7.2 STRICT MODE):**
 1. You MUST respond with ONLY a valid JSON object
 2. Do NOT include any text before or after the JSON
 3. Do NOT use markdown code blocks (no ```)
-4. Calculate your confidence score based on the criteria above
-5. Be more open to opportunities while respecting clear danger signals
-6. **v7.1: When extreme signals detected (2+ reverse signals or strength >=5), USE REVERSE DECISION!**
+4. Calculate your confidence score based on the STRICT criteria above
+5. **DEFAULT TO REJECT** - Only approve when you're highly confident (score ≥ 75%)
+6. **v7.2: REVERSE only when 3+ extreme signals OR 8+ points - otherwise REJECT!**
+7. **When conditions are "mixed", "unclear", or "marginal" → REJECT**
+8. **R:R ratio must be ≥ 2.0 for any entry (approve, modify, or reverse)**
 
 {json_template}
 
-**Field Requirements (v7.1 Updated):**
-- decision: must be "approve", "reject", "modify", or **"reverse"**
+**Field Requirements (v7.2 STRICT Updated):**
+- decision: must be "approve", "reject", "modify", or "reverse"
 - modified_action: must be "buy", "sell", or "hold" (for reverse: use OPPOSITE of original signal)
-- percentage: integer between 10 and 100 (for reverse: use 30-50% conservative size)
+- percentage: integer between 10 and 50 (smaller sizes for safety, max 50% even for high confidence)
 - reason: string explaining the decision with SCORE CALCULATION
-- stop_loss_price: number (use ATR-based calculation, tighter for reverse trades)
-- take_profit_price: number (aim for 1.5-2.5 risk/reward)
-- pl_ratio: number between 1.0 and 5.0
+- stop_loss_price: number (use ATR-based calculation, 1.5-2x ATR)
+- take_profit_price: number (MUST be at least 2x the stop loss distance)
+- pl_ratio: number between 2.0 and 5.0 (minimum 2.0 required for any entry)
 - confidence: number between 0.0 and 1.0 (score/100)
 
-**DECISION TYPES EXPLAINED:**
-1. **"approve"** - Execute the original webhook signal as-is
-2. **"reject"** - Do NOT enter any position (dangerous conditions)
-3. **"modify"** - Enter with reduced size due to mixed signals
-4. **"reverse"** - Enter OPPOSITE direction of webhook signal (use when extreme overbought/oversold detected!)
-   - When to use reverse: RSI >80 for buy signals, RSI <20 for sell signals
-   - Stochastic >90 for buy, <10 for sell
-   - Multiple extreme indicators confirming
-   - MACD divergence + extreme RSI
-   - Set modified_action to OPPOSITE of original signal
+**DECISION TYPES EXPLAINED (v7.2 STRICT):**
+1. **"approve"** - Execute the original signal ONLY if score ≥ 75% AND all mandatory requirements met
+2. **"reject"** - DEFAULT choice when conditions are unclear, mixed, or score < 65%
+3. **"modify"** - Score 65-74%, enter with smaller position (20-30%)
+4. **"reverse"** - Enter OPPOSITE direction ONLY when 3+ extreme signals OR 8+ reverse points
+   - If extreme conditions detected but < 3 signals and < 8 points → USE REJECT instead!
 
 Your reason MUST include:
 - Calculated score breakdown (which factors earned points)
+- Which MANDATORY requirements passed/failed
 - Key supporting and opposing factors
-- Why risk/reward is acceptable given position sizing
-- Specific entry quality assessment
-- **v7.1: If reverse detected, explain which extreme signals triggered the decision**
+- Why R:R ratio meets the ≥ 2.0 requirement
+- **v7.2: If rejecting, explain which specific condition(s) caused the rejection**
+- **v7.2: If considering reverse but rejecting, explain why conditions weren't strong enough**
 
 Return ONLY the JSON object. Start with {{ and end with }}
 """
@@ -4363,13 +4391,16 @@ Return ONLY the JSON object. Start with {{ and end with }}
             messages=[
                 {
                     "role": "system",
-                    "content": """You are a professional crypto trading AI validator.
+                    "content": """You are a CONSERVATIVE crypto trading AI validator with STRICT entry criteria.
 
 CRITICAL RULES:
 1. ONLY return valid JSON - no explanations, no reasoning, no markdown
 2. Start your response with { and end with }
 3. Follow the exact JSON schema provided
-4. Be decisive and specific in your analysis
+4. DEFAULT TO REJECT - Only approve when highly confident (score ≥ 75%)
+5. "When in doubt, REJECT" - unclear or mixed conditions = REJECT
+6. Minimum R:R ratio of 2.0 required for any entry
+7. Protect capital first - missing a trade is better than losing money
 
 Your response must be a single JSON object."""
                 },
