@@ -4614,6 +4614,12 @@ Generate emergency trading parameters. Respond with JSON only:
         logger.error(f"AI 긴급 파라미터 생성 실패: {str(e)}")
         return None
 
+def escape_html(text):
+    """HTML 특수 문자 이스케이프"""
+    if not isinstance(text, str):
+        text = str(text)
+    return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
 def send_telegram_notification(message, importance='normal'):
     """텔레그램 알림 전송"""
     if not ENABLE_TELEGRAM:
@@ -4637,7 +4643,26 @@ def send_telegram_notification(message, importance='normal'):
     }
     
     emoji = emoji_map.get(importance, '📊')
-    formatted_message = f"{emoji} {message}"
+    
+    # HTML 특수 문자 이스케이프 (단, 의도적인 HTML 태그는 유지)
+    # <b>, </b>, <i>, </i>, <code>, </code> 등은 유지
+    safe_message = message
+    # 먼저 허용된 태그를 임시 치환
+    allowed_tags = ['<b>', '</b>', '<i>', '</i>', '<code>', '</code>', '<pre>', '</pre>', '<u>', '</u>', '<s>', '</s>']
+    placeholders = {}
+    for i, tag in enumerate(allowed_tags):
+        placeholder = f"__TAG_PLACEHOLDER_{i}__"
+        placeholders[placeholder] = tag
+        safe_message = safe_message.replace(tag, placeholder)
+    
+    # 나머지 < > & 이스케이프
+    safe_message = safe_message.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+    
+    # 허용된 태그 복원
+    for placeholder, tag in placeholders.items():
+        safe_message = safe_message.replace(placeholder, tag)
+    
+    formatted_message = f"{emoji} {safe_message}"
     
     for chat_id in TELEGRAM_CHAT_IDS:
         if chat_id:
