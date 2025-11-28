@@ -69,7 +69,7 @@ import pandas as pd
 import ta
 from ta.utils import dropna
 from openai import OpenAI
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 import sqlite3
 import numpy as np
 import re
@@ -143,12 +143,26 @@ class TradingDecision(BaseModel):
     """트레이딩 시그널 검증용 모델"""
     decision: str = Field(..., pattern="^(approve|reject|modify|reverse)$")  # 'reverse' 추가
     modified_action: str = Field(..., pattern="^(buy|sell|hold)$")
-    percentage: int = Field(..., ge=1, le=100)
+    percentage: int = Field(..., ge=0, le=100)  # reject일 때 0 허용
     reason: str = Field(..., min_length=1)
-    stop_loss_price: float = Field(..., gt=0)
-    take_profit_price: float = Field(..., gt=0)
-    pl_ratio: float = Field(..., ge=1.0, le=5.0)
+    stop_loss_price: float = Field(..., ge=0)   # reject일 때 0 허용
+    take_profit_price: float = Field(..., ge=0) # reject일 때 0 허용
+    pl_ratio: float = Field(..., ge=0, le=10.0) # reject일 때 0 허용, 상한 확장
     confidence: float = Field(..., ge=0.0, le=1.0)
+    
+    @model_validator(mode='after')
+    def validate_non_reject_fields(self):
+        """reject가 아닌 경우에만 필수 필드 검증"""
+        if self.decision != 'reject':
+            if self.percentage < 1:
+                raise ValueError(f"percentage must be >= 1 for {self.decision} decision")
+            if self.stop_loss_price <= 0:
+                raise ValueError(f"stop_loss_price must be > 0 for {self.decision} decision")
+            if self.take_profit_price <= 0:
+                raise ValueError(f"take_profit_price must be > 0 for {self.decision} decision")
+            if self.pl_ratio < 1.0:
+                raise ValueError(f"pl_ratio must be >= 1.0 for {self.decision} decision")
+        return self
 
 class ClosePositionDecision(BaseModel):
     """청산 시그널 검증용 모델 (SL/TP 불필요)"""
@@ -675,76 +689,122 @@ ai_monitor_running = False
 def sync_positions_from_exchange():
     """
     거래소의 실제 포지션을 current_positions와 동기화
-    🆕 개선: 수동 포지션 감지 및 position_type 필드 추가
+    🆕 v7.2 개선: SYMBOL_CONFIG에 없는 심볼도 포함한 모든 포지션 동기화
+    - 바이낸스의 모든 활성 포지션 조회
+    - 수동 포지션 자동 감지 및 AI 모니터링 대상 추가
     """
     global current_positions
     
     try:
-        logger.info("=== 거래소 포지션 동기화 시작 (수동 포지션 감지 포함) ===")
+        logger.info("=== 거래소 포지션 동기화 시작 (모든 포지션 스캔) ===")
         
-        # 모든 활성 심볼에 대해 포지션 조회
         synced_count = 0
-        manual_count = 0  # 🆕 수동 포지션 카운트
+        manual_count = 0
         new_positions = {}
         
-        for symbol in SYMBOL_CONFIG.keys():
-            if not SYMBOL_CONFIG[symbol].get('enabled', True):
-                continue
-            
+        # 🆕 v7.2: 바이낸스에서 모든 포지션 조회 (SYMBOL_CONFIG 제한 없이)
+        try:
+            all_positions = exchange.fetch_positions()
+            logger.info(f"📊 바이낸스에서 {len(all_positions)}개 심볼 포지션 정보 조회")
+        except Exception as e:
+            logger.error(f"전체 포지션 조회 실패: {e}")
+            # 실패 시 기존 방식으로 폴백
+            all_positions = []
+            for symbol in SYMBOL_CONFIG.keys():
+                if SYMBOL_CONFIG[symbol].get('enabled', True):
+                    try:
+                        positions = exchange.fetch_positions([symbol])
+                        all_positions.extend(positions)
+                    except:
+                        continue
+        
+        # 모든 포지션 처리
+        for position in all_positions:
             try:
-                # 거래소에서 실제 포지션 조회
-                positions = exchange.fetch_positions([symbol])
+                contracts = float(position.get('contracts', 0))
                 
-                for position in positions:
-                    contracts = float(position.get('contracts', 0))
+                if contracts == 0:  # 포지션 없음
+                    continue
                     
-                    if contracts != 0:  # 포지션이 있는 경우
-                        entry_price = float(position.get('entryPrice', 0))
-                        side = 'buy' if position['side'] == 'long' else 'sell'
-                        
-                        # 기존 포지션 정보가 있으면 유지, 없으면 새로 생성
-                        if symbol in current_positions:
-                            # 기존 정보 유지 (SL/TP, position_type 등)
-                            new_positions[symbol] = current_positions[symbol]
-                            # 수량과 진입가는 거래소 기준으로 업데이트
-                            new_positions[symbol]['amount'] = abs(contracts)
-                            new_positions[symbol]['entry_price'] = entry_price
-                            logger.info(f"✓ {symbol} 포지션 업데이트: {side} {abs(contracts):.4f} @ ${entry_price:.2f} (타입: {new_positions[symbol].get('position_type', 'auto')})")
-                        else:
-                            # 🆕 새로운 포지션 발견 → 수동 포지션으로 간주
-                            new_positions[symbol] = {
-                                'side': side,
-                                'entry_price': entry_price,
-                                'amount': abs(contracts),
-                                'stop_loss': 0,  # 실제 SL/TP는 거래소에서 조회 가능하지만 간단히 0으로
-                                'take_profit': 0,
-                                'trailing_stop_percent': DEFAULT_TRAILING_STOP_PERCENT,
-                                'trailing_activation_percent': DEFAULT_TRAILING_ACTIVATION_PERCENT,
-                                'entry_time': datetime.now(),  # 동기화 시점을 진입 시간으로
-                                'position_type': 'manual',  # 🆕 수동 포지션으로 표시
-                                'leverage': SYMBOL_CONFIG[symbol].get('leverage', 10)
-                            }
-                            logger.info(f"🆕🔧 {symbol} 수동 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f}")
-                            logger.info(f"   → AI 모니터링 대상에 자동 추가됨")
-                            synced_count += 1
-                            manual_count += 1
-                            
-                            # 🆕 텔레그램 알림 (수동 포지션 감지)
-                            if ENABLE_TELEGRAM:
-                                send_telegram_notification(
-                                    f"🔧 <b>수동 포지션 감지</b>\n\n"
-                                    f"<b>심볼:</b> {symbol}\n"
-                                    f"<b>방향:</b> {side.upper()}\n"
-                                    f"<b>진입가:</b> ${entry_price:,.2f}\n"
-                                    f"<b>수량:</b> {abs(contracts):.4f}\n"
-                                    f"<b>타입:</b> MANUAL\n\n"
-                                    f"✅ AI 모니터링이 자동으로 시작됩니다.\n"
-                                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                                    'info'
-                                )
+                symbol = position.get('symbol', '')
+                if not symbol:
+                    continue
+                
+                entry_price = float(position.get('entryPrice', 0))
+                side = 'buy' if position['side'] == 'long' else 'sell'
+                
+                # SYMBOL_CONFIG에 있는지 확인
+                is_configured = symbol in SYMBOL_CONFIG
+                symbol_config = SYMBOL_CONFIG.get(symbol, {})
+                
+                # 기존 포지션 정보가 있으면 유지, 없으면 새로 생성
+                if symbol in current_positions:
+                    # 기존 정보 유지 (SL/TP, position_type 등)
+                    new_positions[symbol] = current_positions[symbol]
+                    # 수량과 진입가는 거래소 기준으로 업데이트
+                    new_positions[symbol]['amount'] = abs(contracts)
+                    new_positions[symbol]['entry_price'] = entry_price
+                    pos_type = new_positions[symbol].get('position_type', 'auto')
+                    type_emoji = "🤖" if pos_type == 'auto' else "🔧"
+                    logger.info(f"{type_emoji} {symbol} 포지션 업데이트: {side} {abs(contracts):.4f} @ ${entry_price:.2f} ({pos_type.upper()})")
+                else:
+                    # 🆕 새로운 포지션 발견 → 수동 포지션으로 간주
+                    # SYMBOL_CONFIG에 없어도 기본 설정으로 모니터링
+                    default_leverage = symbol_config.get('leverage', 10)
+                    
+                    new_positions[symbol] = {
+                        'side': side,
+                        'entry_price': entry_price,
+                        'amount': abs(contracts),
+                        'stop_loss': 0,
+                        'take_profit': 0,
+                        'trailing_stop_percent': DEFAULT_TRAILING_STOP_PERCENT,
+                        'trailing_activation_percent': DEFAULT_TRAILING_ACTIVATION_PERCENT,
+                        'entry_time': datetime.now(),
+                        'position_type': 'manual',  # 수동 포지션
+                        'leverage': default_leverage,
+                        'is_configured': is_configured  # SYMBOL_CONFIG 존재 여부
+                    }
+                    
+                    config_status = "✓ CONFIG" if is_configured else "⚠️ NO CONFIG"
+                    logger.info(f"🆕🔧 {symbol} 수동 포지션 발견: {side} {abs(contracts):.4f} @ ${entry_price:.2f} [{config_status}]")
+                    logger.info(f"   → AI 모니터링 대상에 자동 추가됨")
+                    synced_count += 1
+                    manual_count += 1
+                    
+                    # 🆕 v7.2: SYMBOL_CONFIG에 없는 심볼이면 동적으로 추가 (AI 모니터링용)
+                    if not is_configured:
+                        logger.warning(f"⚠️ {symbol}이 SYMBOL_CONFIG에 없음 - 기본 설정으로 모니터링")
+                        # 동적으로 기본 설정 추가
+                        SYMBOL_CONFIG[symbol] = {
+                            'enabled': True,
+                            'leverage': default_leverage,
+                            'position_size_percent': 30,
+                            'take_profit_percent': 2.0,
+                            'stop_loss_percent': 1.5,
+                            'ai_monitoring': True,  # AI 모니터링 활성화
+                            'dynamic_added': True   # 동적 추가 표시
+                        }
+                        logger.info(f"   → SYMBOL_CONFIG에 동적 추가 완료")
+                    
+                    # 텔레그램 알림
+                    if ENABLE_TELEGRAM:
+                        config_msg = "⚠️ SYMBOL_CONFIG에 없음 (기본 설정 적용)" if not is_configured else "✓ CONFIG 존재"
+                        send_telegram_notification(
+                            f"🔧 <b>수동 포지션 감지</b>\n\n"
+                            f"<b>심볼:</b> {symbol}\n"
+                            f"<b>방향:</b> {side.upper()}\n"
+                            f"<b>진입가:</b> ${entry_price:,.2f}\n"
+                            f"<b>수량:</b> {abs(contracts):.4f}\n"
+                            f"<b>레버리지:</b> {default_leverage}x\n"
+                            f"<b>설정:</b> {config_msg}\n\n"
+                            f"✅ AI 모니터링이 자동으로 시작됩니다.\n"
+                            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                            'info'
+                        )
                         
             except Exception as e:
-                logger.error(f"{symbol} 포지션 조회 오류: {str(e)}")
+                logger.error(f"포지션 처리 오류: {e}")
                 continue
         
         # 동기화 완료 - 메모리에 없지만 거래소에 있는 포지션 추가
@@ -768,17 +828,21 @@ def sync_positions_from_exchange():
                 
                 removed_symbols.append(symbol)
                 del current_positions[symbol]
-                clear_peak_profit(symbol)  # 🆕 v7.1 peak profit 기록 삭제
+                clear_peak_profit(symbol)
                 logger.warning(f"⚠️ {symbol} 포지션이 거래소에 없어 메모리에서 제거 및 DB 기록")
         
-        # 🆕 수동 포지션 감지 결과 로깅
+        # 동기화 결과 로깅
         auto_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'auto')
         manual_total = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'manual')
+        configured_count = sum(1 for pos in current_positions.values() if pos.get('is_configured', True))
+        dynamic_count = len(current_positions) - configured_count
         
         logger.info(f"=== 동기화 완료 ===")
         logger.info(f"총 포지션: {len(current_positions)}개")
         logger.info(f"  - 자동(AI) 포지션: {auto_count}개")
         logger.info(f"  - 수동 포지션: {manual_total}개 (이번 사이클: {manual_count}개)")
+        logger.info(f"  - CONFIG 있음: {configured_count}개")
+        logger.info(f"  - 동적 추가: {dynamic_count}개")
         logger.info(f"  - 새로 발견: {synced_count}개")
         logger.info(f"  - 제거: {len(removed_symbols)}개")
         
@@ -4405,16 +4469,32 @@ Step 4: Determine position size based on both scores
 8. **15m timeframe is for entry timing** - 1h/4h are for trend direction
 9. **R:R ratio must be ≥ 1.8** for any entry
 
+⚠️ **MATH VERIFICATION - EXTREMELY IMPORTANT:**
+Before assigning ANY risk points, you MUST verify the mathematical comparison is TRUE:
+- "RSI 38.82 < 35" → 38.82 is GREATER than 35, so this is FALSE → +0 points
+- "RSI 28.5 < 30" → 28.5 is LESS than 30, so this is TRUE → assign points
+- "RSI 72.3 > 70" → 72.3 is GREATER than 70, so this is TRUE → assign points
+- "ADX 18.5 < 20" → 18.5 is LESS than 20, so this is TRUE → assign points
+- "ADX 25.3 < 20" → 25.3 is GREATER than 20, so this is FALSE → +0 points
+
+**WRONG EXAMPLE (DO NOT DO THIS):**
+"4h RSI 38.82 < 35 +3" ← WRONG! 38.82 > 35, condition is FALSE, should be +0
+
+**CORRECT EXAMPLE:**
+"4h RSI 38.82 < 35 +0 (condition FALSE: 38.82 > 35)"
+
+Always double-check: Is the LEFT number actually less than/greater than the RIGHT number?
+
 {json_template}
 
 **Field Requirements (v7.2 Updated):**
 - decision: must be "approve", "reject", "modify", or "reverse"
 - modified_action: must be "buy", "sell", or "hold" (for reverse: use OPPOSITE of original signal)
-- percentage: integer between 10 and 50 (based on Risk Score + Approval Score)
+- percentage: integer 0 for reject, 10-50 for others (based on Risk Score + Approval Score)
 - reason: string explaining the decision with BOTH Risk Score AND Approval Score breakdown
-- stop_loss_price: number (use ATR-based calculation, 1.5-2.5x ATR)
-- take_profit_price: number (MUST be at least 1.8x the stop loss distance)
-- pl_ratio: number between 1.8 and 5.0 (minimum 1.8 required)
+- stop_loss_price: number (use ATR-based calculation, 1.5-2.5x ATR), 0 for reject
+- take_profit_price: number (MUST be at least 1.8x the stop loss distance), 0 for reject
+- pl_ratio: number between 1.8 and 5.0 (minimum 1.8 required), 0 for reject
 - confidence: number between 0.0 and 1.0 (based on scores)
 
 **DECISION TYPES EXPLAINED (v7.2):**
@@ -4451,6 +4531,14 @@ CRITICAL RULES:
 5. Calculate RISK SCORE first, then APPROVAL SCORE if risk is acceptable
 6. 15m timeframe is for entry timing - focus on 1h/4h for trend direction
 7. Minimum R:R ratio of 1.8 required for any entry
+
+⚠️ MATH VERIFICATION (VERY IMPORTANT):
+Before assigning risk points, VERIFY the comparison is mathematically TRUE:
+- "38.82 < 35" is FALSE (38.82 > 35) → +0 points
+- "28.5 < 30" is TRUE (28.5 < 30) → assign points
+- "72.3 > 70" is TRUE → assign points
+- "18.5 < 20" is TRUE → assign points
+DOUBLE-CHECK every numerical comparison before assigning points!
 
 Your response must be a single JSON object."""
                 },
