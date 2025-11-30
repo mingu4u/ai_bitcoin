@@ -631,6 +631,44 @@ SYMBOL_CONFIG = {
     }
 }
 
+# 🆕 v7.3: 심볼 정규화 함수
+def normalize_symbol(symbol: str) -> str:
+    """
+    ccxt 선물 심볼을 표준 형식으로 정규화
+    
+    Examples:
+        'BTC/USDT:USDT' → 'BTC/USDT'
+        'OG/USDT:USDT' → 'OG/USDT'
+        'ETH/USDT' → 'ETH/USDT' (이미 정규화됨)
+    """
+    if ':' in symbol:
+        # 'BTC/USDT:USDT' → 'BTC/USDT'
+        return symbol.split(':')[0]
+    return symbol
+
+
+def get_symbol_config(symbol: str) -> dict:
+    """
+    🆕 v7.3: 정규화된 심볼로 SYMBOL_CONFIG 조회
+    
+    Args:
+        symbol: 원본 심볼 (예: 'BTC/USDT:USDT' 또는 'BTC/USDT')
+    
+    Returns:
+        dict: 심볼 설정 또는 빈 딕셔너리
+    """
+    normalized = normalize_symbol(symbol)
+    return SYMBOL_CONFIG.get(normalized, {})
+
+
+def is_symbol_configured(symbol: str) -> bool:
+    """
+    🆕 v7.3: 심볼이 SYMBOL_CONFIG에 정의되어 있는지 확인
+    """
+    normalized = normalize_symbol(symbol)
+    return normalized in SYMBOL_CONFIG
+
+
 # 기본 설정
 DEFAULT_POSITION_SIZE_PERCENT = float(os.getenv('POSITION_SIZE_PERCENT', 10))
 DEFAULT_TRAILING_STOP_PERCENT = 3.0
@@ -728,16 +766,19 @@ def sync_positions_from_exchange():
                 if contracts == 0:  # 포지션 없음
                     continue
                     
-                symbol = position.get('symbol', '')
-                if not symbol:
+                raw_symbol = position.get('symbol', '')
+                if not raw_symbol:
                     continue
+                
+                # 🆕 v7.3: 심볼 정규화 (OG/USDT:USDT → OG/USDT)
+                symbol = normalize_symbol(raw_symbol)
                 
                 entry_price = float(position.get('entryPrice', 0))
                 side = 'buy' if position['side'] == 'long' else 'sell'
                 
-                # SYMBOL_CONFIG에 있는지 확인
-                is_configured = symbol in SYMBOL_CONFIG
-                symbol_config = SYMBOL_CONFIG.get(symbol, {})
+                # 🆕 v7.3: 정규화된 심볼로 SYMBOL_CONFIG 확인
+                is_configured = is_symbol_configured(symbol)
+                symbol_config = get_symbol_config(symbol)
                 
                 # 기존 포지션 정보가 있으면 유지, 없으면 새로 생성
                 if symbol in current_positions:
@@ -774,10 +815,10 @@ def sync_positions_from_exchange():
                     synced_count += 1
                     manual_count += 1
                     
-                    # 🆕 v7.2: SYMBOL_CONFIG에 없는 심볼이면 동적으로 추가 (AI 모니터링용)
+                    # 🆕 v7.3: 정규화된 심볼로 SYMBOL_CONFIG에 동적 추가
                     if not is_configured:
                         logger.warning(f"⚠️ {symbol}이 SYMBOL_CONFIG에 없음 - 기본 설정으로 모니터링")
-                        # 동적으로 기본 설정 추가
+                        # 동적으로 기본 설정 추가 (정규화된 심볼 사용)
                         SYMBOL_CONFIG[symbol] = {
                             'enabled': True,
                             'leverage': default_leverage,
@@ -787,7 +828,7 @@ def sync_positions_from_exchange():
                             'ai_monitoring': True,  # AI 모니터링 활성화
                             'dynamic_added': True   # 동적 추가 표시
                         }
-                        logger.info(f"   → SYMBOL_CONFIG에 동적 추가 완료")
+                        logger.info(f"   → SYMBOL_CONFIG에 동적 추가 완료 (정규화: {raw_symbol} → {symbol})")
                     
                     # 텔레그램 알림
                     if ENABLE_TELEGRAM:
@@ -2805,6 +2846,216 @@ def calculate_approval_score(df_15min, df_hourly, df_4h, action: str) -> dict:
     }
 
 
+def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
+    """
+    🆕 v7.3: Rule-Based Reverse Score 계산
+    극단적 과매수/과매도 시 신호 반전 여부 결정
+    
+    Returns:
+        dict: {
+            'total_score': int,
+            'signal_count': int,
+            'details': list of strings,
+            'should_reverse': bool,
+            'reverse_action': str ('buy' or 'sell')
+        }
+    """
+    reverse_score = 0
+    signal_count = 0
+    details = []
+    
+    # 안전한 값 추출 헬퍼
+    def safe_get(df, col, default=50):
+        try:
+            val = df[col].iloc[-1]
+            return float(val) if pd.notna(val) else default
+        except:
+            return default
+    
+    # 지표 추출
+    rsi_15m = safe_get(df_15min, 'rsi', 50)
+    rsi_1h = safe_get(df_hourly, 'rsi', 50)
+    rsi_4h = safe_get(df_4h, 'rsi', 50)
+    
+    stoch_k_15m = safe_get(df_15min, 'stoch_k', 50)
+    stoch_k_1h = safe_get(df_hourly, 'stoch_k', 50)
+    stoch_k_4h = safe_get(df_4h, 'stoch_k', 50)
+    
+    williams_15m = safe_get(df_15min, 'williams_r', -50)
+    williams_1h = safe_get(df_hourly, 'williams_r', -50)
+    
+    adx_4h = safe_get(df_4h, 'adx', 25)
+    di_plus_4h = safe_get(df_4h, 'di_plus', 25)
+    di_minus_4h = safe_get(df_4h, 'di_minus', 25)
+    
+    macd_diff_1h = safe_get(df_hourly, 'macd_diff', 0)
+    macd_diff_4h = safe_get(df_4h, 'macd_diff', 0)
+    
+    bb_upper_1h = safe_get(df_hourly, 'bb_bbh', 0)
+    bb_lower_1h = safe_get(df_hourly, 'bb_bbl', 0)
+    bb_upper_4h = safe_get(df_4h, 'bb_bbh', 0)
+    bb_lower_4h = safe_get(df_4h, 'bb_bbl', 0)
+    current_price = safe_get(df_15min, 'close', 0)
+    
+    if action.lower() == 'buy':
+        # ========== BUY 신호인데 극단적 과매수 → SELL로 반전 ==========
+        
+        # RSI 극단값 체크
+        if rsi_4h > 80:
+            reverse_score += 4
+            signal_count += 1
+            details.append(f"🔴 4h RSI {rsi_4h:.1f} > 80 → +4 (EXTREME overbought)")
+        elif rsi_4h > 75:
+            reverse_score += 2
+            details.append(f"🟠 4h RSI {rsi_4h:.1f} > 75 → +2 (strong overbought)")
+            
+        if rsi_1h > 80:
+            reverse_score += 3
+            signal_count += 1
+            details.append(f"🔴 1h RSI {rsi_1h:.1f} > 80 → +3 (EXTREME overbought)")
+        elif rsi_1h > 75:
+            reverse_score += 1
+            details.append(f"🟠 1h RSI {rsi_1h:.1f} > 75 → +1 (strong overbought)")
+            
+        if rsi_15m > 85:
+            reverse_score += 2
+            signal_count += 1
+            details.append(f"🔴 15m RSI {rsi_15m:.1f} > 85 → +2 (EXTREME overbought)")
+        
+        # Stochastic 극단값 체크
+        if stoch_k_4h > 90:
+            reverse_score += 3
+            signal_count += 1
+            details.append(f"🔴 4h Stoch %K {stoch_k_4h:.1f} > 90 → +3 (EXTREME)")
+        
+        if stoch_k_1h > 90:
+            reverse_score += 2
+            signal_count += 1
+            details.append(f"🔴 1h Stoch %K {stoch_k_1h:.1f} > 90 → +2 (EXTREME)")
+            
+        if stoch_k_15m > 95:
+            reverse_score += 2
+            signal_count += 1
+            details.append(f"🔴 15m Stoch %K {stoch_k_15m:.1f} > 95 → +2 (EXTREME)")
+        
+        # Williams %R 극단값 체크 (0에 가까울수록 과매수)
+        if williams_1h > -5:
+            reverse_score += 2
+            signal_count += 1
+            details.append(f"🔴 1h Williams %R {williams_1h:.1f} > -5 → +2 (EXTREME)")
+            
+        if williams_15m > -5:
+            reverse_score += 1
+            signal_count += 1
+            details.append(f"🔴 15m Williams %R {williams_15m:.1f} > -5 → +1 (EXTREME)")
+        
+        # BB 상단 돌파
+        if current_price > 0 and bb_upper_1h > 0 and bb_upper_4h > 0:
+            if current_price > bb_upper_1h and current_price > bb_upper_4h:
+                reverse_score += 3
+                signal_count += 1
+                details.append(f"🔴 Price above BB upper on BOTH 1h & 4h → +3 (double extreme)")
+        
+        # 강한 하락 추세에서 BUY 신호 (추세 역행)
+        if di_minus_4h > di_plus_4h + 15 and adx_4h > 30:
+            reverse_score += 3
+            signal_count += 1
+            details.append(f"🔴 Strong downtrend: DI- {di_minus_4h:.1f} >> DI+ {di_plus_4h:.1f}, ADX {adx_4h:.1f} → +3")
+        
+        # MACD 약세 다이버전스
+        if macd_diff_1h < 0 and macd_diff_4h < 0:
+            reverse_score += 2
+            details.append(f"🟠 MACD bearish on both 1h & 4h → +2")
+        
+        reverse_action = 'sell'
+        
+    else:  # action == 'sell'
+        # ========== SELL 신호인데 극단적 과매도 → BUY로 반전 ==========
+        
+        # RSI 극단값 체크
+        if rsi_4h < 20:
+            reverse_score += 4
+            signal_count += 1
+            details.append(f"🟢 4h RSI {rsi_4h:.1f} < 20 → +4 (EXTREME oversold)")
+        elif rsi_4h < 25:
+            reverse_score += 2
+            details.append(f"🟡 4h RSI {rsi_4h:.1f} < 25 → +2 (strong oversold)")
+            
+        if rsi_1h < 20:
+            reverse_score += 3
+            signal_count += 1
+            details.append(f"🟢 1h RSI {rsi_1h:.1f} < 20 → +3 (EXTREME oversold)")
+        elif rsi_1h < 25:
+            reverse_score += 1
+            details.append(f"🟡 1h RSI {rsi_1h:.1f} < 25 → +1 (strong oversold)")
+            
+        if rsi_15m < 15:
+            reverse_score += 2
+            signal_count += 1
+            details.append(f"🟢 15m RSI {rsi_15m:.1f} < 15 → +2 (EXTREME oversold)")
+        
+        # Stochastic 극단값 체크
+        if stoch_k_4h < 10:
+            reverse_score += 3
+            signal_count += 1
+            details.append(f"🟢 4h Stoch %K {stoch_k_4h:.1f} < 10 → +3 (EXTREME)")
+        
+        if stoch_k_1h < 10:
+            reverse_score += 2
+            signal_count += 1
+            details.append(f"🟢 1h Stoch %K {stoch_k_1h:.1f} < 10 → +2 (EXTREME)")
+            
+        if stoch_k_15m < 5:
+            reverse_score += 2
+            signal_count += 1
+            details.append(f"🟢 15m Stoch %K {stoch_k_15m:.1f} < 5 → +2 (EXTREME)")
+        
+        # Williams %R 극단값 체크 (-100에 가까울수록 과매도)
+        if williams_1h < -95:
+            reverse_score += 2
+            signal_count += 1
+            details.append(f"🟢 1h Williams %R {williams_1h:.1f} < -95 → +2 (EXTREME)")
+            
+        if williams_15m < -95:
+            reverse_score += 1
+            signal_count += 1
+            details.append(f"🟢 15m Williams %R {williams_15m:.1f} < -95 → +1 (EXTREME)")
+        
+        # BB 하단 돌파
+        if current_price > 0 and bb_lower_1h > 0 and bb_lower_4h > 0:
+            if current_price < bb_lower_1h and current_price < bb_lower_4h:
+                reverse_score += 3
+                signal_count += 1
+                details.append(f"🟢 Price below BB lower on BOTH 1h & 4h → +3 (double extreme)")
+        
+        # 강한 상승 추세에서 SELL 신호 (추세 역행)
+        if di_plus_4h > di_minus_4h + 15 and adx_4h > 30:
+            reverse_score += 3
+            signal_count += 1
+            details.append(f"🟢 Strong uptrend: DI+ {di_plus_4h:.1f} >> DI- {di_minus_4h:.1f}, ADX {adx_4h:.1f} → +3")
+        
+        # MACD 강세 다이버전스
+        if macd_diff_1h > 0 and macd_diff_4h > 0:
+            reverse_score += 2
+            details.append(f"🟡 MACD bullish on both 1h & 4h → +2")
+        
+        reverse_action = 'buy'
+    
+    if not details:
+        details.append("No extreme signals detected → +0")
+    
+    # 반전 조건: 3개 이상의 극단 신호 또는 8점 이상
+    should_reverse = signal_count >= 3 or reverse_score >= 8
+    
+    return {
+        'total_score': reverse_score,
+        'signal_count': signal_count,
+        'details': details,
+        'should_reverse': should_reverse,
+        'reverse_action': reverse_action
+    }
+
+
 def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     """
     🆕 v7.3: Rule-Based 종합 검증
@@ -2812,9 +3063,11 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     
     Returns:
         dict: {
-            'decision': 'approve' | 'reject' | 'modify',
+            'decision': 'approve' | 'reject' | 'modify' | 'reverse',
+            'modified_action': str,  # reverse일 경우 반전된 액션
             'risk_score': dict,
             'approval_score': dict,
+            'reverse_score': dict,  # 반전 점수
             'reason': str,
             'recommended_params': dict  # AI가 조정할 기본값
         }
@@ -2824,13 +3077,18 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     df_4h = market_data['df_4h']
     current_price = market_data['current_price']
     
-    # 1. Risk Score 계산
+    # 1. Reverse Score 계산 (먼저 체크 - 극단적 신호 감지)
+    reverse_result = calculate_reverse_score(df_15min, df_hourly, df_4h, action)
+    
+    # 2. Risk Score 계산
     risk_result = calculate_risk_score(df_15min, df_hourly, df_4h, action)
     
-    # 2. Approval Score 계산
+    # 3. Approval Score 계산
     approval_result = calculate_approval_score(df_15min, df_hourly, df_4h, action)
     
-    # 3. 결정 로직
+    # 점수 추출
+    reverse_score = reverse_result['total_score']
+    reverse_signals = reverse_result['signal_count']
     risk_score = risk_result['total_score']
     approval_score = approval_result['total_score']
     
@@ -2842,57 +3100,120 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     except:
         atr_4h = current_price * 0.02
     
-    # 기본 파라미터 설정
-    if action.lower() == 'buy':
-        default_sl = current_price - (atr_4h * 2.0)
-        default_tp = current_price + (atr_4h * 3.5)
-    else:
-        default_sl = current_price + (atr_4h * 2.0)
-        default_tp = current_price - (atr_4h * 3.5)
+    # ========== 결정 로직 ==========
+    modified_action = action  # 기본값: 원래 액션 유지
     
-    # 결정
-    if risk_score >= 8:
+    # 🔄 STEP 0: 반전 조건 체크 (최우선)
+    # 조건: 3개 이상의 극단 신호 또는 8점 이상
+    if reverse_result['should_reverse']:
+        decision = 'reverse'
+        modified_action = reverse_result['reverse_action']
+        reason = f"🔄 REVERSE - Extreme signals detected! Score: {reverse_score}/8, Signals: {reverse_signals}/3. Original {action.upper()} → {modified_action.upper()}"
+        
+        # 반전된 방향으로 TP/SL 설정 (카운터 트레이드는 더 보수적)
+        if modified_action == 'buy':
+            default_sl = current_price - (atr_4h * 1.5)  # 더 타이트한 SL
+            default_tp = current_price + (atr_4h * 2.5)
+        else:
+            default_sl = current_price + (atr_4h * 1.5)
+            default_tp = current_price - (atr_4h * 2.5)
+        
+        base_leverage = 8   # 반전은 보수적으로
+        base_position_pct = 20
+        
+    # STEP 1: 높은 리스크 → REJECT
+    elif risk_score >= 8:
         decision = 'reject'
         reason = f"HIGH RISK - Risk Score {risk_score}/8 exceeds threshold"
+        
+        if action.lower() == 'buy':
+            default_sl = current_price - (atr_4h * 2.0)
+            default_tp = current_price + (atr_4h * 3.5)
+        else:
+            default_sl = current_price + (atr_4h * 2.0)
+            default_tp = current_price - (atr_4h * 3.5)
+        
+        base_leverage = 5
+        base_position_pct = 10
+        
+    # STEP 2: 중간 리스크 + 낮은 승인 → MODIFY
     elif risk_score >= 5 and approval_score < 75:
         decision = 'modify'
         reason = f"MODIFY - Risk Score {risk_score}, Approval Score {approval_score} (marginal)"
+        
+        if action.lower() == 'buy':
+            default_sl = current_price - (atr_4h * 2.0)
+            default_tp = current_price + (atr_4h * 3.5)
+        else:
+            default_sl = current_price + (atr_4h * 2.0)
+            default_tp = current_price - (atr_4h * 3.5)
+        
+        base_leverage = 10
+        base_position_pct = 20
+        
+    # STEP 3: 승인 점수 충분 → APPROVE 또는 MODIFY
     elif approval_score >= 70:
         if risk_score <= 4:
             decision = 'approve'
             reason = f"APPROVED - Low Risk ({risk_score}), High Approval ({approval_score})"
+            base_leverage = 15
+            base_position_pct = 30
         else:
             decision = 'modify'
             reason = f"MODIFY - Medium Risk ({risk_score}), Good Approval ({approval_score})"
+            base_leverage = 10
+            base_position_pct = 20
+        
+        if action.lower() == 'buy':
+            default_sl = current_price - (atr_4h * 2.0)
+            default_tp = current_price + (atr_4h * 3.5)
+        else:
+            default_sl = current_price + (atr_4h * 2.0)
+            default_tp = current_price - (atr_4h * 3.5)
+            
+    # STEP 4: 낮은 승인 점수 → REJECT
     else:
         decision = 'reject'
         reason = f"REJECTED - Approval Score {approval_score} below threshold (70)"
-    
-    # 추천 파라미터 (AI가 조정할 기본값)
-    if decision == 'approve':
-        base_leverage = 15
-        base_position_pct = 30
-    elif decision == 'modify':
-        base_leverage = 10
-        base_position_pct = 20
-    else:
+        
+        if action.lower() == 'buy':
+            default_sl = current_price - (atr_4h * 2.0)
+            default_tp = current_price + (atr_4h * 3.5)
+        else:
+            default_sl = current_price + (atr_4h * 2.0)
+            default_tp = current_price - (atr_4h * 3.5)
+        
         base_leverage = 5
         base_position_pct = 10
     
-    # 로깅
+    # ========== 로깅 ==========
     logger.info(f"📊 Rule-Based Validation for {symbol} {action.upper()}")
+    
+    # 반전 점수 로깅
+    if reverse_score > 0 or reverse_signals > 0:
+        reverse_emoji = "🔄" if reverse_result['should_reverse'] else "⚪"
+        logger.info(f"   {reverse_emoji} Reverse Score: {reverse_score}/8, Signals: {reverse_signals}/3 {'→ REVERSE!' if reverse_result['should_reverse'] else ''}")
+        for detail in reverse_result['details'][:5]:  # 상위 5개만
+            logger.info(f"      - {detail}")
+    
     logger.info(f"   Risk Score: {risk_score}/8 {'⚠️ HIGH' if risk_score >= 8 else '✓ OK'}")
-    for detail in risk_result['details']:
+    for detail in risk_result['details'][:5]:
         logger.info(f"      - {detail}")
     logger.info(f"   Approval Score: {approval_score}/100 {'✓ PASS' if approval_score >= 70 else '✗ FAIL'}")
-    for detail in approval_result['details']:
+    for detail in approval_result['details'][:5]:
         logger.info(f"      - {detail}")
-    logger.info(f"   Decision: {decision.upper()} - {reason}")
+    
+    decision_emoji = {"approve": "✅", "reject": "❌", "modify": "⚠️", "reverse": "🔄"}
+    logger.info(f"   {decision_emoji.get(decision, '❓')} Decision: {decision.upper()} - {reason}")
+    if decision == 'reverse':
+        logger.info(f"   🔄 Action changed: {action.upper()} → {modified_action.upper()}")
     
     return {
         'decision': decision,
+        'modified_action': modified_action,
         'risk_score': risk_result,
         'approval_score': approval_result,
+        'reverse_score': reverse_result,
         'reason': reason,
         'recommended_params': {
             'leverage': base_leverage,
@@ -3551,8 +3872,8 @@ def ai_monitor_position(symbol, position_info):
             logger.error(f"Failed to get market data for {symbol}")
             return create_default_hold_decision("시장 데이터 조회 실패")
         
-        # 심볼 설정 정보 가져오기
-        symbol_config = SYMBOL_CONFIG.get(symbol, {})
+        # 심볼 설정 정보 가져오기 (🆕 v7.3: 정규화된 심볼 사용)
+        symbol_config = get_symbol_config(symbol)
         leverage = symbol_config.get('leverage', 10)
         position_size_percent = symbol_config.get('position_size_percent', 30)
         
@@ -4280,8 +4601,8 @@ def ai_monitoring_cycle(skip_sync=False):
     exit_decisions = []
     
     for symbol, position in current_positions.copy().items():
-        # AI 모니터링이 활성화된 심볼인지 확인
-        if not SYMBOL_CONFIG.get(symbol, {}).get('ai_monitoring', True):
+        # AI 모니터링이 활성화된 심볼인지 확인 (🆕 v7.3: 정규화된 심볼 사용)
+        if not get_symbol_config(symbol).get('ai_monitoring', True):
             continue
         
         position_type = position.get('position_type', 'auto')
@@ -4443,6 +4764,85 @@ def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_da
                 'pl_ratio': 0,
                 'confidence': 0.0
             }
+        
+        # 🔄 REVERSE인 경우 - 반전된 방향으로 진입
+        if decision == 'reverse':
+            modified_action = rule_result['modified_action']
+            reverse_score = rule_result['reverse_score']['total_score']
+            reverse_signals = rule_result['reverse_score']['signal_count']
+            
+            logger.info(f"🔄 Rule-Based REVERSE: {action.upper()} → {modified_action.upper()}")
+            logger.info(f"   Reverse Score: {reverse_score}/8, Signals: {reverse_signals}/3")
+            
+            # AI 파라미터 조정 (반전된 액션으로)
+            ai_params = ai_parameter_adjustment(symbol, modified_action, rule_result, market_data)
+            
+            leverage = ai_params['leverage']
+            position_pct = ai_params['position_percent']
+            stop_loss = ai_params['stop_loss']
+            take_profit = ai_params['take_profit']
+            pl_ratio = ai_params['pl_ratio']
+            
+            # 반전 트레이드는 더 낮은 신뢰도
+            confidence = min(0.75, approval_score / 100 * 0.8)
+            
+            result = {
+                'decision': 'reverse',
+                'modified_action': modified_action,
+                'percentage': position_pct,
+                'reason': f"🔄 REVERSE: {action.upper()}→{modified_action.upper()}. Reverse Score={reverse_score}/8, Signals={reverse_signals}/3. {rule_result['reason']}",
+                'stop_loss_price': stop_loss,
+                'take_profit_price': take_profit,
+                'pl_ratio': pl_ratio,
+                'confidence': confidence,
+                'leverage': leverage,
+                'risk_score': risk_score,
+                'approval_score': approval_score,
+                'reverse_score': reverse_score
+            }
+            
+            # DB 기록
+            try:
+                conn = init_db()
+                timestamp = datetime.now().isoformat()
+                c = conn.cursor()
+                
+                if not is_duplicate_trade_record(conn, symbol, modified_action, 'RULE_BASED_REVERSE', time_window_seconds=10):
+                    c.execute("""INSERT INTO trades 
+                              (timestamp, symbol, action, ai_decision, confidence, reason, 
+                               current_price, trade_type, reflection, percentage, entry_price)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              (timestamp, symbol, modified_action, 'reverse', confidence,
+                               result['reason'], market_data['current_price'], 'RULE_BASED_REVERSE',
+                               f"Original: {action.upper()} | Reverse Details: {'; '.join(rule_result['reverse_score']['details'][:3])}",
+                               position_pct, market_data['current_price']))
+                    conn.commit()
+                conn.close()
+            except Exception as e:
+                logger.error(f"DB 기록 오류: {e}")
+            
+            # 텔레그램 알림
+            if ENABLE_TELEGRAM:
+                reverse_details = '\n'.join([f"  • {d}" for d in rule_result['reverse_score']['details'][:5]])
+                send_telegram_notification(
+                    f"🔄 <b>v7.3 REVERSE SIGNAL</b>\n\n"
+                    f"<b>심볼:</b> {symbol}\n"
+                    f"<b>원래 신호:</b> {action.upper()} ❌\n"
+                    f"<b>반전 신호:</b> {modified_action.upper()} ✅\n"
+                    f"<b>Reverse Score:</b> {reverse_score}/8\n"
+                    f"<b>Extreme Signals:</b> {reverse_signals}/3\n"
+                    f"<b>레버리지:</b> {leverage}x\n"
+                    f"<b>포지션:</b> {position_pct}%\n"
+                    f"<b>SL:</b> ${stop_loss:,.2f}\n"
+                    f"<b>TP:</b> ${take_profit:,.2f}\n"
+                    f"<b>R:R:</b> {pl_ratio:.2f}\n\n"
+                    f"<b>극단 신호:</b>\n{reverse_details}",
+                    'warning'
+                )
+            
+            logger.info(f"🔄 v7.3 REVERSE 완료: {modified_action.upper()} - Lev={leverage}x, Size={position_pct}%, R:R={pl_ratio:.2f}")
+            
+            return result
         
         # ========== STEP 2: AI Parameter Adjustment ==========
         logger.info(f"✅ Rule-Based {decision.upper()}: 진행하여 AI 파라미터 조정")
@@ -4775,7 +5175,7 @@ def send_custom_telegram_message(message, parse_mode='HTML', importance='normal'
 def calculate_position_size(symbol, balance):
     """포지션 크기 계산 - 개선된 버전 (마진 부족 방지)"""
     try:
-        config = SYMBOL_CONFIG.get(symbol, {})
+        config = get_symbol_config(symbol)  # 🆕 v7.3: 정규화된 심볼 사용
         
         # 전체 잔고 정보 가져오기 
         balance_info = exchange.fetch_balance()
@@ -4839,7 +5239,7 @@ def calculate_position_size(symbol, balance):
     except Exception as e:
         logger.error(f"❌ 포지션 크기 계산 오류: {str(e)}")
         # 오류 시 기존 방식으로 fallback
-        config = SYMBOL_CONFIG.get(symbol, {})
+        config = get_symbol_config(symbol)  # 🆕 v7.3: 정규화된 심볼 사용
         position_size_percent = config.get('position_size_percent', DEFAULT_POSITION_SIZE_PERCENT)
         position_size = balance * (position_size_percent / 100)
         min_size = config.get('min_position_size', 10)
@@ -4850,7 +5250,7 @@ def calculate_position_size(symbol, balance):
 def set_leverage(symbol):
     """심볼별 레버리지 설정"""
     try:
-        config = SYMBOL_CONFIG.get(symbol, {})
+        config = get_symbol_config(symbol)  # 🆕 v7.3: 정규화된 심볼 사용
         leverage = config.get('leverage', 10)
         
         # 레버리지 설정
@@ -4955,9 +5355,9 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
         try:
             logger.info(f"[{user_name}] 거래 실행 시작: {symbol} {action}")
             
-            # 레버리지 설정
+            # 레버리지 설정 (🆕 v7.3: 정규화된 심볼 사용)
             try:
-                leverage = SYMBOL_CONFIG[symbol].get('leverage', 10)
+                leverage = get_symbol_config(symbol).get('leverage', 10)
                 user_exchange.set_leverage(leverage, symbol)
                 logger.info(f"[{user_name}] 레버리지 설정: {leverage}x")
             except Exception as e:
@@ -4966,12 +5366,12 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
             # 각 유저의 잔고에 맞게 수량 재계산
             balance_info = user_exchange.fetch_balance()
             usdt_balance = balance_info['USDT']['free']
-            position_percent = SYMBOL_CONFIG[symbol].get('position_size_percent', 30)
+            position_percent = get_symbol_config(symbol).get('position_size_percent', 30)
             position_size = usdt_balance * (position_percent / 100)
             
             ticker = user_exchange.fetch_ticker(symbol)
             current_price = ticker['last']
-            leverage = SYMBOL_CONFIG[symbol].get('leverage', 10)
+            leverage = get_symbol_config(symbol).get('leverage', 10)
             amount = (position_size * leverage) / current_price
             
             logger.info(f"[{user_name}] 포지션 크기: ${position_size:.2f} (잔고: ${usdt_balance:.2f})")
@@ -5139,7 +5539,7 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         current_price = ticker['last']
         
         # 필요한 마진 계산
-        config = SYMBOL_CONFIG.get(symbol, {})
+        config = get_symbol_config(symbol)  # 🆕 v7.3: 정규화된 심볼 사용
         leverage = config.get('leverage', 10)
         position_value_usdt = amount * current_price
         required_margin = position_value_usdt / leverage
@@ -5786,8 +6186,8 @@ def webhook():
                 symbol = f"{clean_symbol}/USDT"
                 logger.info(f"🔄 심볼 정규화: {original_symbol} → {symbol}")
         
-        # 심볼 설정 확인
-        if symbol not in SYMBOL_CONFIG:
+        # 심볼 설정 확인 (🆕 v7.3: 정규화된 심볼 사용)
+        if not is_symbol_configured(symbol):
             error_msg = f'심볼 {symbol}이(가) 설정되지 않음 (원본: {original_symbol})'
             logger.error(f"❌ {error_msg}")
             
@@ -5808,15 +6208,15 @@ def webhook():
             
             return jsonify({'error': error_msg}), 400
         
-        if not SYMBOL_CONFIG[symbol].get('enabled', True):
+        if not get_symbol_config(symbol).get('enabled', True):
             error_msg = f'심볼 {symbol}이(가) 비활성화됨'
             logger.warning(f"⚠️ {error_msg}")
             return jsonify({'error': error_msg}), 400
         
         logger.info(f"✅ 심볼 검증 완료: {symbol}")
         
-        # 심볼 설정 가져오기 (symbol_config 에러 방지)
-        symbol_config = SYMBOL_CONFIG.get(symbol, {})
+        # 심볼 설정 가져오기 (🆕 v7.3: 정규화된 심볼 사용)
+        symbol_config = get_symbol_config(symbol)
         
         # AI 검증이 활성화되어 있는지 확인
         use_ai = symbol_config.get('ai_validation', True)
@@ -6031,7 +6431,7 @@ def webhook():
                 take_profit_price = take_profit if take_profit is not None else (current_price * 0.96)  # -4%
             
             pl_ratio = 2.0
-            position_percent = SYMBOL_CONFIG[symbol].get('position_size_percent', 10)
+            position_percent = get_symbol_config(symbol).get('position_size_percent', 10)  # 🆕 v7.3: 정규화된 심볼 사용
             
             logger.info(f"기본값 사용 - SL: {stop_loss_price:.4f}, TP: {take_profit_price:.4f}")
         
