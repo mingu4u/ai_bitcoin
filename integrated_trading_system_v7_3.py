@@ -3975,9 +3975,12 @@ def ai_monitor_position(symbol, position_info):
         if peak_profit_info['peak_pnl'] > 2.0 and drawdown_from_peak > 25:
             logger.warning(f"🚨 수익 되돌림 경고: Peak {peak_profit_info['peak_pnl']:+.2f}% → Current {pnl_percent:+.2f}% (Drawdown: {drawdown_from_peak:.1f}%)")
         
-        # 🆕 v7.1 지지부진 포지션 경고 로깅
-        if holding_time >= 45 and abs(pnl_percent) < 1.0:
+        # 🆕 v7.3 지지부진 포지션 경고 로깅 (60분 이후에만 - 보호 기간 지난 후)
+        if holding_time >= 60 and abs(pnl_percent) < 1.0:
             logger.warning(f"⏰ 지지부진 포지션: {holding_time:.0f}분 보유, {pnl_percent:+.2f}% 수익")
+        elif holding_time < 60:
+            protection_phase = "STRICT" if holding_time < 20 else "CAUTION" if holding_time < 40 else "WATCH"
+            logger.info(f"🛡️ 진입 보호 활성: {protection_phase} ({holding_time:.1f}분 보유)")
         
         # 조기 종료 신호 로깅
         if early_exit_signals['should_exit']:
@@ -4030,18 +4033,27 @@ def ai_monitor_position(symbol, position_info):
     "urgency": "none"
 }"""
 
-        # 🆕 v7.1 경고 메시지 생성
+        # 🆕 v7.1 경고 메시지 생성 (v7.3 수정: 60분 보호 기간 이후에만 stagnation 알림)
         v71_alerts = []
         if peak_profit_info['peak_pnl'] > 2.0 and drawdown_from_peak > 25:
             v71_alerts.append(f"🚨 PROFIT DRAWDOWN ALERT: Peak {peak_profit_info['peak_pnl']:+.2f}% → Current {pnl_percent:+.2f}% (Drawdown: {drawdown_from_peak:.1f}%)")
         if peak_profit_info['peak_pnl'] > 2.0 and drawdown_from_peak > 40:
             v71_alerts.append(f"⛔ CRITICAL DRAWDOWN: Lost more than 40% of peak profit! Consider IMMEDIATE EXIT")
-        if holding_time >= 30 and abs(pnl_percent) < 1.0:
+        
+        # Stagnation 알림은 60분 이후에만 (보호 기간 지난 후)
+        if holding_time >= 60 and abs(pnl_percent) < 1.0:
             v71_alerts.append(f"⏰ STAGNATION ALERT: {holding_time:.0f}min holding, only {pnl_percent:+.2f}% profit")
-        if holding_time >= 60 and abs(pnl_percent) < 1.5:
+        if holding_time >= 90 and abs(pnl_percent) < 1.5:
             v71_alerts.append(f"⚠️ TIME INEFFICIENCY: {holding_time:.0f}min for just {pnl_percent:+.2f}% - capital inefficiency!")
         if holding_time >= 120 and pnl_percent < 2.0:
-            v71_alerts.append(f"🔴 EXTENDED HOLDING LOW PROFIT: 2+ hours with <2% profit - strongly consider exit")
+            v71_alerts.append(f"🔴 EXTENDED HOLDING LOW PROFIT: 2+ hours with <2% profit - consider exit")
+        if holding_time >= 180 and pnl_percent < 2.0:
+            v71_alerts.append(f"⛔ VERY EXTENDED HOLDING: 3+ hours with <2% profit - strongly consider exit")
+        
+        # 보호 기간 중에는 보호 상태 알림
+        if holding_time < 60:
+            protection_phase = "STRICT (< 20min)" if holding_time < 20 else "CAUTION (20-40min)" if holding_time < 40 else "WATCH (40-60min)"
+            v71_alerts.append(f"🛡️ EARLY PROTECTION ACTIVE: {protection_phase} - Position needs time to develop")
         
         v71_alerts_text = chr(10).join(['  ' + alert for alert in v71_alerts]) if v71_alerts else '  ✅ No v7.1 alerts'
 
@@ -4224,26 +4236,30 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 🛡️ **EARLY POSITION PROTECTION (CRITICAL!):**
 {'═' * 43}
 → Current Holding Time: {holding_time:.0f} minutes
-→ Protection Phase: {'🔒 PROTECTION ACTIVE (< 15 min)' if holding_time < 15 else '⚠️ CAUTION ZONE (15-30 min)' if holding_time < 30 else '✅ NORMAL MONITORING'}
+→ Protection Phase: {'🔒 STRICT PROTECTION (< 20 min)' if holding_time < 20 else '⚠️ CAUTION ZONE (20-40 min)' if holding_time < 40 else '👀 WATCH ZONE (40-60 min)' if holding_time < 60 else '✅ NORMAL MONITORING'}
 
 **MANDATORY RULES FOR EARLY POSITIONS:**
-{'🔒 STRICT PROTECTION MODE (0-15 minutes):' if holding_time < 15 else '⚠️ CAUTION MODE (15-30 minutes):' if holding_time < 30 else '✅ NORMAL MODE (30+ minutes):'}
-{'''  • ONLY EXIT FOR: Stop loss hit, extreme reversal (Score ≥ 10), or loss > -5%
-  • DO NOT EXIT FOR: Small profits, minor reversal signals, uncertainty
-  • REASON: Position needs time to develop. Early noise ≠ trend reversal.
-  • PATIENCE: Wait for trend to establish before making exit decisions.
-  • EXCEPTION: Clear stop loss breach or catastrophic reversal only.''' if holding_time < 15 else '''  • BE CAUTIOUS about exit decisions
-  • REQUIRE: At least 2 strong reversal confirmations to exit
-  • PREFER: Hold unless loss exceeds -3% or profit > +5% with exhaustion
-  • Still early in position - give it room to develop''' if holding_time < 30 else '''  • Normal monitoring rules apply
+{'🔒 STRICT PROTECTION MODE (0-20 minutes):' if holding_time < 20 else '⚠️ CAUTION MODE (20-40 minutes):' if holding_time < 40 else '👀 WATCH MODE (40-60 minutes):' if holding_time < 60 else '✅ NORMAL MODE (60+ minutes):'}
+{'''  • ONLY EXIT FOR: Severe loss (< -10%), catastrophic reversal (Score ≥ 12)
+  • DO NOT EXIT FOR: Small/medium profits, minor-moderate reversal signals
+  • REASON: Position needs significant time to develop. Early noise is NORMAL.
+  • PATIENCE: Crypto is volatile - initial fluctuations don't indicate trend failure.
+  • EXCEPTION: Only catastrophic scenarios warrant early exit.''' if holding_time < 20 else '''  • BE VERY CAUTIOUS about exit decisions
+  • REQUIRE: Loss < -7% OR (Profit > +10% with exhaustion) OR Reversal Score ≥ 10
+  • PREFER: Hold and let the trade thesis play out
+  • Still early - most winning trades need 30+ minutes to develop''' if holding_time < 40 else '''  • MODERATE CAUTION still applies
+  • REQUIRE: Loss < -5% OR strong reversal signals (Score ≥ 8)
+  • Allow profit-taking only if Profit > +8% with clear exhaustion
+  • Approaching normal monitoring phase''' if holding_time < 60 else '''  • Normal monitoring rules apply
   • Technical signals guide decisions
   • Time-based stagnation rules now active'''}
 
-💡 **WHY EARLY PROTECTION MATTERS:**
-  • Crypto markets are noisy - initial fluctuations are NORMAL
-  • AI validated this entry - trust the analysis for at least 15-30 minutes
-  • Premature exits often miss the main move
-  • Let the trade thesis play out before abandoning it
+💡 **WHY EXTENDED PROTECTION (1 HOUR):**
+  • Crypto markets are extremely noisy in short timeframes
+  • AI validated this entry after thorough analysis - trust it
+  • Most successful trades take 30-60+ minutes to reach targets
+  • Premature exits are the #1 cause of missed profits
+  • Let the trade thesis fully develop before abandoning it
 {'═' * 43}
 
 💰 **PROFIT/LOSS ASSESSMENT (Relative to Volatility):**
@@ -4274,11 +4290,14 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
   Secure significant portion unless momentum extraordinarily strong
   Use trailing stops to protect gains
 
-🆕 **v7.1 TIME-BASED STAGNATION RULES:**
-- **30+ min holding with <1% profit:** Consider closing - capital inefficiency
-- **60+ min holding with <1.5% profit:** Strong exit consideration - opportunity cost
-- **90+ min holding with <2% profit:** Exit unless STRONG technical support for continuation
-- **120+ min holding with <2% profit:** Exit recommended - better opportunities elsewhere
+🆕 **v7.1 TIME-BASED STAGNATION RULES (applies after 60 min protection):**
+- **60+ min holding with <1% profit:** Start considering exit - but not mandatory
+- **90+ min holding with <1.5% profit:** Evaluate opportunity cost carefully
+- **120+ min holding with <2% profit:** Strong exit consideration - capital inefficiency
+- **180+ min holding with <2% profit:** Exit recommended - better opportunities elsewhere
+
+⚠️ **NOTE:** These stagnation rules ONLY apply AFTER the 60-minute protection period.
+During the first hour, focus on letting the trade develop, not on time-based exits.
 
 🆕 **v7.1 PROFIT PROTECTION RULES:**
 - **Peak Profit > 2% but Current < 1%:** EXIT 100% (lost more than half your gains!)
@@ -4331,8 +4350,8 @@ don't let a winner turn into a loser!
 - Ignore strong technical momentum just to "secure profits"
 - Use arbitrary rules like "always exit at X%"
 - Let significant profits evaporate (check drawdown from peak!)
-- **EXIT POSITIONS WITHIN FIRST 15 MINUTES** unless stop loss hit or extreme reversal (Score ≥ 10)
-- **BE TRIGGER-HAPPY IN FIRST 30 MINUTES** - positions need time to develop!
+- **EXIT POSITIONS WITHIN FIRST 60 MINUTES** unless severe loss (< -10%) or catastrophic reversal (Score ≥ 12)
+- **BE TRIGGER-HAPPY IN FIRST HOUR** - positions need time to develop!
 
 **DO:**
 - Exit when technical indicators show momentum exhaustion
@@ -4340,8 +4359,8 @@ don't let a winner turn into a loser!
 - Cut losses quickly when breakdown is technically confirmed
 - Let ATR guide what's "normal" vs "extended" movement
 - Prioritize multi-timeframe confirmation over single signals
-- **RESPECT EARLY POSITION PROTECTION** - give trades time to work
-- **BE PATIENT** in first 15-30 minutes - early noise ≠ trend reversal
+- **RESPECT 1-HOUR PROTECTION PERIOD** - give trades time to work
+- **BE PATIENT** in first 60 minutes - early noise ≠ trend reversal
 
 Return ONLY the JSON object. Start with {{ and end with }}
 """
@@ -4427,22 +4446,22 @@ Your response must be a single JSON object."""
             decision = PositionExitDecision.model_validate(parsed_json)
             result = decision.model_dump()
             
-            # 🆕 v7.3: 진입 초반 보호 로직
+            # 🆕 v7.3: 진입 초반 보호 로직 (1시간까지 확장, 완화된 기준)
             original_decision = result['decision']
             if result['decision'] in ['close', 'partial_close']:
-                # 15분 이내: 엄격한 보호 (손절/극단적 상황만 허용)
-                if holding_time < 15:
-                    # 허용 조건: 손절(-5% 이상 손실) 또는 극단적 역전(점수 10 이상)
-                    is_stop_loss = pnl_percent <= -5.0
-                    is_extreme_reversal = early_exit_signals['reversal_score'] >= 10
+                # 20분 이내: 엄격한 보호 (심각한 손실/극단적 역전만 허용)
+                if holding_time < 20:
+                    # 허용 조건: 심각한 손절(-10% 이상 손실) 또는 극단적 역전(점수 12 이상)
+                    is_severe_loss = pnl_percent <= -10.0
+                    is_catastrophic_reversal = early_exit_signals['reversal_score'] >= 12
                     
-                    if not (is_stop_loss or is_extreme_reversal):
-                        logger.warning(f"🛡️ 진입 초반 보호 발동 (< 15분): {result['decision']} → HOLD")
+                    if not (is_severe_loss or is_catastrophic_reversal):
+                        logger.warning(f"🛡️ 진입 초반 보호 발동 (< 20분): {result['decision']} → HOLD")
                         logger.warning(f"   보유 시간: {holding_time:.1f}분, PnL: {pnl_percent:+.2f}%, Reversal Score: {early_exit_signals['reversal_score']}")
                         logger.warning(f"   원래 이유: {result['reason'][:100]}...")
                         result['decision'] = 'hold'
                         result['percentage'] = 0
-                        result['reason'] = f"🛡️ EARLY PROTECTION (< 15min): Original decision was {original_decision}, but position needs time to develop. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
+                        result['reason'] = f"🛡️ STRICT PROTECTION (< 20min): Original decision was {original_decision}, but position needs time to develop. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
                         result['exit_type'] = 'none'
                         result['urgency'] = 'none'
                         
@@ -4455,23 +4474,39 @@ Your response must be a single JSON object."""
                                 f"<b>원래 결정:</b> {original_decision.upper()}\n"
                                 f"<b>변경 결정:</b> HOLD\n\n"
                                 f"💡 포지션이 발전할 시간이 필요합니다.\n"
-                                f"15분 이후 정상 모니터링 재개됩니다.",
+                                f"1시간 이후 정상 모니터링 재개됩니다.",
                                 'info'
                             )
                 
-                # 15-30분: 주의 구간 (더 엄격한 조건 필요)
-                elif holding_time < 30:
-                    # 허용 조건: 손실 -3% 이상, 수익 +5% 이상 + 피로 신호, 또는 역전 점수 7 이상
-                    is_significant_loss = pnl_percent <= -3.0
-                    is_good_profit_with_exhaustion = pnl_percent >= 5.0 and early_exit_signals['reversal_score'] >= 5
-                    is_strong_reversal = early_exit_signals['reversal_score'] >= 7
+                # 20-40분: 주의 구간 (여전히 관대하게)
+                elif holding_time < 40:
+                    # 허용 조건: 손실 -7% 이상, 수익 +10% 이상 + 피로 신호(≥7), 또는 역전 점수 10 이상
+                    is_significant_loss = pnl_percent <= -7.0
+                    is_great_profit_with_exhaustion = pnl_percent >= 10.0 and early_exit_signals['reversal_score'] >= 7
+                    is_strong_reversal = early_exit_signals['reversal_score'] >= 10
                     
-                    if not (is_significant_loss or is_good_profit_with_exhaustion or is_strong_reversal):
-                        logger.warning(f"🛡️ 진입 초반 주의 구간 (15-30분): {result['decision']} → HOLD")
+                    if not (is_significant_loss or is_great_profit_with_exhaustion or is_strong_reversal):
+                        logger.warning(f"🛡️ 진입 주의 구간 (20-40분): {result['decision']} → HOLD")
                         logger.warning(f"   보유 시간: {holding_time:.1f}분, PnL: {pnl_percent:+.2f}%, Reversal Score: {early_exit_signals['reversal_score']}")
                         result['decision'] = 'hold'
                         result['percentage'] = 0
-                        result['reason'] = f"🛡️ CAUTION ZONE (15-30min): Original decision was {original_decision}. Conditions not met for early exit. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
+                        result['reason'] = f"🛡️ CAUTION ZONE (20-40min): Original decision was {original_decision}. Conditions not met for early exit. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
+                        result['exit_type'] = 'none'
+                        result['urgency'] = 'watch'
+                
+                # 40-60분: 가벼운 주의 (좀 더 유연하게)
+                elif holding_time < 60:
+                    # 허용 조건: 손실 -5% 이상, 수익 +8% 이상 + 피로 신호(≥6), 또는 역전 점수 8 이상
+                    is_moderate_loss = pnl_percent <= -5.0
+                    is_good_profit_with_exhaustion = pnl_percent >= 8.0 and early_exit_signals['reversal_score'] >= 6
+                    is_moderate_reversal = early_exit_signals['reversal_score'] >= 8
+                    
+                    if not (is_moderate_loss or is_good_profit_with_exhaustion or is_moderate_reversal):
+                        logger.warning(f"🛡️ 진입 관찰 구간 (40-60분): {result['decision']} → HOLD")
+                        logger.warning(f"   보유 시간: {holding_time:.1f}분, PnL: {pnl_percent:+.2f}%, Reversal Score: {early_exit_signals['reversal_score']}")
+                        result['decision'] = 'hold'
+                        result['percentage'] = 0
+                        result['reason'] = f"👀 WATCH ZONE (40-60min): Original decision was {original_decision}. Approaching normal monitoring. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
                         result['exit_type'] = 'none'
                         result['urgency'] = 'watch'
             
