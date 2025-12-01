@@ -4221,6 +4221,31 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 - Long-term (>8 hours): Question opportunity cost if minimal progress
 - Very long (>24 hours): Seriously reconsider unless strong structural trend
 
+🛡️ **EARLY POSITION PROTECTION (CRITICAL!):**
+{'═' * 43}
+→ Current Holding Time: {holding_time:.0f} minutes
+→ Protection Phase: {'🔒 PROTECTION ACTIVE (< 15 min)' if holding_time < 15 else '⚠️ CAUTION ZONE (15-30 min)' if holding_time < 30 else '✅ NORMAL MONITORING'}
+
+**MANDATORY RULES FOR EARLY POSITIONS:**
+{'🔒 STRICT PROTECTION MODE (0-15 minutes):' if holding_time < 15 else '⚠️ CAUTION MODE (15-30 minutes):' if holding_time < 30 else '✅ NORMAL MODE (30+ minutes):'}
+{'''  • ONLY EXIT FOR: Stop loss hit, extreme reversal (Score ≥ 10), or loss > -5%
+  • DO NOT EXIT FOR: Small profits, minor reversal signals, uncertainty
+  • REASON: Position needs time to develop. Early noise ≠ trend reversal.
+  • PATIENCE: Wait for trend to establish before making exit decisions.
+  • EXCEPTION: Clear stop loss breach or catastrophic reversal only.''' if holding_time < 15 else '''  • BE CAUTIOUS about exit decisions
+  • REQUIRE: At least 2 strong reversal confirmations to exit
+  • PREFER: Hold unless loss exceeds -3% or profit > +5% with exhaustion
+  • Still early in position - give it room to develop''' if holding_time < 30 else '''  • Normal monitoring rules apply
+  • Technical signals guide decisions
+  • Time-based stagnation rules now active'''}
+
+💡 **WHY EARLY PROTECTION MATTERS:**
+  • Crypto markets are noisy - initial fluctuations are NORMAL
+  • AI validated this entry - trust the analysis for at least 15-30 minutes
+  • Premature exits often miss the main move
+  • Let the trade thesis play out before abandoning it
+{'═' * 43}
+
 💰 **PROFIT/LOSS ASSESSMENT (Relative to Volatility):**
 **For Loss Scenarios:**
 - **Severe Loss (multiple ATR against position):** 
@@ -4306,6 +4331,8 @@ don't let a winner turn into a loser!
 - Ignore strong technical momentum just to "secure profits"
 - Use arbitrary rules like "always exit at X%"
 - Let significant profits evaporate (check drawdown from peak!)
+- **EXIT POSITIONS WITHIN FIRST 15 MINUTES** unless stop loss hit or extreme reversal (Score ≥ 10)
+- **BE TRIGGER-HAPPY IN FIRST 30 MINUTES** - positions need time to develop!
 
 **DO:**
 - Exit when technical indicators show momentum exhaustion
@@ -4313,6 +4340,8 @@ don't let a winner turn into a loser!
 - Cut losses quickly when breakdown is technically confirmed
 - Let ATR guide what's "normal" vs "extended" movement
 - Prioritize multi-timeframe confirmation over single signals
+- **RESPECT EARLY POSITION PROTECTION** - give trades time to work
+- **BE PATIENT** in first 15-30 minutes - early noise ≠ trend reversal
 
 Return ONLY the JSON object. Start with {{ and end with }}
 """
@@ -4398,12 +4427,61 @@ Your response must be a single JSON object."""
             decision = PositionExitDecision.model_validate(parsed_json)
             result = decision.model_dump()
             
+            # 🆕 v7.3: 진입 초반 보호 로직
+            original_decision = result['decision']
+            if result['decision'] in ['close', 'partial_close']:
+                # 15분 이내: 엄격한 보호 (손절/극단적 상황만 허용)
+                if holding_time < 15:
+                    # 허용 조건: 손절(-5% 이상 손실) 또는 극단적 역전(점수 10 이상)
+                    is_stop_loss = pnl_percent <= -5.0
+                    is_extreme_reversal = early_exit_signals['reversal_score'] >= 10
+                    
+                    if not (is_stop_loss or is_extreme_reversal):
+                        logger.warning(f"🛡️ 진입 초반 보호 발동 (< 15분): {result['decision']} → HOLD")
+                        logger.warning(f"   보유 시간: {holding_time:.1f}분, PnL: {pnl_percent:+.2f}%, Reversal Score: {early_exit_signals['reversal_score']}")
+                        logger.warning(f"   원래 이유: {result['reason'][:100]}...")
+                        result['decision'] = 'hold'
+                        result['percentage'] = 0
+                        result['reason'] = f"🛡️ EARLY PROTECTION (< 15min): Original decision was {original_decision}, but position needs time to develop. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
+                        result['exit_type'] = 'none'
+                        result['urgency'] = 'none'
+                        
+                        if ENABLE_TELEGRAM:
+                            send_telegram_notification(
+                                f"🛡️ <b>진입 초반 보호 발동</b>\n\n"
+                                f"<b>심볼:</b> {symbol}\n"
+                                f"<b>보유 시간:</b> {holding_time:.1f}분\n"
+                                f"<b>현재 PnL:</b> {pnl_percent:+.2f}%\n"
+                                f"<b>원래 결정:</b> {original_decision.upper()}\n"
+                                f"<b>변경 결정:</b> HOLD\n\n"
+                                f"💡 포지션이 발전할 시간이 필요합니다.\n"
+                                f"15분 이후 정상 모니터링 재개됩니다.",
+                                'info'
+                            )
+                
+                # 15-30분: 주의 구간 (더 엄격한 조건 필요)
+                elif holding_time < 30:
+                    # 허용 조건: 손실 -3% 이상, 수익 +5% 이상 + 피로 신호, 또는 역전 점수 7 이상
+                    is_significant_loss = pnl_percent <= -3.0
+                    is_good_profit_with_exhaustion = pnl_percent >= 5.0 and early_exit_signals['reversal_score'] >= 5
+                    is_strong_reversal = early_exit_signals['reversal_score'] >= 7
+                    
+                    if not (is_significant_loss or is_good_profit_with_exhaustion or is_strong_reversal):
+                        logger.warning(f"🛡️ 진입 초반 주의 구간 (15-30분): {result['decision']} → HOLD")
+                        logger.warning(f"   보유 시간: {holding_time:.1f}분, PnL: {pnl_percent:+.2f}%, Reversal Score: {early_exit_signals['reversal_score']}")
+                        result['decision'] = 'hold'
+                        result['percentage'] = 0
+                        result['reason'] = f"🛡️ CAUTION ZONE (15-30min): Original decision was {original_decision}. Conditions not met for early exit. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
+                        result['exit_type'] = 'none'
+                        result['urgency'] = 'watch'
+            
             logger.info(
                 f"✅ 포지션 모니터 결정: {result['decision']} "
                 f"({result['percentage']}% / 신뢰도: {result['confidence']:.2f} / "
                 f"긴급도: {result['urgency']})"
+                f"{' [보호 발동]' if original_decision != result['decision'] else ''}"
             )
-            logger.info(f"결정 이유: {result['reason']}")
+            logger.info(f"결정 이유: {result['reason'][:200]}...")
             
             # DB에 모니터링 기록 저장 (중복 체크 추가)
             conn = get_db_connection()
