@@ -1,11 +1,34 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║              INTEGRATED TRADING SYSTEM v7.3 RULE-BASED                       ║
+║              INTEGRATED TRADING SYSTEM v7.4 RULE-BASED                       ║
 ║                   Multi-User Crypto Trading Bot                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  Version: 7.3.0                                                              ║
-║  Last Updated: 2025-11-28                                                    ║
-║  Base Version: v7.2 COMPREHENSIVE                                            ║
+║  Version: 7.4.0                                                              ║
+║  Last Updated: 2025-12-05                                                    ║
+║  Base Version: v7.3 RULE-BASED                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                     v7.4 CHANGELOG (REVERSE ENTRY RELAXED)                   ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  🔄 핵심 변경: 과매수/과매도 반대진입 기준 완화                              ║
+║                                                                              ║
+║  📊 v7.4 주요 개선사항:                                                      ║
+║  ┌─────────────────────────────────────────────────────────────────────┐     ║
+║  │  1. 반전 기준 완화: 10점/4신호 → 6점/2신호                          │     ║
+║  │  2. 트렌드 차단 조건 강화: 1개 충족 → 2개 이상 충족 시 차단         │     ║
+║  │  3. RSI 점수 체계 완화: 75~80 → +1점, 80~85 → +2점, 85+ → +5점     │     ║
+║  │  4. 1시간봉 가중치 상향: 보조지표 → 주요신호 (+2점)                 │     ║
+║  │  5. Hold 판단 추가: 애매할 때는 Hold가 최선                          │     ║
+║  └─────────────────────────────────────────────────────────────────────┘     ║
+║                                                                              ║
+║  📈 Reverse Score (0-15+):                                                   ║
+║  - 6+점 또는 2+신호: REVERSE 가능 (4h 트렌드 미지지 시)                     ║
+║  - 4-5점 또는 1신호: HOLD 권장 (애매한 상황)                                ║
+║  - 0-3점: 원본 신호 유지                                                    ║
+║                                                                              ║
+║  🛡️ Trend Support (차단) 조건:                                              ║
+║  - 4개 조건 중 2개 이상 충족 시에만 원본 신호 보호                          ║
+║  - 1개만 충족 시 반전 가능                                                  ║
+║                                                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                     v7.3 CHANGELOG (RULE-BASED MODE)                         ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
@@ -2909,13 +2932,15 @@ def calculate_approval_score(df_15min, df_hourly, df_4h, action: str) -> dict:
 
 def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
     """
-    🆕 v7.3 개선: Rule-Based Reverse Score 계산
+    🆕 v7.4 개선: Rule-Based Reverse Score 계산 (기준 완화)
     극단적 과매수/과매도 시 신호 반전 여부 결정
     
-    ⚠️ 중요: 4시간봉 트렌드가 원본 신호를 지지하면 REVERSE하지 않음!
-    - 단기 과열은 일시적일 수 있음
-    - 장기 트렌드가 더 중요함
-    - 4시간봉에서 여력이 있으면 원본 방향 유지
+    ⚠️ v7.4 변경사항:
+    - trend_supports_original: 4개 조건 중 2개 이상 충족 시에만 차단
+    - 반전 기준 완화: 10점/4신호 → 6점/2신호
+    - RSI 기준 완화: 70~75 구간도 점수 부여
+    - 1시간봉 가중치 상향
+    - HOLD 판단 추가: 애매할 때는 Hold가 최선
     
     Returns:
         dict: {
@@ -2923,8 +2948,10 @@ def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
             'signal_count': int,
             'details': list of strings,
             'should_reverse': bool,
+            'should_hold': bool,  # 🆕 v7.4: 애매한 상황
             'reverse_action': str ('buy' or 'sell'),
-            'trend_supports_original': bool  # 4시간봉이 원본 신호 지지 여부
+            'trend_supports_original': bool,
+            'trend_support_count': int  # 🆕 v7.4: 트렌드 지지 조건 충족 수
         }
     """
     reverse_score = 0
@@ -2946,6 +2973,7 @@ def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
     
     stoch_k_4h = safe_get(df_4h, 'stoch_k', 50)
     stoch_k_1h = safe_get(df_hourly, 'stoch_k', 50)
+    stoch_k_15m = safe_get(df_15min, 'stoch_k', 50)
     
     adx_4h = safe_get(df_4h, 'adx', 25)
     di_plus_4h = safe_get(df_4h, 'di_plus', 25)
@@ -2961,47 +2989,55 @@ def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
     bb_upper_4h = safe_get(df_4h, 'bb_bbh', 0)
     bb_lower_4h = safe_get(df_4h, 'bb_bbl', 0)
     bb_middle_4h = safe_get(df_4h, 'bb_bbm', 0)
+    bb_upper_1h = safe_get(df_hourly, 'bb_bbh', 0)
+    bb_lower_1h = safe_get(df_hourly, 'bb_bbl', 0)
     current_price = safe_get(df_15min, 'close', 0)
     
-    # ========== 4시간봉 트렌드 확인 (최우선) ==========
-    trend_supports_original = False
+    # ========== 4시간봉 트렌드 확인 (v7.4: 2개 이상 충족 시에만 차단) ==========
+    trend_support_count = 0  # 🆕 v7.4: 충족된 조건 수 카운트
     trend_details = []
     
     if action.lower() == 'buy':
         # BUY 신호 - 4시간봉이 상승 추세를 지지하는지 확인
         
-        # 조건 1: 4시간봉 RSI가 아직 과열 아님 (65 미만이면 여력 있음)
-        if rsi_4h < 65:
-            trend_supports_original = True
-            trend_details.append(f"✅ 4h RSI {rsi_4h:.1f} < 65 - Room for upside")
+        # 조건 1: 4시간봉 RSI가 아직 과열 아님 (60 미만이면 여력 있음) - 기준 강화
+        if rsi_4h < 60:
+            trend_support_count += 1
+            trend_details.append(f"✅ 4h RSI {rsi_4h:.1f} < 60 - Room for upside")
         
         # 조건 2: 4시간봉 DI+가 우세하면 상승 추세
-        if di_plus_4h > di_minus_4h and adx_4h > 20:
-            trend_supports_original = True
+        if di_plus_4h > di_minus_4h + 5 and adx_4h > 20:  # 차이 5 이상으로 강화
+            trend_support_count += 1
             trend_details.append(f"✅ 4h Uptrend: DI+ {di_plus_4h:.1f} > DI- {di_minus_4h:.1f}, ADX {adx_4h:.1f}")
         
-        # 조건 3: 4시간봉 MACD가 양수면 상승 모멘텀
-        if macd_diff_4h > 0:
-            trend_supports_original = True
-            trend_details.append(f"✅ 4h MACD Bullish: {macd_diff_4h:.4f}")
+        # 조건 3: 4시간봉 MACD가 양수이고 상승 중이면 상승 모멘텀
+        macd_prev_4h = safe_get(df_4h.iloc[:-1] if len(df_4h) > 1 else df_4h, 'macd_diff', 0)
+        if macd_diff_4h > 0 and macd_diff_4h > macd_prev_4h:  # 양수 + 상승 중
+            trend_support_count += 1
+            trend_details.append(f"✅ 4h MACD Bullish & Rising: {macd_diff_4h:.4f}")
         
         # 조건 4: 가격이 4시간봉 BB 중심선 위에 있으면 상승 추세
         if current_price > bb_middle_4h and bb_middle_4h > 0:
-            trend_supports_original = True
+            trend_support_count += 1
             trend_details.append(f"✅ Price ${current_price:.2f} above 4h BB middle ${bb_middle_4h:.2f}")
         
+        # 🆕 v7.4: 2개 이상 충족 시에만 트렌드 지지 인정
+        trend_supports_original = trend_support_count >= 2
         reverse_action = 'sell'
         
-        # ========== REVERSE 점수 계산 (4시간봉 기준 강화) ==========
-        # 4시간봉이 원본을 지지하면 reverse 불가 → 점수를 계산하지 않음
+        # ========== REVERSE 점수 계산 ==========
         if trend_supports_original:
-            details.append(f"🛡️ 4H TREND SUPPORTS BUY - Reverse blocked")
+            details.append(f"🛡️ 4H TREND SUPPORTS BUY ({trend_support_count}/4 conditions met) - Reverse blocked")
             for td in trend_details:
                 details.append(f"   {td}")
         else:
-            # 4시간봉이 지지하지 않을 때만 reverse 점수 계산
+            # 4시간봉이 강하게 지지하지 않을 때 reverse 점수 계산
+            if trend_support_count == 1:
+                details.append(f"⚠️ Weak 4H trend support ({trend_support_count}/4 conditions) - Reverse possible")
+            else:
+                details.append(f"❌ No 4H trend support ({trend_support_count}/4 conditions) - Reverse likely")
             
-            # 🔴 4시간봉 극단적 과매수 (가장 중요!)
+            # 🔴 4시간봉 RSI 과매수 (v7.4: 기준 완화)
             if rsi_4h > 85:
                 reverse_score += 5
                 signal_count += 1
@@ -3010,11 +3046,15 @@ def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
                 reverse_score += 3
                 signal_count += 1
                 details.append(f"🔴 4h RSI {rsi_4h:.1f} > 80 → +3 (Strong overbought on 4H)")
-            elif rsi_4h >= 75:
+            elif rsi_4h > 75:
+                reverse_score += 2
+                signal_count += 1
+                details.append(f"🟠 4h RSI {rsi_4h:.1f} > 75 → +2 (Overbought zone)")
+            elif rsi_4h >= 70:
                 reverse_score += 1
-                details.append(f"🟠 4h RSI {rsi_4h:.1f} >= 75 → +1 (Overbought zone)")
+                details.append(f"🟡 4h RSI {rsi_4h:.1f} >= 70 → +1 (Entering overbought)")
             
-            # 🔴 4시간봉 Stochastic 극단값
+            # 🔴 4시간봉 Stochastic 과매수 (v7.4: 기준 완화)
             if stoch_k_4h > 95:
                 reverse_score += 4
                 signal_count += 1
@@ -3023,68 +3063,105 @@ def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
                 reverse_score += 2
                 signal_count += 1
                 details.append(f"🔴 4h Stoch %K {stoch_k_4h:.1f} > 90 → +2 (Very high)")
+            elif stoch_k_4h > 85:
+                reverse_score += 1
+                details.append(f"🟠 4h Stoch %K {stoch_k_4h:.1f} > 85 → +1 (High)")
             
             # 🔴 4시간봉 강한 하락 추세에서 BUY (추세 역행)
             if di_minus_4h > di_plus_4h + 20 and adx_4h > 35:
                 reverse_score += 5
                 signal_count += 1
                 details.append(f"🔴 4H STRONG DOWNTREND: DI- {di_minus_4h:.1f} >> DI+ {di_plus_4h:.1f}, ADX {adx_4h:.1f} → +5")
-            elif di_minus_4h > di_plus_4h + 10 and adx_4h > 30:
+            elif di_minus_4h > di_plus_4h + 10 and adx_4h > 25:  # 기준 완화
                 reverse_score += 3
                 signal_count += 1
                 details.append(f"🔴 4H Downtrend: DI- {di_minus_4h:.1f} > DI+ {di_plus_4h:.1f}, ADX {adx_4h:.1f} → +3")
+            elif di_minus_4h > di_plus_4h + 5 and adx_4h > 20:
+                reverse_score += 1
+                details.append(f"🟠 4H Mild bearish: DI- {di_minus_4h:.1f} > DI+ {di_plus_4h:.1f} → +1")
             
-            # 🔴 4시간봉 MACD 강한 약세
+            # 🔴 MACD 약세
             if macd_diff_4h < 0 and macd_diff_1h < 0:
                 reverse_score += 2
                 details.append(f"🟠 MACD bearish on both 1h & 4h → +2")
+            elif macd_diff_4h < 0:
+                reverse_score += 1
+                details.append(f"🟡 4H MACD bearish → +1")
             
-            # 🔴 가격이 4시간봉 BB 상단 위로 크게 돌파
+            # 🔴 가격이 4시간봉 BB 상단 위로 돌파
             if current_price > 0 and bb_upper_4h > 0:
                 if current_price > bb_upper_4h * 1.02:  # 2% 이상 돌파
                     reverse_score += 3
                     signal_count += 1
                     details.append(f"🔴 Price {((current_price/bb_upper_4h)-1)*100:.1f}% above 4H BB upper → +3")
+                elif current_price > bb_upper_4h:  # BB 상단 돌파
+                    reverse_score += 1
+                    details.append(f"🟠 Price above 4H BB upper → +1")
             
-            # 1시간봉은 보조 지표로만 사용 (점수 낮음)
-            if rsi_1h > 85 and stoch_k_1h > 95:
+            # 🆕 v7.4: 1시간봉 신호도 더 중요하게 반영
+            if rsi_1h > 80:
+                reverse_score += 2
+                signal_count += 1
+                details.append(f"🔴 1h RSI {rsi_1h:.1f} > 80 → +2 (Strong overbought)")
+            elif rsi_1h > 75:
                 reverse_score += 1
-                details.append(f"🟠 1h also extreme: RSI {rsi_1h:.1f}, Stoch {stoch_k_1h:.1f} → +1")
+                details.append(f"🟠 1h RSI {rsi_1h:.1f} > 75 → +1 (Overbought)")
+            
+            if stoch_k_1h > 90:
+                reverse_score += 2
+                signal_count += 1
+                details.append(f"🔴 1h Stoch {stoch_k_1h:.1f} > 90 → +2 (Very high)")
+            elif stoch_k_1h > 85:
+                reverse_score += 1
+                details.append(f"🟠 1h Stoch {stoch_k_1h:.1f} > 85 → +1 (High)")
+            
+            # 🆕 v7.4: 1시간봉 DI 역행
+            if di_minus_1h > di_plus_1h + 10 and adx_1h > 25:
+                reverse_score += 2
+                signal_count += 1
+                details.append(f"🔴 1H Downtrend: DI- {di_minus_1h:.1f} > DI+ {di_plus_1h:.1f} → +2")
         
     else:  # action == 'sell'
         # SELL 신호 - 4시간봉이 하락 추세를 지지하는지 확인
         
-        # 조건 1: 4시간봉 RSI가 아직 과매도 아님 (35 초과면 여력 있음)
-        if rsi_4h > 35:
-            trend_supports_original = True
-            trend_details.append(f"✅ 4h RSI {rsi_4h:.1f} > 35 - Room for downside")
+        # 조건 1: 4시간봉 RSI가 아직 과매도 아님 (40 초과면 여력 있음) - 기준 강화
+        if rsi_4h > 40:
+            trend_support_count += 1
+            trend_details.append(f"✅ 4h RSI {rsi_4h:.1f} > 40 - Room for downside")
         
         # 조건 2: 4시간봉 DI-가 우세하면 하락 추세
-        if di_minus_4h > di_plus_4h and adx_4h > 20:
-            trend_supports_original = True
+        if di_minus_4h > di_plus_4h + 5 and adx_4h > 20:  # 차이 5 이상으로 강화
+            trend_support_count += 1
             trend_details.append(f"✅ 4h Downtrend: DI- {di_minus_4h:.1f} > DI+ {di_plus_4h:.1f}, ADX {adx_4h:.1f}")
         
-        # 조건 3: 4시간봉 MACD가 음수면 하락 모멘텀
-        if macd_diff_4h < 0:
-            trend_supports_original = True
-            trend_details.append(f"✅ 4h MACD Bearish: {macd_diff_4h:.4f}")
+        # 조건 3: 4시간봉 MACD가 음수이고 하락 중이면 하락 모멘텀
+        macd_prev_4h = safe_get(df_4h.iloc[:-1] if len(df_4h) > 1 else df_4h, 'macd_diff', 0)
+        if macd_diff_4h < 0 and macd_diff_4h < macd_prev_4h:  # 음수 + 하락 중
+            trend_support_count += 1
+            trend_details.append(f"✅ 4h MACD Bearish & Falling: {macd_diff_4h:.4f}")
         
         # 조건 4: 가격이 4시간봉 BB 중심선 아래에 있으면 하락 추세
         if current_price < bb_middle_4h and bb_middle_4h > 0:
-            trend_supports_original = True
+            trend_support_count += 1
             trend_details.append(f"✅ Price ${current_price:.2f} below 4h BB middle ${bb_middle_4h:.2f}")
         
+        # 🆕 v7.4: 2개 이상 충족 시에만 트렌드 지지 인정
+        trend_supports_original = trend_support_count >= 2
         reverse_action = 'buy'
         
-        # ========== REVERSE 점수 계산 (4시간봉 기준 강화) ==========
+        # ========== REVERSE 점수 계산 ==========
         if trend_supports_original:
-            details.append(f"🛡️ 4H TREND SUPPORTS SELL - Reverse blocked")
+            details.append(f"🛡️ 4H TREND SUPPORTS SELL ({trend_support_count}/4 conditions met) - Reverse blocked")
             for td in trend_details:
                 details.append(f"   {td}")
         else:
-            # 4시간봉이 지지하지 않을 때만 reverse 점수 계산
+            # 4시간봉이 강하게 지지하지 않을 때 reverse 점수 계산
+            if trend_support_count == 1:
+                details.append(f"⚠️ Weak 4H trend support ({trend_support_count}/4 conditions) - Reverse possible")
+            else:
+                details.append(f"❌ No 4H trend support ({trend_support_count}/4 conditions) - Reverse likely")
             
-            # 🟢 4시간봉 극단적 과매도 (가장 중요!)
+            # 🟢 4시간봉 RSI 과매도 (v7.4: 기준 완화)
             if rsi_4h < 15:
                 reverse_score += 5
                 signal_count += 1
@@ -3093,11 +3170,15 @@ def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
                 reverse_score += 3
                 signal_count += 1
                 details.append(f"🟢 4h RSI {rsi_4h:.1f} < 20 → +3 (Strong oversold on 4H)")
-            elif rsi_4h <= 25:
+            elif rsi_4h < 25:
+                reverse_score += 2
+                signal_count += 1
+                details.append(f"🟡 4h RSI {rsi_4h:.1f} < 25 → +2 (Oversold zone)")
+            elif rsi_4h <= 30:
                 reverse_score += 1
-                details.append(f"🟡 4h RSI {rsi_4h:.1f} <= 25 → +1 (Oversold zone)")
+                details.append(f"🟡 4h RSI {rsi_4h:.1f} <= 30 → +1 (Entering oversold)")
             
-            # 🟢 4시간봉 Stochastic 극단값
+            # 🟢 4시간봉 Stochastic 과매도 (v7.4: 기준 완화)
             if stoch_k_4h < 5:
                 reverse_score += 4
                 signal_count += 1
@@ -3106,48 +3187,83 @@ def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
                 reverse_score += 2
                 signal_count += 1
                 details.append(f"🟢 4h Stoch %K {stoch_k_4h:.1f} < 10 → +2 (Very low)")
+            elif stoch_k_4h < 15:
+                reverse_score += 1
+                details.append(f"🟡 4h Stoch %K {stoch_k_4h:.1f} < 15 → +1 (Low)")
             
             # 🟢 4시간봉 강한 상승 추세에서 SELL (추세 역행)
             if di_plus_4h > di_minus_4h + 20 and adx_4h > 35:
                 reverse_score += 5
                 signal_count += 1
                 details.append(f"🟢 4H STRONG UPTREND: DI+ {di_plus_4h:.1f} >> DI- {di_minus_4h:.1f}, ADX {adx_4h:.1f} → +5")
-            elif di_plus_4h > di_minus_4h + 10 and adx_4h > 30:
+            elif di_plus_4h > di_minus_4h + 10 and adx_4h > 25:  # 기준 완화
                 reverse_score += 3
                 signal_count += 1
                 details.append(f"🟢 4H Uptrend: DI+ {di_plus_4h:.1f} > DI- {di_minus_4h:.1f}, ADX {adx_4h:.1f} → +3")
+            elif di_plus_4h > di_minus_4h + 5 and adx_4h > 20:
+                reverse_score += 1
+                details.append(f"🟡 4H Mild bullish: DI+ {di_plus_4h:.1f} > DI- {di_minus_4h:.1f} → +1")
             
-            # 🟢 4시간봉 MACD 강한 강세
+            # 🟢 MACD 강세
             if macd_diff_4h > 0 and macd_diff_1h > 0:
                 reverse_score += 2
                 details.append(f"🟡 MACD bullish on both 1h & 4h → +2")
+            elif macd_diff_4h > 0:
+                reverse_score += 1
+                details.append(f"🟡 4H MACD bullish → +1")
             
-            # 🟢 가격이 4시간봉 BB 하단 아래로 크게 돌파
+            # 🟢 가격이 4시간봉 BB 하단 아래로 돌파
             if current_price > 0 and bb_lower_4h > 0:
                 if current_price < bb_lower_4h * 0.98:  # 2% 이상 돌파
                     reverse_score += 3
                     signal_count += 1
                     details.append(f"🟢 Price {(1-(current_price/bb_lower_4h))*100:.1f}% below 4H BB lower → +3")
+                elif current_price < bb_lower_4h:  # BB 하단 돌파
+                    reverse_score += 1
+                    details.append(f"🟡 Price below 4H BB lower → +1")
             
-            # 1시간봉은 보조 지표로만 사용 (점수 낮음)
-            if rsi_1h < 15 and stoch_k_1h < 5:
+            # 🆕 v7.4: 1시간봉 신호도 더 중요하게 반영
+            if rsi_1h < 20:
+                reverse_score += 2
+                signal_count += 1
+                details.append(f"🟢 1h RSI {rsi_1h:.1f} < 20 → +2 (Strong oversold)")
+            elif rsi_1h < 25:
                 reverse_score += 1
-                details.append(f"🟡 1h also extreme: RSI {rsi_1h:.1f}, Stoch {stoch_k_1h:.1f} → +1")
+                details.append(f"🟡 1h RSI {rsi_1h:.1f} < 25 → +1 (Oversold)")
+            
+            if stoch_k_1h < 10:
+                reverse_score += 2
+                signal_count += 1
+                details.append(f"🟢 1h Stoch {stoch_k_1h:.1f} < 10 → +2 (Very low)")
+            elif stoch_k_1h < 15:
+                reverse_score += 1
+                details.append(f"🟡 1h Stoch {stoch_k_1h:.1f} < 15 → +1 (Low)")
+            
+            # 🆕 v7.4: 1시간봉 DI 역행
+            if di_plus_1h > di_minus_1h + 10 and adx_1h > 25:
+                reverse_score += 2
+                signal_count += 1
+                details.append(f"🟢 1H Uptrend: DI+ {di_plus_1h:.1f} > DI- {di_minus_1h:.1f} → +2")
     
     if not details:
         details.append("No extreme signals detected → +0")
     
-    # 🔒 반전 조건: 4시간봉이 원본 지지하면 절대 반전 안함
-    # 반전하려면: 4시간봉 지지 없음 + (4개 이상의 극단 신호 또는 10점 이상)
-    should_reverse = (not trend_supports_original) and (signal_count >= 4 or reverse_score >= 10)
+    # 🆕 v7.4: 반전 조건 대폭 완화
+    # 반전하려면: 4시간봉 지지 없음(2개 미만 충족) + (2개 이상의 신호 또는 6점 이상)
+    # 애매하면: HOLD 권장 (4-5점 또는 1개 신호)
+    should_reverse = (not trend_supports_original) and (signal_count >= 2 or reverse_score >= 6)
+    should_hold = (not trend_supports_original) and (not should_reverse) and (signal_count == 1 or (reverse_score >= 4 and reverse_score < 6))
     
     return {
         'total_score': reverse_score,
         'signal_count': signal_count,
         'details': details,
         'should_reverse': should_reverse,
+        'should_hold': should_hold,  # 🆕 v7.4
         'reverse_action': reverse_action,
-        'trend_supports_original': trend_supports_original
+        'trend_supports_original': trend_supports_original,
+        'trend_support_count': trend_support_count  # 🆕 v7.4
+    }
     }
 
 
@@ -3199,11 +3315,11 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     modified_action = action  # 기본값: 원래 액션 유지
     
     # 🔄 STEP 0: 반전 조건 체크 (최우선)
-    # 조건: 3개 이상의 극단 신호 또는 8점 이상
+    # v7.4: 6점 이상 또는 2개 이상 신호
     if reverse_result['should_reverse']:
         decision = 'reverse'
         modified_action = reverse_result['reverse_action']
-        reason = f"🔄 REVERSE - Extreme signals detected! Score: {reverse_score}/8, Signals: {reverse_signals}/3. Original {action.upper()} → {modified_action.upper()}"
+        reason = f"🔄 REVERSE - Extreme signals detected! Score: {reverse_score}/6, Signals: {reverse_signals}/2. Original {action.upper()} → {modified_action.upper()}"
         
         # 반전된 방향으로 TP/SL 설정 (카운터 트레이드는 더 보수적)
         if modified_action == 'buy':
@@ -3215,6 +3331,22 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         
         base_leverage = 8   # 반전은 보수적으로
         base_position_pct = 20
+    
+    # 🆕 v7.4 STEP 0.5: HOLD 판단 (애매한 상황)
+    elif reverse_result.get('should_hold', False):
+        decision = 'reject'  # Hold는 기본적으로 reject로 처리
+        modified_action = 'hold'
+        reason = f"⏸️ HOLD - Ambiguous signals (Score: {reverse_score}, Signals: {reverse_signals}). Better to wait."
+        
+        if action.lower() == 'buy':
+            default_sl = current_price - (atr_4h * 2.0)
+            default_tp = current_price + (atr_4h * 3.5)
+        else:
+            default_sl = current_price + (atr_4h * 2.0)
+            default_tp = current_price - (atr_4h * 3.5)
+        
+        base_leverage = 5
+        base_position_pct = 10
         
     # STEP 1: 높은 리스크 → REJECT
     elif risk_score >= 8:
@@ -3284,16 +3416,19 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     # ========== 로깅 ==========
     logger.info(f"📊 Rule-Based Validation for {symbol} {action.upper()}")
     
-    # 4시간봉 트렌드 지지 여부 로깅
+    # 🆕 v7.4: 트렌드 지지 조건 수 로깅
+    trend_support_count = reverse_result.get('trend_support_count', 0)
     trend_supports = reverse_result.get('trend_supports_original', False)
     if trend_supports:
-        logger.info(f"   🛡️ 4H Trend SUPPORTS original {action.upper()} signal - Reverse blocked")
+        logger.info(f"   🛡️ 4H Trend SUPPORTS original {action.upper()} signal ({trend_support_count}/4 conditions) - Reverse blocked")
+    else:
+        logger.info(f"   ⚠️ 4H Trend does NOT strongly support {action.upper()} ({trend_support_count}/4 conditions)")
     
     # 반전 점수 로깅
     if reverse_score > 0 or reverse_signals > 0 or not trend_supports:
-        reverse_emoji = "🔄" if reverse_result['should_reverse'] else "⚪"
+        reverse_emoji = "🔄" if reverse_result['should_reverse'] else ("⏸️" if reverse_result.get('should_hold', False) else "⚪")
         trend_status = "🛡️BLOCKED" if trend_supports else "⚠️POSSIBLE"
-        logger.info(f"   {reverse_emoji} Reverse Score: {reverse_score}/10, Signals: {reverse_signals}/4 [{trend_status}] {'→ REVERSE!' if reverse_result['should_reverse'] else ''}")
+        logger.info(f"   {reverse_emoji} Reverse Score: {reverse_score}/6, Signals: {reverse_signals}/2 [{trend_status}] {'→ REVERSE!' if reverse_result['should_reverse'] else ('→ HOLD' if reverse_result.get('should_hold', False) else '')}")
         for detail in reverse_result['details'][:7]:  # 상위 7개
             logger.info(f"      - {detail}")
     
@@ -3304,10 +3439,12 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     for detail in approval_result['details'][:5]:
         logger.info(f"      - {detail}")
     
-    decision_emoji = {"approve": "✅", "reject": "❌", "modify": "⚠️", "reverse": "🔄"}
+    decision_emoji = {"approve": "✅", "reject": "❌", "modify": "⚠️", "reverse": "🔄", "hold": "⏸️"}
     logger.info(f"   {decision_emoji.get(decision, '❓')} Decision: {decision.upper()} - {reason}")
     if decision == 'reverse':
         logger.info(f"   🔄 Action changed: {action.upper()} → {modified_action.upper()}")
+    elif modified_action == 'hold':
+        logger.info(f"   ⏸️ Recommending HOLD due to ambiguous market conditions")
     
     return {
         'decision': decision,
