@@ -3264,7 +3264,7 @@ def calculate_reverse_score(df_15min, df_hourly, df_4h, action: str) -> dict:
         'trend_supports_original': trend_supports_original,
         'trend_support_count': trend_support_count  # 🆕 v7.4
     }
-    }
+    
 
 
 def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
