@@ -1,33 +1,37 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║              INTEGRATED TRADING SYSTEM v7.4 RULE-BASED                       ║
+║              INTEGRATED TRADING SYSTEM v7.5 RULE-BASED                       ║
 ║                   Multi-User Crypto Trading Bot                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  Version: 7.4.0                                                              ║
-║  Last Updated: 2025-12-05                                                    ║
-║  Base Version: v7.3 RULE-BASED                                               ║
+║  Version: 7.5.0                                                              ║
+║  Last Updated: 2025-12-08                                                    ║
+║  Base Version: v7.4 RULE-BASED                                               ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║                     v7.4 CHANGELOG (REVERSE ENTRY RELAXED)                   ║
+║                     v7.5 CHANGELOG (AI EXIT ANTI-NOISE)                      ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  🔄 핵심 변경: 과매수/과매도 반대진입 기준 완화                              ║
+║  🔄 핵심 변경: AI Exit 판단 - 중장기 타임프레임 중심으로 트랩 신호 필터링    ║
 ║                                                                              ║
-║  📊 v7.4 주요 개선사항:                                                      ║
+║  📊 v7.5 주요 개선사항:                                                      ║
 ║  ┌─────────────────────────────────────────────────────────────────────┐     ║
-║  │  1. 반전 기준 완화: 10점/4신호 → 6점/2신호                          │     ║
-║  │  2. 트렌드 차단 조건 강화: 1개 충족 → 2개 이상 충족 시 차단         │     ║
-║  │  3. RSI 점수 체계 완화: 75~80 → +1점, 80~85 → +2점, 85+ → +5점     │     ║
-║  │  4. 1시간봉 가중치 상향: 보조지표 → 주요신호 (+2점)                 │     ║
-║  │  5. Hold 판단 추가: 애매할 때는 Hold가 최선                          │     ║
+║  │  1. 임계값 대폭 상향: immediate 8→12, soon 5→9, watch 3→6          │     ║
+║  │  2. 15분봉 점수 대폭 감소: 단기 노이즈 무시 (1~2점으로 하향)        │     ║
+║  │  3. 4시간봉 점수 대폭 증가: 중장기 추세 중시 (4~8점)                │     ║
+║  │  4. 멀티타임프레임 확인 필수: 15분봉 단독 exit 불가                 │     ║
+║  │  5. 연속 캔들 조건 추가: 2-3개 캔들 연속 확인                       │     ║
+║  │  6. 트랩 필터 추가: 4시간봉 추세 방향과 일치하지 않으면 점수 감소   │     ║
+║  │  7. 추세 지지 보너스: 큰 추세가 유효하면 점수 차감                  │     ║
 ║  └─────────────────────────────────────────────────────────────────────┘     ║
 ║                                                                              ║
-║  📈 Reverse Score (0-15+):                                                   ║
-║  - 6+점 또는 2+신호: REVERSE 가능 (4h 트렌드 미지지 시)                     ║
-║  - 4-5점 또는 1신호: HOLD 권장 (애매한 상황)                                ║
-║  - 0-3점: 원본 신호 유지                                                    ║
+║  📈 Reversal Score (중장기 기반):                                            ║
+║  - 12+ 점: IMMEDIATE EXIT (4h+1h 동시 역전 확인)                            ║
+║  - 9-11점: SOON EXIT (1h 역전 + 4h 약화)                                    ║
+║  - 6-8점: WATCH (경고 상태, 아직 홀드)                                      ║
+║  - 0-5점: 추세 유지, 노이즈 무시                                            ║
 ║                                                                              ║
-║  🛡️ Trend Support (차단) 조건:                                              ║
-║  - 4개 조건 중 2개 이상 충족 시에만 원본 신호 보호                          ║
-║  - 1개만 충족 시 반전 가능                                                  ║
+║  🛡️ Anti-Trap Filter:                                                        ║
+║  - 4시간봉 추세가 여전히 유효하면 15분봉 신호 무시                          ║
+║  - 1시간봉 확인 없이 15분봉 단독으로 exit 불가                              ║
+║  - 연속 2-3개 캔들 확인 필요 (단일 캔들 노이즈 제거)                        ║
 ║                                                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                     v7.3 CHANGELOG (RULE-BASED MODE)                         ║
@@ -1906,140 +1910,265 @@ def adjust_tp_sl_based_on_levels(symbol, action, current_price, original_sl, ori
 # ============ 🆕 추가 기능 3: 추세 역전 신호 감지 함수 (개선됨) ============
 def detect_trend_reversal_signals(df_15min, df_hourly, df_4h, side):
     """
-    🔄 수정됨: 추세 역전 신호를 약간 더 빨리 감지 (임계값 조정)
+    🔄 v7.5: 중장기 타임프레임 중심 추세 역전 감지 (트랩 필터 강화)
+    
+    핵심 원칙:
+    - 15분봉 신호는 참고용, 단독으로 exit 결정 불가
+    - 1시간봉/4시간봉 확인 필수
+    - 연속 캔들 조건으로 노이즈 제거
+    - 4시간봉 추세가 유효하면 점수 대폭 차감
     
     Args:
         side: 'buy' (long) or 'sell' (short) - 현재 포지션 방향
     
     Returns:
-        dict: {
-            'should_exit': bool,
-            'urgency': str ('immediate', 'soon', 'watch', 'none'),
-            'confidence': float,
-            'reversal_score': int,
-            'signals': list,
-            'threshold_immediate': int,
-            'threshold_soon': int,
-            'threshold_watch': int
-        }
+        dict: reversal analysis result
     """
     reversal_score = 0
     signals = []
     
-    # 🔄 임계값 수정 (더 민감하게)
-    threshold_immediate = 8  # 10 → 8
-    threshold_soon = 6       # 7 → 6
-    threshold_watch = 3      # 4 → 3
+    # 🔄 v7.5: 임계값 대폭 상향 (트랩 필터)
+    threshold_immediate = 12  # 8 → 12 (4h+1h 동시 역전 확인 필요)
+    threshold_soon = 9        # 6 → 9
+    threshold_watch = 6       # 3 → 6
     
-    # === 15분봉 신호 (단기) ===
-    # MACD 크로스오버
+    # ========================================
+    # === 4시간봉 추세 지지 확인 (먼저 체크) ===
+    # ========================================
+    trend_support_4h = 0
+    
+    # 4시간봉 추세 방향 확인
+    di_plus_4h = df_4h['di_plus'].iloc[-1]
+    di_minus_4h = df_4h['di_minus'].iloc[-1]
+    adx_4h = df_4h['adx'].iloc[-1]
+    macd_4h = df_4h['macd'].iloc[-1]
+    macd_signal_4h = df_4h['macd_signal'].iloc[-1]
+    
+    # 추세가 여전히 포지션 방향을 지지하는지 확인
+    if side == 'buy':
+        if di_plus_4h > di_minus_4h:
+            trend_support_4h += 2  # DI+ 우세
+        if macd_4h > macd_signal_4h:
+            trend_support_4h += 2  # MACD 상승 중
+        if adx_4h > 20:
+            trend_support_4h += 1  # 추세 강도 유지
+        if df_4h['close'].iloc[-1] > df_4h['sma_20'].iloc[-1]:
+            trend_support_4h += 2  # 가격이 SMA20 위
+    else:  # sell
+        if di_minus_4h > di_plus_4h:
+            trend_support_4h += 2
+        if macd_4h < macd_signal_4h:
+            trend_support_4h += 2
+        if adx_4h > 20:
+            trend_support_4h += 1
+        if df_4h['close'].iloc[-1] < df_4h['sma_20'].iloc[-1]:
+            trend_support_4h += 2
+    
+    # ========================================
+    # === 15분봉 신호 (참고용, 낮은 점수) ===
+    # ========================================
+    
+    # 15분봉 MACD 크로스오버 (단독 의미 없음, 확인용)
+    macd_cross_15m = False
     if side == 'buy':
         if df_15min['macd'].iloc[-1] < df_15min['macd_signal'].iloc[-1] and \
-           df_15min['macd'].iloc[-2] >= df_15min['macd_signal'].iloc[-2]:  # 🔄 >= 조건 추가
-            reversal_score += 2.5  # 🔄 2 → 2.5
-            signals.append("15m MACD bearish crossover")
+           df_15min['macd'].iloc[-2] >= df_15min['macd_signal'].iloc[-2]:
+            macd_cross_15m = True
+            reversal_score += 1  # 🔄 2.5 → 1 (대폭 감소)
+            signals.append("📉 15m MACD bearish crossover (참고)")
     else:
         if df_15min['macd'].iloc[-1] > df_15min['macd_signal'].iloc[-1] and \
-           df_15min['macd'].iloc[-2] <= df_15min['macd_signal'].iloc[-2]:  # 🔄 <= 조건 추가
-            reversal_score += 2.5  # 🔄 2 → 2.5
-            signals.append("15m MACD bullish crossover")
+           df_15min['macd'].iloc[-2] <= df_15min['macd_signal'].iloc[-2]:
+            macd_cross_15m = True
+            reversal_score += 1
+            signals.append("📈 15m MACD bullish crossover (참고)")
     
-    # RSI 극단 반전
+    # 15분봉 RSI 반전 (낮은 점수)
     rsi_15m = df_15min['rsi'].iloc[-1]
-    rsi_15m_prev = df_15min['rsi'].iloc[-2]
+    rsi_15m_prev = df_15min['rsi'].iloc[-3]  # 3개 전과 비교 (연속성 확인)
     if side == 'buy':
-        if rsi_15m < 65 and rsi_15m_prev > 70:  # 🔄 70 → 65 (더 빨리 감지)
-            reversal_score += 1.5
-            signals.append("15m RSI overbought reversal")
+        if rsi_15m < 60 and rsi_15m_prev > 70:
+            reversal_score += 1  # 🔄 1.5 → 1
+            signals.append("📉 15m RSI overbought reversal (참고)")
     else:
-        if rsi_15m > 35 and rsi_15m_prev < 30:  # 🔄 30 → 35 (더 빨리 감지)
-            reversal_score += 1.5
-            signals.append("15m RSI oversold reversal")
+        if rsi_15m > 40 and rsi_15m_prev < 30:
+            reversal_score += 1
+            signals.append("📈 15m RSI oversold reversal (참고)")
     
-    # 🆕 볼륨 이상 감지 (15분)
-    volume_15m = df_15min['volume'].iloc[-1]
-    volume_avg_15m = df_15min['volume'].rolling(20).mean().iloc[-1]
-    if volume_15m > volume_avg_15m * 2:  # 평균의 2배 이상
-        reversal_score += 1
-        signals.append("15m abnormal volume spike")
+    # ========================================
+    # === 1시간봉 신호 (중요, 중간 점수) ===
+    # ========================================
     
-    # === 1시간봉 신호 (중기) ===
-    # DI 크로스오버
+    # 1시간봉 DI 크로스오버 (중요 신호, 연속 2개 캔들 확인)
+    di_cross_1h = False
     if side == 'buy':
+        # 연속 2개 캔들에서 DI- > DI+ 확인
         if df_hourly['di_minus'].iloc[-1] > df_hourly['di_plus'].iloc[-1] and \
-           df_hourly['di_minus'].iloc[-2] <= df_hourly['di_plus'].iloc[-2]:  # 🔄 조건 완화
-            reversal_score += 3.5  # 🔄 3 → 3.5
-            signals.append("1h DI- crosses above DI+")
+           df_hourly['di_minus'].iloc[-2] > df_hourly['di_plus'].iloc[-2] and \
+           df_hourly['di_minus'].iloc[-3] <= df_hourly['di_plus'].iloc[-3]:
+            di_cross_1h = True
+            reversal_score += 5  # 🔄 3.5 → 5 (확인된 신호는 상향)
+            signals.append("🔴 1h DI- crosses above DI+ (2캔들 확인)")
+        elif df_hourly['di_minus'].iloc[-1] > df_hourly['di_plus'].iloc[-1] and \
+             df_hourly['di_minus'].iloc[-2] <= df_hourly['di_plus'].iloc[-2]:
+            reversal_score += 2  # 단일 캔들은 낮은 점수
+            signals.append("⚠️ 1h DI crossover (확인 필요)")
     else:
         if df_hourly['di_plus'].iloc[-1] > df_hourly['di_minus'].iloc[-1] and \
-           df_hourly['di_plus'].iloc[-2] <= df_hourly['di_minus'].iloc[-2]:  # 🔄 조건 완화
-            reversal_score += 3.5  # 🔄 3 → 3.5
-            signals.append("1h DI+ crosses above DI-")
+           df_hourly['di_plus'].iloc[-2] > df_hourly['di_minus'].iloc[-2] and \
+           df_hourly['di_plus'].iloc[-3] <= df_hourly['di_minus'].iloc[-3]:
+            di_cross_1h = True
+            reversal_score += 5
+            signals.append("🔴 1h DI+ crosses above DI- (2캔들 확인)")
+        elif df_hourly['di_plus'].iloc[-1] > df_hourly['di_minus'].iloc[-1] and \
+             df_hourly['di_plus'].iloc[-2] <= df_hourly['di_minus'].iloc[-2]:
+            reversal_score += 2
+            signals.append("⚠️ 1h DI crossover (확인 필요)")
     
-    # ADX 트렌드 약화
+    # 1시간봉 ADX 트렌드 약화 (연속 감소 확인)
     adx_1h = df_hourly['adx'].iloc[-1]
-    adx_1h_prev = df_hourly['adx'].iloc[-3]  # 3개 전 캔들과 비교
-    if adx_1h < 22 and adx_1h_prev > 25:  # 🔄 25 → 22 (더 빨리 감지)
+    adx_1h_prev = df_hourly['adx'].iloc[-2]
+    adx_1h_prev2 = df_hourly['adx'].iloc[-3]
+    if adx_1h < adx_1h_prev < adx_1h_prev2 and adx_1h < 22:  # 연속 하락
+        reversal_score += 3  # 🔄 2 → 3
+        signals.append("📉 1h ADX 연속 하락 (추세 약화)")
+    elif adx_1h < 20 and adx_1h_prev > 25:
         reversal_score += 2
-        signals.append("1h ADX trend weakening")
+        signals.append("⚠️ 1h ADX 급락")
     
-    # CMF 자금 흐름 반전
+    # 1시간봉 CMF 자금 흐름 반전 (연속 확인)
     cmf_1h = df_hourly['cmf'].iloc[-1]
-    if side == 'buy' and cmf_1h < -0.05:  # 🔄 -0.1 → -0.05
-        reversal_score += 2
-        signals.append("1h CMF negative (money outflow)")
-    elif side == 'sell' and cmf_1h > 0.05:  # 🔄 0.1 → 0.05
-        reversal_score += 2
-        signals.append("1h CMF positive (money inflow)")
-    
-    # 🆕 MACD 히스토그램 감소 (1시간)
-    macd_hist = df_hourly['macd_diff'].iloc[-1]
-    macd_hist_prev = df_hourly['macd_diff'].iloc[-2]
-    if side == 'buy' and macd_hist < macd_hist_prev * 0.7:  # 30% 이상 감소
-        reversal_score += 1.5
-        signals.append("1h MACD histogram shrinking")
-    elif side == 'sell' and macd_hist > macd_hist_prev * 0.7:
-        reversal_score += 1.5
-        signals.append("1h MACD histogram shrinking")
-    
-    # === 4시간봉 신호 (장기) ===
-    # 트렌드 라인 브레이크
+    cmf_1h_prev = df_hourly['cmf'].iloc[-2]
     if side == 'buy':
-        # 하락 추세 시작 감지
+        if cmf_1h < -0.1 and cmf_1h_prev < -0.05:  # 연속 음수
+            reversal_score += 3  # 🔄 2 → 3
+            signals.append("🔴 1h CMF 연속 자금유출 확인")
+        elif cmf_1h < -0.15:  # 강한 유출
+            reversal_score += 2
+            signals.append("⚠️ 1h CMF 강한 자금유출")
+    else:
+        if cmf_1h > 0.1 and cmf_1h_prev > 0.05:
+            reversal_score += 3
+            signals.append("🔴 1h CMF 연속 자금유입 확인")
+        elif cmf_1h > 0.15:
+            reversal_score += 2
+            signals.append("⚠️ 1h CMF 강한 자금유입")
+    
+    # 1시간봉 MACD 크로스오버 (중요)
+    macd_1h = df_hourly['macd'].iloc[-1]
+    macd_signal_1h = df_hourly['macd_signal'].iloc[-1]
+    macd_1h_prev = df_hourly['macd'].iloc[-2]
+    macd_signal_1h_prev = df_hourly['macd_signal'].iloc[-2]
+    
+    macd_cross_1h = False
+    if side == 'buy':
+        if macd_1h < macd_signal_1h and macd_1h_prev >= macd_signal_1h_prev:
+            macd_cross_1h = True
+            reversal_score += 4  # 🔄 1.5 → 4
+            signals.append("🔴 1h MACD 데드크로스 발생")
+    else:
+        if macd_1h > macd_signal_1h and macd_1h_prev <= macd_signal_1h_prev:
+            macd_cross_1h = True
+            reversal_score += 4
+            signals.append("🔴 1h MACD 골든크로스 발생")
+    
+    # ========================================
+    # === 4시간봉 신호 (가장 중요, 높은 점수) ===
+    # ========================================
+    
+    # 4시간봉 SMA20 이탈 (확정적 신호)
+    sma20_break_4h = False
+    if side == 'buy':
+        # 2캔들 연속 SMA20 아래
         if df_4h['close'].iloc[-1] < df_4h['sma_20'].iloc[-1] and \
-           df_4h['close'].iloc[-2] >= df_4h['sma_20'].iloc[-2]:  # 🔄 조건 완화
-            reversal_score += 3  # 🔄 2.5 → 3
-            signals.append("4h price breaks below SMA20")
+           df_4h['close'].iloc[-2] < df_4h['sma_20'].iloc[-2] and \
+           df_4h['close'].iloc[-3] >= df_4h['sma_20'].iloc[-3]:
+            sma20_break_4h = True
+            reversal_score += 6  # 🔄 3 → 6 (확인된 신호)
+            signals.append("🔴🔴 4h SMA20 하향 이탈 확인 (2캔들)")
+        elif df_4h['close'].iloc[-1] < df_4h['sma_20'].iloc[-1] and \
+             df_4h['close'].iloc[-2] >= df_4h['sma_20'].iloc[-2]:
+            reversal_score += 3
+            signals.append("⚠️ 4h SMA20 하향 이탈 (확인 필요)")
     else:
-        # 상승 추세 시작 감지
         if df_4h['close'].iloc[-1] > df_4h['sma_20'].iloc[-1] and \
-           df_4h['close'].iloc[-2] <= df_4h['sma_20'].iloc[-2]:  # 🔄 조건 완화
-            reversal_score += 3  # 🔄 2.5 → 3
-            signals.append("4h price breaks above SMA20")
+           df_4h['close'].iloc[-2] > df_4h['sma_20'].iloc[-2] and \
+           df_4h['close'].iloc[-3] <= df_4h['sma_20'].iloc[-3]:
+            sma20_break_4h = True
+            reversal_score += 6
+            signals.append("🔴🔴 4h SMA20 상향 돌파 확인 (2캔들)")
+        elif df_4h['close'].iloc[-1] > df_4h['sma_20'].iloc[-1] and \
+             df_4h['close'].iloc[-2] <= df_4h['sma_20'].iloc[-2]:
+            reversal_score += 3
+            signals.append("⚠️ 4h SMA20 상향 돌파 (확인 필요)")
     
-    # 🆕 RSI 다이버전스 (4시간)
+    # 4시간봉 MACD 크로스오버 (가장 강력한 신호)
+    macd_cross_4h = False
+    if side == 'buy':
+        if macd_4h < macd_signal_4h and df_4h['macd'].iloc[-2] >= df_4h['macd_signal'].iloc[-2]:
+            macd_cross_4h = True
+            reversal_score += 8  # 🔄 매우 높은 점수
+            signals.append("🔴🔴🔴 4h MACD 데드크로스! (중대 역전)")
+    else:
+        if macd_4h > macd_signal_4h and df_4h['macd'].iloc[-2] <= df_4h['macd_signal'].iloc[-2]:
+            macd_cross_4h = True
+            reversal_score += 8
+            signals.append("🔴🔴🔴 4h MACD 골든크로스! (중대 역전)")
+    
+    # 4시간봉 DI 크로스오버
+    di_cross_4h = False
+    if side == 'buy':
+        if di_minus_4h > di_plus_4h and df_4h['di_minus'].iloc[-2] <= df_4h['di_plus'].iloc[-2]:
+            di_cross_4h = True
+            reversal_score += 6
+            signals.append("🔴🔴 4h DI- > DI+ 크로스오버")
+    else:
+        if di_plus_4h > di_minus_4h and df_4h['di_plus'].iloc[-2] <= df_4h['di_minus'].iloc[-2]:
+            di_cross_4h = True
+            reversal_score += 6
+            signals.append("🔴🔴 4h DI+ > DI- 크로스오버")
+    
+    # 4시간봉 RSI 다이버전스 (연속 5캔들 비교)
     rsi_4h = df_4h['rsi'].iloc[-1]
-    rsi_4h_prev = df_4h['rsi'].iloc[-3]
+    rsi_4h_prev = df_4h['rsi'].iloc[-5]  # 5개 전과 비교
     price_4h = df_4h['close'].iloc[-1]
-    price_4h_prev = df_4h['close'].iloc[-3]
+    price_4h_prev = df_4h['close'].iloc[-5]
     
     if side == 'buy':
-        # Bearish divergence: 가격 상승, RSI 하락
-        if price_4h > price_4h_prev and rsi_4h < rsi_4h_prev:
-            reversal_score += 2.5
-            signals.append("4h bearish RSI divergence")
+        if price_4h > price_4h_prev * 1.01 and rsi_4h < rsi_4h_prev - 5:  # 가격 1%+ 상승, RSI 5+ 하락
+            reversal_score += 4  # 🔄 2.5 → 4
+            signals.append("🔴 4h Bearish RSI Divergence (확실)")
     else:
-        # Bullish divergence: 가격 하락, RSI 상승
-        if price_4h < price_4h_prev and rsi_4h > rsi_4h_prev:
-            reversal_score += 2.5
-            signals.append("4h bullish RSI divergence")
+        if price_4h < price_4h_prev * 0.99 and rsi_4h > rsi_4h_prev + 5:
+            reversal_score += 4
+            signals.append("🔴 4h Bullish RSI Divergence (확실)")
     
-    # 🆕 볼린저 밴드 수축/확장 (4시간)
-    bb_width = df_4h['bb_bbh'].iloc[-1] - df_4h['bb_bbl'].iloc[-1]
-    bb_width_avg = (df_4h['bb_bbh'] - df_4h['bb_bbl']).rolling(20).mean().iloc[-1]
-    if bb_width < bb_width_avg * 0.7:  # 볼린저 밴드 수축
-        reversal_score += 1
-        signals.append("4h Bollinger Bands squeeze")
+    # ========================================
+    # === 트랩 필터: 4시간봉 추세 지지 시 점수 차감 ===
+    # ========================================
+    trend_support_deduction = 0
+    if trend_support_4h >= 5:  # 강한 추세 지지
+        trend_support_deduction = min(reversal_score * 0.4, 6)  # 최대 40% 또는 6점 차감
+        signals.append(f"🛡️ 4h 추세 지지 강함 (-{trend_support_deduction:.1f}점)")
+    elif trend_support_4h >= 3:  # 중간 추세 지지
+        trend_support_deduction = min(reversal_score * 0.25, 4)  # 최대 25% 또는 4점 차감
+        signals.append(f"🛡️ 4h 추세 지지 중 (-{trend_support_deduction:.1f}점)")
+    
+    reversal_score = max(0, reversal_score - trend_support_deduction)
+    
+    # ========================================
+    # === 멀티타임프레임 확인 보너스/페널티 ===
+    # ========================================
+    
+    # 4시간봉 + 1시간봉 동시 역전 시 보너스
+    if (macd_cross_4h or di_cross_4h) and (macd_cross_1h or di_cross_1h):
+        reversal_score += 3
+        signals.append("⚡ 4h+1h 멀티타임프레임 역전 확인!")
+    
+    # 15분봉만 역전이고 상위 타임프레임 지지 시 페널티
+    if macd_cross_15m and not macd_cross_1h and not macd_cross_4h and trend_support_4h >= 3:
+        reversal_score = max(0, reversal_score - 2)
+        signals.append("🛡️ 15m 신호만 발생 - 상위 TF 미확인 (-2점)")
     
     # === 종합 판단 ===
     should_exit = False
@@ -2049,15 +2178,15 @@ def detect_trend_reversal_signals(df_15min, df_hourly, df_4h, side):
     if reversal_score >= threshold_immediate:
         should_exit = True
         urgency = 'immediate'
-        confidence = min(reversal_score / 12, 1.0)  # 🔄 15 → 12
+        confidence = min(reversal_score / 18, 1.0)  # 🔄 12 → 18
     elif reversal_score >= threshold_soon:
         should_exit = False  # soon은 아직 홀드
         urgency = 'soon'
-        confidence = reversal_score / 12  # 🔄 15 → 12
+        confidence = reversal_score / 18
     elif reversal_score >= threshold_watch:
         should_exit = False
         urgency = 'watch'
-        confidence = reversal_score / 12  # 🔄 15 → 12
+        confidence = reversal_score / 18
     
     return {
         'should_exit': should_exit,
@@ -2067,19 +2196,21 @@ def detect_trend_reversal_signals(df_15min, df_hourly, df_4h, side):
         'signals': signals,
         'threshold_immediate': threshold_immediate,
         'threshold_soon': threshold_soon,
-        'threshold_watch': threshold_watch
+        'threshold_watch': threshold_watch,
+        'trend_support_4h': trend_support_4h
     }
 
-# 🆕 v7.1 강화된 detect_early_reversal_signals 함수
+# 🆕 v7.5 강화된 detect_early_reversal_signals 함수 (트랩 필터)
 def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, current_price, entry_price, pnl_percent=0, holding_minutes=0):
     """
-    🆕 v7.1 강화된 추세 역전 조기 감지
+    🆕 v7.5 중장기 타임프레임 중심 추세 역전 감지
     
-    주요 개선사항:
-    - 지지부진 포지션 감지 (30분+ 보유, <1% 수익)
-    - 수익 되돌림 감지
-    - 더 민감한 역전 신호 감지 (임계값 완화)
-    - RSI/MACD/ADX/CMF 종합 분석
+    핵심 변경사항:
+    - 15분봉 단독 신호로 exit 불가
+    - 1시간봉/4시간봉 확인 필수
+    - 연속 캔들 조건으로 노이즈 제거
+    - 4시간봉 추세 지지 시 점수 대폭 차감
+    - 수익 구간에서는 더 보수적으로 판단
     
     Args:
         pnl_percent: 현재 수익률 (레버리지 적용)
@@ -2091,252 +2222,312 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
     signals = []
     reversal_score = 0
     
-    # ===== 1. 지지부진/시간 기반 판단 (🆕 핵심 추가) =====
+    # ========================================
+    # === 0. 4시간봉 추세 지지 확인 (선행 체크) ===
+    # ========================================
+    trend_support_4h = 0
+    di_plus_4h = df_4h['di_plus'].iloc[-1]
+    di_minus_4h = df_4h['di_minus'].iloc[-1]
+    adx_4h = df_4h['adx'].iloc[-1]
+    macd_4h = df_4h['macd'].iloc[-1]
+    macd_signal_4h = df_4h['macd_signal'].iloc[-1]
+    
+    if position_side == 'buy':
+        if di_plus_4h > di_minus_4h:
+            trend_support_4h += 2
+        if macd_4h > macd_signal_4h:
+            trend_support_4h += 2
+        if adx_4h > 20:
+            trend_support_4h += 1
+        if df_4h['close'].iloc[-1] > df_4h['sma_20'].iloc[-1]:
+            trend_support_4h += 2
+        if df_4h['rsi'].iloc[-1] > 45 and df_4h['rsi'].iloc[-1] < 70:
+            trend_support_4h += 1  # RSI 건강한 구간
+    else:
+        if di_minus_4h > di_plus_4h:
+            trend_support_4h += 2
+        if macd_4h < macd_signal_4h:
+            trend_support_4h += 2
+        if adx_4h > 20:
+            trend_support_4h += 1
+        if df_4h['close'].iloc[-1] < df_4h['sma_20'].iloc[-1]:
+            trend_support_4h += 2
+        if df_4h['rsi'].iloc[-1] < 55 and df_4h['rsi'].iloc[-1] > 30:
+            trend_support_4h += 1
+    
+    # ===== 1. 지지부진/시간 기반 판단 (60분 보호 이후에만 적용) =====
     profit_risk = {
         'is_stagnant': False,
         'is_declining': False,
         'time_inefficiency': False
     }
     
-    # 지지부진 포지션 감지 (30분 이상 보유, 수익률 1% 미만)
-    if holding_minutes >= 30 and abs(pnl_percent) < 1.0:
-        signals.append(f"⏰ 지지부진 포지션 ({holding_minutes:.0f}분 보유, {pnl_percent:+.2f}%)")
-        reversal_score += 3
-        profit_risk['is_stagnant'] = True
+    # v7.5: 시간 기반 점수는 60분 이후에만 적용
+    if holding_minutes >= 60:
+        # 지지부진 포지션 감지 (수익률 기준 완화)
+        if holding_minutes >= 90 and abs(pnl_percent) < 0.8:
+            signals.append(f"⏰ 지지부진 포지션 ({holding_minutes:.0f}분 보유, {pnl_percent:+.2f}%)")
+            reversal_score += 2  # 🔄 3 → 2 (점수 감소)
+            profit_risk['is_stagnant'] = True
+        
+        # 오래 보유한데 수익이 미미한 경우 (기준 완화)
+        if holding_minutes >= 120 and abs(pnl_percent) < 1.2:
+            signals.append(f"⚠️ 장시간 미미한 수익 ({holding_minutes:.0f}분, {pnl_percent:+.2f}%)")
+            reversal_score += 2  # 🔄 2 유지
+            profit_risk['time_inefficiency'] = True
+        
+        # 3시간 이상 보유 시 더 엄격한 기준
+        if holding_minutes >= 180 and pnl_percent < 1.5:
+            signals.append(f"🔴 3시간+ 보유 저성과 ({pnl_percent:+.2f}%)")
+            reversal_score += 3
     
-    # 오래 보유한데 수익이 미미한 경우 (60분 이상, 1.5% 미만)
-    if holding_minutes >= 60 and abs(pnl_percent) < 1.5:
-        signals.append(f"⚠️ 장시간 미미한 수익 ({holding_minutes:.0f}분, {pnl_percent:+.2f}%)")
-        reversal_score += 2
-        profit_risk['time_inefficiency'] = True
+    # ========================================
+    # === 2. 4시간봉 신호 (가장 중요, 높은 점수) ===
+    # ========================================
     
-    # 2시간 이상 보유 시 더 엄격한 기준
-    if holding_minutes >= 120 and pnl_percent < 2.0:
-        signals.append(f"🔴 2시간+ 보유 저성과 ({pnl_percent:+.2f}%)")
-        reversal_score += 3
-    
-    # ===== 2. RSI Divergence 감지 =====
     try:
-        recent_prices_15m = df_15min['close'].tail(10).values
-        recent_rsi_15m = df_15min['rsi'].tail(10).values
-        recent_prices_1h = df_hourly['close'].tail(5).values
-        recent_rsi_1h = df_hourly['rsi'].tail(5).values
+        # 4시간봉 MACD 크로스오버 (가장 강력한 역전 신호)
+        macd_cross_4h = False
+        if position_side == 'buy':
+            if macd_4h < macd_signal_4h and df_4h['macd'].iloc[-2] >= df_4h['macd_signal'].iloc[-2]:
+                macd_cross_4h = True
+                signals.append("🔴🔴🔴 4h MACD 데드크로스! (중대 역전)")
+                reversal_score += 8
+        else:
+            if macd_4h > macd_signal_4h and df_4h['macd'].iloc[-2] <= df_4h['macd_signal'].iloc[-2]:
+                macd_cross_4h = True
+                signals.append("🔴🔴🔴 4h MACD 골든크로스! (중대 역전)")
+                reversal_score += 8
+        
+        # 4시간봉 DI 크로스오버
+        di_cross_4h = False
+        if position_side == 'buy':
+            if di_minus_4h > di_plus_4h and df_4h['di_minus'].iloc[-2] <= df_4h['di_plus'].iloc[-2]:
+                di_cross_4h = True
+                signals.append("🔴🔴 4h DI- > DI+ 크로스오버")
+                reversal_score += 6
+        else:
+            if di_plus_4h > di_minus_4h and df_4h['di_plus'].iloc[-2] <= df_4h['di_minus'].iloc[-2]:
+                di_cross_4h = True
+                signals.append("🔴🔴 4h DI+ > DI- 크로스오버")
+                reversal_score += 6
+        
+        # 4시간봉 SMA20 이탈 (연속 2캔들)
+        sma20_break_4h = False
+        if position_side == 'buy':
+            if df_4h['close'].iloc[-1] < df_4h['sma_20'].iloc[-1] and \
+               df_4h['close'].iloc[-2] < df_4h['sma_20'].iloc[-2]:
+                sma20_break_4h = True
+                signals.append("🔴🔴 4h SMA20 하향 이탈 확인 (2캔들)")
+                reversal_score += 5
+        else:
+            if df_4h['close'].iloc[-1] > df_4h['sma_20'].iloc[-1] and \
+               df_4h['close'].iloc[-2] > df_4h['sma_20'].iloc[-2]:
+                sma20_break_4h = True
+                signals.append("🔴🔴 4h SMA20 상향 돌파 확인 (2캔들)")
+                reversal_score += 5
+        
+        # 4시간봉 RSI 다이버전스 (연속 5캔들 비교)
+        rsi_4h_curr = df_4h['rsi'].iloc[-1]
+        rsi_4h_prev = df_4h['rsi'].iloc[-5]
+        price_4h_curr = df_4h['close'].iloc[-1]
+        price_4h_prev = df_4h['close'].iloc[-5]
         
         if position_side == 'buy':
-            # 15분 Bearish Divergence
-            if recent_prices_15m[-1] > recent_prices_15m[-5] and recent_rsi_15m[-1] < recent_rsi_15m[-5]:
-                rsi_level = recent_rsi_15m[-1]
-                if rsi_level > 65:
-                    signals.append(f"🔴 15분 Bearish Divergence (과매수권 RSI: {rsi_level:.1f})")
-                    reversal_score += 5
-                else:
-                    signals.append(f"⚠️ 15분 Bearish Divergence (RSI: {rsi_level:.1f})")
-                    reversal_score += 3
-            
-            # 1시간 Bearish Divergence
-            if len(recent_prices_1h) >= 3 and len(recent_rsi_1h) >= 3:
-                if recent_prices_1h[-1] > recent_prices_1h[-3] and recent_rsi_1h[-1] < recent_rsi_1h[-3]:
-                    signals.append(f"🔴 1시간 Bearish Divergence")
-                    reversal_score += 4
-                    
-        else:  # sell
-            if recent_prices_15m[-1] < recent_prices_15m[-5] and recent_rsi_15m[-1] > recent_rsi_15m[-5]:
-                rsi_level = recent_rsi_15m[-1]
-                if rsi_level < 35:
-                    signals.append(f"🔴 15분 Bullish Divergence (과매도권 RSI: {rsi_level:.1f})")
-                    reversal_score += 5
-                else:
-                    signals.append(f"⚠️ 15분 Bullish Divergence (RSI: {rsi_level:.1f})")
-                    reversal_score += 3
-            
-            if len(recent_prices_1h) >= 3 and len(recent_rsi_1h) >= 3:
-                if recent_prices_1h[-1] < recent_prices_1h[-3] and recent_rsi_1h[-1] > recent_rsi_1h[-3]:
-                    signals.append(f"🔴 1시간 Bullish Divergence")
-                    reversal_score += 4
-                    
+            if price_4h_curr > price_4h_prev * 1.01 and rsi_4h_curr < rsi_4h_prev - 5:
+                signals.append("🔴 4h Bearish RSI Divergence (확실)")
+                reversal_score += 4
+        else:
+            if price_4h_curr < price_4h_prev * 0.99 and rsi_4h_curr > rsi_4h_prev + 5:
+                signals.append("🔴 4h Bullish RSI Divergence (확실)")
+                reversal_score += 4
+                
     except Exception as e:
-        logger.debug(f"Divergence 감지 오류: {e}")
+        logger.debug(f"4h 분석 오류: {e}")
     
-    # ===== 3. MACD 신호 =====
+    # ========================================
+    # === 3. 1시간봉 신호 (중요, 중간 점수) ===
+    # ========================================
+    
     try:
-        macd_15m = df_15min['macd'].iloc[-1]
-        macd_signal_15m = df_15min['macd_signal'].iloc[-1]
-        macd_hist_15m = df_15min['macd_diff'].iloc[-1] if 'macd_diff' in df_15min.columns else macd_15m - macd_signal_15m
-        macd_hist_prev = df_15min['macd_diff'].iloc[-2] if 'macd_diff' in df_15min.columns else df_15min['macd'].iloc[-2] - df_15min['macd_signal'].iloc[-2]
-        
         macd_1h = df_hourly['macd'].iloc[-1]
         macd_signal_1h = df_hourly['macd_signal'].iloc[-1]
         
+        # 1시간봉 MACD 크로스오버
+        macd_cross_1h = False
         if position_side == 'buy':
-            # 모멘텀 급격히 약화 (히스토그램 30% 이상 감소)
-            if macd_hist_15m > 0 and macd_hist_prev > 0 and macd_hist_15m < macd_hist_prev * 0.7:
-                signals.append("⚠️ MACD 모멘텀 급격히 약화 (30%+ 감소)")
-                reversal_score += 3
-            elif macd_hist_15m > 0 and macd_hist_15m < macd_hist_prev:
-                signals.append("📉 MACD 모멘텀 약화 중")
-                reversal_score += 1
-            
-            # 15분 데드크로스 임박
-            macd_gap = macd_15m - macd_signal_15m
-            if macd_15m != 0 and 0 < macd_gap < abs(macd_15m) * 0.1:
-                signals.append("🔴 15분 MACD 데드크로스 임박!")
-                reversal_score += 4
-            
-            # 1시간 데드크로스
             if macd_1h < macd_signal_1h and df_hourly['macd'].iloc[-2] >= df_hourly['macd_signal'].iloc[-2]:
-                signals.append("🔴🔴 1시간 MACD 데드크로스 발생!")
-                reversal_score += 5
-                
-        else:  # sell
-            if macd_hist_15m < 0 and macd_hist_prev < 0 and macd_hist_15m > macd_hist_prev * 0.7:
-                signals.append("⚠️ MACD 모멘텀 급격히 약화 (30%+ 감소)")
-                reversal_score += 3
-            elif macd_hist_15m < 0 and macd_hist_15m > macd_hist_prev:
-                signals.append("📉 MACD 모멘텀 약화 중")
-                reversal_score += 1
-            
-            macd_gap = macd_signal_15m - macd_15m
-            if macd_15m != 0 and 0 < macd_gap < abs(macd_15m) * 0.1:
-                signals.append("🔴 15분 MACD 골든크로스 임박!")
+                macd_cross_1h = True
+                signals.append("🔴 1h MACD 데드크로스")
                 reversal_score += 4
-            
+        else:
             if macd_1h > macd_signal_1h and df_hourly['macd'].iloc[-2] <= df_hourly['macd_signal'].iloc[-2]:
-                signals.append("🔴🔴 1시간 MACD 골든크로스 발생!")
-                reversal_score += 5
-                
-    except Exception as e:
-        logger.debug(f"MACD 분석 오류: {e}")
-    
-    # ===== 4. ADX 및 DI 크로스 =====
-    try:
-        adx_1h = df_hourly['adx'].iloc[-1]
-        adx_prev = df_hourly['adx'].iloc[-2]
+                macd_cross_1h = True
+                signals.append("🔴 1h MACD 골든크로스")
+                reversal_score += 4
+        
+        # 1시간봉 DI 크로스오버 (연속 2캔들 확인)
+        di_cross_1h = False
         di_plus_1h = df_hourly['di_plus'].iloc[-1]
         di_minus_1h = df_hourly['di_minus'].iloc[-1]
-        di_plus_prev = df_hourly['di_plus'].iloc[-2]
-        di_minus_prev = df_hourly['di_minus'].iloc[-2]
         
-        # 추세 강도 약화 (ADX 25 하향 돌파)
-        if adx_1h < adx_prev and adx_prev > 25 and adx_1h < 25:
-            signals.append("⚠️ ADX 25 하향 돌파 (추세 약화)")
+        if position_side == 'buy':
+            if di_minus_1h > di_plus_1h and \
+               df_hourly['di_minus'].iloc[-2] > df_hourly['di_plus'].iloc[-2] and \
+               df_hourly['di_minus'].iloc[-3] <= df_hourly['di_plus'].iloc[-3]:
+                di_cross_1h = True
+                signals.append("🔴 1h DI- > DI+ (2캔들 확인)")
+                reversal_score += 5
+            elif di_minus_1h > di_plus_1h and df_hourly['di_minus'].iloc[-2] <= df_hourly['di_plus'].iloc[-2]:
+                signals.append("⚠️ 1h DI crossover (확인 필요)")
+                reversal_score += 2
+        else:
+            if di_plus_1h > di_minus_1h and \
+               df_hourly['di_plus'].iloc[-2] > df_hourly['di_minus'].iloc[-2] and \
+               df_hourly['di_plus'].iloc[-3] <= df_hourly['di_minus'].iloc[-3]:
+                di_cross_1h = True
+                signals.append("🔴 1h DI+ > DI- (2캔들 확인)")
+                reversal_score += 5
+            elif di_plus_1h > di_minus_1h and df_hourly['di_plus'].iloc[-2] <= df_hourly['di_minus'].iloc[-2]:
+                signals.append("⚠️ 1h DI crossover (확인 필요)")
+                reversal_score += 2
+        
+        # 1시간봉 ADX 연속 하락
+        adx_1h = df_hourly['adx'].iloc[-1]
+        adx_1h_prev = df_hourly['adx'].iloc[-2]
+        adx_1h_prev2 = df_hourly['adx'].iloc[-3]
+        
+        if adx_1h < adx_1h_prev < adx_1h_prev2 and adx_1h < 20:
+            signals.append("📉 1h ADX 연속 하락 (추세 약화)")
             reversal_score += 3
-        elif adx_1h < adx_prev and adx_1h < 20:
-            signals.append("📉 ADX 약화 중 (추세력 감소)")
-            reversal_score += 1
         
-        # DI 크로스오버
-        if position_side == 'buy':
-            if di_minus_1h > di_plus_1h and di_minus_prev <= di_plus_prev:
-                signals.append("🔴🔴 DI 크로스오버! (매도 우세 전환)")
-                reversal_score += 5
-            elif di_minus_1h > di_plus_1h:
-                signals.append("⚠️ DI- > DI+ (하락 압력)")
-                reversal_score += 2
-        else:
-            if di_plus_1h > di_minus_1h and di_plus_prev <= di_minus_prev:
-                signals.append("🔴🔴 DI 크로스오버! (매수 우세 전환)")
-                reversal_score += 5
-            elif di_plus_1h > di_minus_1h:
-                signals.append("⚠️ DI+ > DI- (상승 압력)")
-                reversal_score += 2
-                
-    except Exception as e:
-        logger.debug(f"ADX 분석 오류: {e}")
-    
-    # ===== 5. CMF 자금 흐름 반전 =====
-    try:
+        # 1시간봉 CMF 연속 음수/양수
         cmf_1h = df_hourly['cmf'].iloc[-1]
-        cmf_prev = df_hourly['cmf'].iloc[-2]
-        cmf_15m = df_15min['cmf'].iloc[-1]
+        cmf_1h_prev = df_hourly['cmf'].iloc[-2]
         
         if position_side == 'buy':
-            # 자금 유출 전환
-            if cmf_1h < 0 and cmf_prev >= 0:
-                signals.append("🔴 CMF 음수 전환 (자금 유출 시작!)")
-                reversal_score += 4
-            elif cmf_1h < -0.1 and cmf_15m < -0.1:
-                signals.append("⚠️ 멀티 타임프레임 자금 유출")
-                reversal_score += 2
+            if cmf_1h < -0.1 and cmf_1h_prev < -0.05:
+                signals.append("🔴 1h CMF 연속 자금유출")
+                reversal_score += 3
         else:
-            if cmf_1h > 0 and cmf_prev <= 0:
-                signals.append("🔴 CMF 양수 전환 (자금 유입 시작!)")
-                reversal_score += 4
-            elif cmf_1h > 0.1 and cmf_15m > 0.1:
-                signals.append("⚠️ 멀티 타임프레임 자금 유입")
-                reversal_score += 2
+            if cmf_1h > 0.1 and cmf_1h_prev > 0.05:
+                signals.append("🔴 1h CMF 연속 자금유입")
+                reversal_score += 3
                 
     except Exception as e:
-        logger.debug(f"CMF 분석 오류: {e}")
+        logger.debug(f"1h 분석 오류: {e}")
     
-    # ===== 6. 볼린저 밴드 이탈 후 복귀 =====
+    # ========================================
+    # === 4. 15분봉 신호 (참고용, 낮은 점수) ===
+    # ========================================
+    
     try:
-        current_price_15m = df_15min['close'].iloc[-1]
-        prev_price_15m = df_15min['close'].iloc[-2]
-        bb_upper = df_15min['bb_bbh'].iloc[-1]
-        bb_lower = df_15min['bb_bbl'].iloc[-1]
-        bb_middle = df_15min['bb_bbm'].iloc[-1]
-        
+        # 15분봉 MACD (참고용)
+        macd_cross_15m = False
         if position_side == 'buy':
-            # 상단 밴드에서 복귀
-            if prev_price_15m > bb_upper and current_price_15m < bb_upper:
-                signals.append("⚠️ BB 상단 이탈 후 복귀 (과열 해소)")
-                reversal_score += 2
-            # 중간선 하향 돌파
-            if prev_price_15m > bb_middle and current_price_15m < bb_middle:
-                signals.append("📉 BB 중간선 하향 돌파")
-                reversal_score += 1
+            if df_15min['macd'].iloc[-1] < df_15min['macd_signal'].iloc[-1] and \
+               df_15min['macd'].iloc[-2] >= df_15min['macd_signal'].iloc[-2]:
+                macd_cross_15m = True
+                reversal_score += 1  # 🔄 4 → 1 (대폭 감소)
+                signals.append("📉 15m MACD crossover (참고)")
         else:
-            if prev_price_15m < bb_lower and current_price_15m > bb_lower:
-                signals.append("⚠️ BB 하단 이탈 후 복귀 (침체 해소)")
-                reversal_score += 2
-            if prev_price_15m < bb_middle and current_price_15m > bb_middle:
-                signals.append("📈 BB 중간선 상향 돌파")
+            if df_15min['macd'].iloc[-1] > df_15min['macd_signal'].iloc[-1] and \
+               df_15min['macd'].iloc[-2] <= df_15min['macd_signal'].iloc[-2]:
+                macd_cross_15m = True
                 reversal_score += 1
-                
-    except Exception as e:
-        logger.debug(f"볼린저 분석 오류: {e}")
-    
-    # ===== 7. RSI 과열권 탈출 =====
-    try:
+                signals.append("📈 15m MACD crossover (참고)")
+        
+        # 15분봉 RSI 과열권 탈출 (참고용)
         rsi_15m = df_15min['rsi'].iloc[-1]
-        rsi_prev_15m = df_15min['rsi'].iloc[-2]
+        rsi_15m_prev = df_15min['rsi'].iloc[-3]  # 3개 전과 비교
         
         if position_side == 'buy':
-            # 과매수권(70+)에서 탈출
-            if rsi_prev_15m > 70 and rsi_15m < 70:
-                signals.append("⚠️ RSI 과매수권 이탈 (70 하향)")
-                reversal_score += 3
-            # RSI 50 하향 돌파
-            if rsi_prev_15m > 50 and rsi_15m < 50:
-                signals.append("📉 RSI 50선 하향 돌파")
-                reversal_score += 2
+            if rsi_15m < 60 and rsi_15m_prev > 70:
+                reversal_score += 1  # 🔄 3 → 1
+                signals.append("📉 15m RSI 과매수권 탈출 (참고)")
         else:
-            if rsi_prev_15m < 30 and rsi_15m > 30:
-                signals.append("⚠️ RSI 과매도권 이탈 (30 상향)")
-                reversal_score += 3
-            if rsi_prev_15m < 50 and rsi_15m > 50:
-                signals.append("📈 RSI 50선 상향 돌파")
-                reversal_score += 2
+            if rsi_15m > 40 and rsi_15m_prev < 30:
+                reversal_score += 1
+                signals.append("📈 15m RSI 과매도권 탈출 (참고)")
+        
+        # 15분봉 다이버전스는 점수 부여하지 않음 (참고만)
+        recent_prices_15m = df_15min['close'].tail(10).values
+        recent_rsi_15m = df_15min['rsi'].tail(10).values
+        
+        if position_side == 'buy':
+            if recent_prices_15m[-1] > recent_prices_15m[-5] and recent_rsi_15m[-1] < recent_rsi_15m[-5]:
+                signals.append("📉 15m Divergence 감지 (참고, 점수 없음)")
+        else:
+            if recent_prices_15m[-1] < recent_prices_15m[-5] and recent_rsi_15m[-1] > recent_rsi_15m[-5]:
+                signals.append("📈 15m Divergence 감지 (참고, 점수 없음)")
                 
     except Exception as e:
-        logger.debug(f"RSI 분석 오류: {e}")
+        logger.debug(f"15m 분석 오류: {e}")
     
-    # ===== 최종 판단 (🆕 더 민감한 기준) =====
+    # ========================================
+    # === 5. 트랩 필터: 추세 지지 시 점수 차감 ===
+    # ========================================
+    
+    trend_support_deduction = 0
+    
+    # 4시간봉 추세가 강하게 지지하면 점수 대폭 차감
+    if trend_support_4h >= 6:  # 매우 강한 추세 지지
+        trend_support_deduction = min(reversal_score * 0.5, 8)  # 최대 50% 또는 8점 차감
+        signals.append(f"🛡️ 4h 추세 매우 강함 (-{trend_support_deduction:.1f}점)")
+    elif trend_support_4h >= 4:  # 강한 추세 지지
+        trend_support_deduction = min(reversal_score * 0.35, 6)  # 최대 35% 또는 6점 차감
+        signals.append(f"🛡️ 4h 추세 강함 (-{trend_support_deduction:.1f}점)")
+    elif trend_support_4h >= 3:  # 중간 추세 지지
+        trend_support_deduction = min(reversal_score * 0.2, 4)  # 최대 20% 또는 4점 차감
+        signals.append(f"🛡️ 4h 추세 지지 중 (-{trend_support_deduction:.1f}점)")
+    
+    # 수익 구간에서는 더 보수적 (추가 차감)
+    if pnl_percent > 2.0 and trend_support_4h >= 3:
+        extra_deduction = 2
+        trend_support_deduction += extra_deduction
+        signals.append(f"🛡️ 수익 구간 + 추세 지지 (-{extra_deduction}점 추가)")
+    
+    reversal_score = max(0, reversal_score - trend_support_deduction)
+    
+    # ========================================
+    # === 6. 멀티타임프레임 확인 보너스/페널티 ===
+    # ========================================
+    
+    # 4시간봉 + 1시간봉 동시 역전 시 보너스
+    has_4h_signal = any('4h' in sig for sig in signals if '🔴🔴' in sig)
+    has_1h_signal = any('1h' in sig and '🔴' in sig for sig in signals)
+    
+    if has_4h_signal and has_1h_signal:
+        reversal_score += 4
+        signals.append("⚡ 4h+1h 멀티타임프레임 역전 확인! (+4점)")
+    
+    # 15분봉만 있고 상위 TF 미확인 시 페널티
+    has_15m_signal = any('15m' in sig for sig in signals)
+    if has_15m_signal and not has_1h_signal and not has_4h_signal and trend_support_4h >= 3:
+        reversal_score = max(0, reversal_score - 3)
+        signals.append("🛡️ 15m 신호만 발생 - 상위 TF 미확인 (-3점)")
+    
+    # ===== 최종 판단 (v7.5 임계값 상향) =====
     should_exit = False
     urgency = 'none'
     confidence = 0.0
     
-    if reversal_score >= 8:
+    # 🔄 v7.5: 임계값 대폭 상향
+    threshold_immediate = 12  # 8 → 12
+    threshold_soon = 9        # 5 → 9
+    threshold_watch = 6       # 3 → 6
+    
+    if reversal_score >= threshold_immediate:
         should_exit = True
         urgency = 'immediate'
-        confidence = min(reversal_score / 12, 1.0)
-    elif reversal_score >= 5:
+        confidence = min(reversal_score / 20, 1.0)
+    elif reversal_score >= threshold_soon:
         should_exit = True
         urgency = 'soon'
-        confidence = reversal_score / 12
-    elif reversal_score >= 3:
+        confidence = reversal_score / 20
+    elif reversal_score >= threshold_watch:
         urgency = 'watch'
-        confidence = reversal_score / 12
+        confidence = reversal_score / 20
     
     return {
         'should_exit': should_exit,
@@ -2345,9 +2536,10 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
         'reversal_score': reversal_score,
         'signals': signals,
         'profit_risk': profit_risk,
-        'threshold_immediate': 8,
-        'threshold_soon': 5,
-        'threshold_watch': 3
+        'threshold_immediate': threshold_immediate,
+        'threshold_soon': threshold_soon,
+        'threshold_watch': threshold_watch,
+        'trend_support_4h': trend_support_4h
     }
 
 # ============ AI Response Helper ============
@@ -4249,7 +4441,8 @@ def ai_monitor_position(symbol, position_info):
                 signal_msg += f"""
 <b>긴급도:</b> {early_exit_signals['urgency'].upper()}
 <b>신뢰도:</b> {early_exit_signals['confidence']:.1%}
-<b>역전 점수:</b> {early_exit_signals['reversal_score']}/15
+<b>역전 점수:</b> {early_exit_signals['reversal_score']}/20
+<b>4H 추세지지:</b> {early_exit_signals.get('trend_support_4h', 0)}/8
 
 💡 AI가 포지션 종료를 검토 중입니다...
 
@@ -4257,7 +4450,7 @@ def ai_monitor_position(symbol, position_info):
                 """.strip()
                 send_telegram_notification(signal_msg, 'warning' if early_exit_signals['urgency'] == 'immediate' else 'info')
         elif early_exit_signals['urgency'] == 'watch':
-            logger.info(f"👀 약한 역전 신호 감지 (점수: {early_exit_signals['reversal_score']}/15)")
+            logger.info(f"👀 약한 역전 신호 감지 (점수: {early_exit_signals['reversal_score']}/20)")
             for signal in early_exit_signals['signals']:
                 logger.info(f"   - {signal}")
         
@@ -4301,9 +4494,10 @@ You are an elite AI position manager monitoring an active {side.upper()} positio
 **CRITICAL CONTEXT:**
 This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIED impact on P&L.
 
-🚨 **EARLY REVERSAL DETECTION SYSTEM:**
+🚨 **EARLY REVERSAL DETECTION SYSTEM (v7.5 Anti-Noise):**
 {'═' * 43}
-→ Reversal Risk Score: {early_exit_signals['reversal_score']}/12
+→ Reversal Risk Score: {early_exit_signals['reversal_score']}/20
+→ 4H Trend Support: {early_exit_signals.get('trend_support_4h', 0)}/8 {'🟢 STRONG' if early_exit_signals.get('trend_support_4h', 0) >= 5 else '🟡 MODERATE' if early_exit_signals.get('trend_support_4h', 0) >= 3 else '🔴 WEAK'}
 → Should Exit: {'YES ⚠️' if early_exit_signals['should_exit'] else 'NO ✅'}
 → Urgency Level: {early_exit_signals['urgency'].upper()}
 → Confidence: {early_exit_signals['confidence']:.1%}
@@ -4311,11 +4505,11 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 → Detected Signals ({len(early_exit_signals['signals'])}):
 {chr(10).join(['  • ' + sig for sig in early_exit_signals['signals']]) if early_exit_signals['signals'] else '  • No reversal signals detected'}
 
-💡 **INTERPRETATION (v7.1 Enhanced):**
-  • Score ≥ 8: IMMEDIATE exit recommended
-  • Score 5-7: EXIT SOON (strong reversal signals)
-  • Score 3-4: WATCH closely (early warning)
-  • Score < 3: No significant reversal risk
+💡 **INTERPRETATION (v7.5 Anti-Noise Filter):**
+  • Score ≥ 12: IMMEDIATE exit (4h+1h 동시 역전 확인)
+  • Score 9-11: EXIT SOON (1h 역전 + 4h 약화)
+  • Score 6-8: WATCH closely (경고, 아직 홀드)
+  • Score < 6: No significant reversal risk (노이즈 무시)
 
 {'⚠️ WARNING: Multiple reversal signals detected! Consider this heavily in your decision.' if early_exit_signals['should_exit'] else '✅ No major reversal concerns detected. Focus on other technical factors.'}
 {'═' * 43}
@@ -4419,50 +4613,47 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
   • CMF: {df_4h['cmf'].iloc[-1]:.2f} {'[BUYING]' if df_4h['cmf'].iloc[-1] > 0 else '[SELLING]'}
 
 ═══════════════════════════════════════════
-🎯 **EXIT DECISION FRAMEWORK**
+🎯 **EXIT DECISION FRAMEWORK (v7.5 Anti-Noise)**
 ═══════════════════════════════════════════
 
 **For {'LONG' if side == 'buy' else 'SHORT'} Position:**
 
+🛡️ **v7.5 CRITICAL RULE: MULTI-TIMEFRAME CONFIRMATION REQUIRED**
+- ❌ 15분봉 신호만으로 EXIT 금지 (단기 노이즈)
+- ✅ 1시간봉 + 4시간봉 확인 필수
+- ✅ 연속 2-3개 캔들 확인 필요 (단일 캔들 무시)
+- ✅ 4시간봉 추세 지지 시 단기 역전 신호 무시
+
 **Context for Decision Making:**
 - Current ATR (5m): {atr_15min:.4f} - Use this as volatility baseline
-- Price volatility is relative to this asset's normal movement
-- Consider timeframe alignment more than absolute profit percentages
+- 4H Trend Support: {early_exit_signals.get('trend_support_4h', 0)}/8
+- If 4H trend strong (≥5), ignore 15m/1h noise
 
-⚠️ **IMMEDIATE EXIT SIGNALS (Close 100%):**
-{'- 15m MACD bearish crossover + RSI declining from overbought zone' if side == 'buy' else '- 15m MACD bullish crossover + RSI rising from oversold zone'}
-{'- 1h DI- crosses above DI+ (definitive trend reversal)' if side == 'buy' else '- 1h DI+ crosses above DI- (definitive trend reversal)'}
-{'- CMF turning negative across 2+ timeframes (money flowing out)' if side == 'buy' else '- CMF turning positive across 2+ timeframes (money flowing in)'}
-{'- Price breaks below 1h Bollinger lower band with volume' if side == 'buy' else '- Price breaks above 1h Bollinger upper band with volume'}
-- Significant profit + multiple reversal confirmations across timeframes
-- Stop loss being approached with momentum clearly against position
-- Strong bearish/bullish divergence on multiple timeframes
+⚠️ **IMMEDIATE EXIT SIGNALS (Close 100%) - REQUIRES 4H+1H CONFIRMATION:**
+{'- 4h MACD deadcross + 1h DI- crosses above DI+' if side == 'buy' else '- 4h MACD golden cross + 1h DI+ crosses above DI-'}
+{'- 4h price breaks below SMA20 (2+ candles) + 1h MACD confirmation' if side == 'buy' else '- 4h price breaks above SMA20 (2+ candles) + 1h MACD confirmation'}
+{'- CMF negative on BOTH 4h AND 1h (confirmed money outflow)' if side == 'buy' else '- CMF positive on BOTH 4h AND 1h (confirmed money inflow)'}
+- Reversal Score ≥ 12 with 4h trend weakening
+- Stop loss being approached with 4h momentum against position
 
-🔴 **STRONG EXIT SIGNALS (Close 75-100%):**
-{'- 15m RSI dropping sharply from overbought (>70) back below 50' if side == 'buy' else '- 15m RSI rising sharply from oversold (<30) back above 50'}
-- 4h trend weakening (ADX declining, was strong but now <25)
-- MACD histogram consistently shrinking for multiple bars
-- Substantial profit achieved + momentum showing fatigue
-- Extended holding time with diminishing momentum
-{'- Price struggling to break resistance despite multiple attempts' if side == 'buy' else '- Price struggling to break support despite multiple attempts'}
+🔴 **STRONG EXIT SIGNALS (Close 75-100%) - REQUIRES 1H CONFIRMATION:**
+- 4h trend weakening (ADX declining, was strong but now <20)
+- 1h MACD crossover + DI crossover (both confirmed)
+- Extended holding time (3h+) with 1h momentum fading
+{'- 1h price below SMA20 for 2+ candles' if side == 'buy' else '- 1h price above SMA20 for 2+ candles'}
 
 🟡 **PARTIAL EXIT SIGNALS (Close 25-50%):**
-- Approaching take profit zone with early reversal indicators
-- Price consolidating at key resistance/support levels
-- Mixed signals: some timeframes bullish, others neutral/bearish
-- Reasonable profit secured + uncertain near-term direction
-- Risk management: preserve gains while maintaining exposure
-- Time decay: long holding period without meaningful progress
+- 1h showing reversal hints, but 4h still supportive
+- Price consolidating at key resistance/support on 4h chart
+- Good profit achieved + 1h momentum fading (4h still okay)
 
-✅ **HOLD SIGNALS:**
-- All timeframes showing alignment with position direction
-- Strong trend indicators: ADX >25 and rising
-{'- DI+ clearly dominating DI- and expanding' if side == 'buy' else '- DI- clearly dominating DI+ and expanding'}
-- MACD histogram expanding with strong momentum
-- No reversal divergences detected on any timeframe
-- CMF positive and strengthening (money flow supporting direction)
-- Price respecting trend structure (higher lows for longs, lower highs for shorts)
-- Profit target still has room with momentum intact
+✅ **HOLD SIGNALS (IGNORE SHORT-TERM NOISE):**
+- 4H trend strongly intact (DI favorable, MACD aligned)
+- 4H ADX >20 and stable/rising
+- Price above/below 4H SMA20 (aligned with position)
+- 15m/1h fluctuations are NORMAL - wait for 4h confirmation
+- CMF positive on 4h (money flow supporting)
+- Recent 15m RSI extremes without 1h/4h breakdown = NOISE
 
 ⏰ **TIME-BASED CONTEXT:**
 - Short-term (<1 hour): Prioritize technical signals over time
@@ -4615,21 +4806,25 @@ don't let a winner turn into a loser!
 - Ignore strong technical momentum just to "secure profits"
 - Use arbitrary rules like "always exit at X%"
 - Let significant profits evaporate (check drawdown from peak!)
-- **EXIT POSITIONS WITHIN FIRST 60 MINUTES** unless severe loss (< -10%) or catastrophic reversal (Score ≥ 12)
+- **EXIT POSITIONS WITHIN FIRST 60 MINUTES** unless severe loss (< -10%) or catastrophic reversal (Score ≥ 15)
 - **BE TRIGGER-HAPPY IN FIRST HOUR** - positions need time to develop!
-- **EXIT PROFITABLE POSITIONS based on 15m signals alone** - wait for 1H/4H confirmation!
-- **React to short-term noise when in profit** - 15m RSI extremes are normal during trends
+- **EXIT based on 15m signals ALONE** - ALWAYS wait for 1H/4H confirmation!
+- **React to short-term noise** - 15m RSI/MACD extremes are NOISE during strong 4H trends
+- **IGNORE 4H TREND SUPPORT** - if 4H trend is strong, minor pullbacks are buying/selling opportunities
+- **EXIT when Reversal Score < 9** - scores under 9 are likely noise, not real reversals
 
 **DO:**
-- Exit when technical indicators show momentum exhaustion
-- Hold strong trends even with large profits if momentum persists
-- Cut losses quickly when breakdown is technically confirmed
+- Exit when **4H timeframe** shows clear reversal signals (MACD cross, DI cross)
+- Hold strong 4H trends even with 15m/1h fluctuations
+- Cut losses when **4H breakdown** is technically confirmed
 - Let ATR guide what's "normal" vs "extended" movement
-- Prioritize multi-timeframe confirmation over single signals
+- **PRIORITIZE 4H > 1H > 15m** for exit decisions
+- **REQUIRE multi-timeframe confirmation** (4H+1H) before exiting
+- **CHECK 4H Trend Support score** - if ≥5, be very reluctant to exit
+- **WAIT for 2-3 candle confirmation** before acting on reversal signals
 - **RESPECT 1-HOUR PROTECTION PERIOD** - give trades time to work
-- **BE PATIENT** in first 60 minutes - early noise ≠ trend reversal
-- **USE 4H/1H FOR PROFIT EXITS** - ignore 15m noise when profitable
-- **CONFIRM EXIT SIGNALS on longer timeframes** before closing profitable trades
+- **BE PATIENT** - most winning trades need 30-60+ minutes to reach targets
+- **TRUST THE 4H TREND** - short-term noise does not invalidate medium-term thesis
 
 Return ONLY the JSON object. Start with {{ and end with }}
 """
