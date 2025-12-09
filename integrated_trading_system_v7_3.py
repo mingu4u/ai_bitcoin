@@ -6004,16 +6004,35 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                     'workingType': 'MARK_PRICE',
                     'closePosition': True,  # 🆕 전체 포지션 청산
                 }
+                # 🆕 closePosition=True 사용 시 amount는 전달하지 않음 (바이낸스 API 요구사항)
                 sl_order = user_exchange.create_order(
                     symbol=symbol,
                     type='STOP_MARKET',
                     side=sl_side,
-                    amount=total_position_amount,  # 🆕 전체 포지션 크기 사용
+                    amount=None,  # 🆕 closePosition=True일 때는 amount 불필요
                     params=sl_params
                 )
-                logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (전체 포지션 청산: {total_position_amount:.6f})")
+                logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (전체 포지션 청산)")
             except Exception as e:
                 logger.error(f"[{user_name}] Stop Loss 설정 실패: {str(e)}")
+                logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}")
+                # 🆕 재시도: reduceOnly 방식
+                try:
+                    logger.info(f"[{user_name}] reduceOnly 방식으로 재시도...")
+                    sl_order = user_exchange.create_order(
+                        symbol=symbol,
+                        type='STOP_MARKET',
+                        side=sl_side,
+                        amount=total_position_amount,
+                        params={
+                            'stopPrice': adjusted_sl,
+                            'workingType': 'MARK_PRICE',
+                            'reduceOnly': True,
+                        }
+                    )
+                    logger.info(f"[{user_name}] 🛡️ Stop Loss 재시도 성공 (reduceOnly): ${adjusted_sl:.4f}, 수량: {total_position_amount:.6f}")
+                except Exception as retry_e:
+                    logger.error(f"[{user_name}] Stop Loss 재시도 실패: {str(retry_e)}")
                 logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
             
             # Take Profit 주문 (closePosition=True로 전체 청산)
@@ -6025,17 +6044,35 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                     'workingType': 'MARK_PRICE',
                     'closePosition': True,  # 🆕 전체 포지션 청산
                 }
+                # 🆕 closePosition=True 사용 시 amount는 전달하지 않음 (바이낸스 API 요구사항)
                 tp_order = user_exchange.create_order(
                     symbol=symbol,
                     type='TAKE_PROFIT_MARKET',
                     side=tp_side,
-                    amount=total_position_amount,  # 🆕 전체 포지션 크기 사용
+                    amount=None,  # 🆕 closePosition=True일 때는 amount 불필요
                     params=tp_params
                 )
-                logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (전체 포지션 청산: {total_position_amount:.6f})")
+                logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (전체 포지션 청산)")
             except Exception as e:
                 logger.error(f"[{user_name}] Take Profit 설정 실패: {str(e)}")
-                logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+                logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}")
+                # 🆕 재시도: reduceOnly 방식
+                try:
+                    logger.info(f"[{user_name}] reduceOnly 방식으로 재시도...")
+                    tp_order = user_exchange.create_order(
+                        symbol=symbol,
+                        type='TAKE_PROFIT_MARKET',
+                        side=tp_side,
+                        amount=total_position_amount,
+                        params={
+                            'stopPrice': adjusted_tp,
+                            'workingType': 'MARK_PRICE',
+                            'reduceOnly': True,
+                        }
+                    )
+                    logger.info(f"[{user_name}] 🎯 Take Profit 재시도 성공 (reduceOnly): ${adjusted_tp:.4f}, 수량: {total_position_amount:.6f}")
+                except Exception as retry_e:
+                    logger.error(f"[{user_name}] Take Profit 재시도 실패: {str(retry_e)}")
             
             success_count += 1
             
