@@ -6008,7 +6008,7 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                     symbol=symbol,
                     type='STOP_MARKET',
                     side=sl_side,
-                    amount=total_position_amount,  # 🆕 기존처럼 amount 포함
+                    amount=total_position_amount,  # 전체 포지션 크기 사용
                     params=sl_params
                 )
                 logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (전체 포지션 청산: {total_position_amount:.6f})")
@@ -6029,7 +6029,7 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                     symbol=symbol,
                     type='TAKE_PROFIT_MARKET',
                     side=tp_side,
-                    amount=total_position_amount,  # 🆕 기존처럼 amount 포함
+                    amount=total_position_amount,  # 전체 포지션 크기 사용
                     params=tp_params
                 )
                 logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (전체 포지션 청산: {total_position_amount:.6f})")
@@ -6211,45 +6211,79 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         
         sl_order = None
         try:
-            # 스탑로스 주문 (closePosition 방식)
+            # 스탑로스 주문
             sl_side = 'sell' if action == 'buy' else 'buy'
             sl_order = exchange.create_order(
                 symbol=symbol,
-                type='STOP_MARKET',
+                type='STOP_MARKET',  # 🆕 대문자로 통일
                 side=sl_side,
-                amount=amount,
+                amount=amount,  # 🆕 활성화
                 params={
-                    'stopPrice': adjusted_sl,
+                    'stopPrice': adjusted_sl,  # 🆕 검증된 가격
                     'workingType': 'MARK_PRICE',
-                    'closePosition': True,
+                    'reduceOnly': True,  # 🆕 활성화
                 }
             )
-            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${adjusted_sl:.4f} (closePosition, 수량: {amount:.6f})")
+            
+            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${adjusted_sl:.4f} (reduceOnly, 수량: {amount:.6f})")
         except Exception as sl_error:
             logger.error(f"❌ 스탑로스 설정 실패: {str(sl_error)}")
             logger.error(f"실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
-            sl_order = None
+            # 🆕 재시도 (closePosition 방식)
+            try:
+                logger.info(f"closePosition 방식으로 재시도...")
+                sl_order = exchange.create_order(
+                    symbol=symbol,
+                    type='STOP_MARKET',
+                    side=sl_side,
+                    params={
+                        'stopPrice': adjusted_sl,
+                        'workingType': 'MARK_PRICE',
+                        'closePosition': True,
+                    }
+                )
+                logger.info(f"✅ 스탑로스 재시도 성공 - {symbol} @ ${adjusted_sl:.4f} (closePosition)")
+            except Exception as retry_e:
+                logger.error(f"❌ 스탑로스 재시도도 실패: {str(retry_e)}")
+                sl_order = None
         
         tp_order = None
         try:
-            # 테이크프로핏 주문 (closePosition 방식)
+            # 테이크프로핏 주문
             tp_side = 'sell' if action == 'buy' else 'buy'
             tp_order = exchange.create_order(
                 symbol=symbol,
-                type='TAKE_PROFIT_MARKET',
+                type='TAKE_PROFIT_MARKET',  # 🆕 대문자로 통일
                 side=tp_side,
-                amount=amount,
+                amount=amount,  # 🆕 활성화
                 params={
-                    'stopPrice': adjusted_tp,
+                    'stopPrice': adjusted_tp,  # 🆕 검증된 가격
                     'workingType': 'MARK_PRICE',
-                    'closePosition': True,
+                    'reduceOnly': True,  # 🆕 활성화
                 }
             )
-            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${adjusted_tp:.4f} (closePosition, 수량: {amount:.6f})")
+            
+            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${adjusted_tp:.4f} (reduceOnly, 수량: {amount:.6f})")
         except Exception as tp_error:
             logger.error(f"❌ 테이크프로핏 설정 실패: {str(tp_error)}")
             logger.error(f"실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
-            tp_order = None
+            # 🆕 재시도 (closePosition 방식)
+            try:
+                logger.info(f"closePosition 방식으로 재시도...")
+                tp_order = exchange.create_order(
+                    symbol=symbol,
+                    type='TAKE_PROFIT_MARKET',
+                    side=tp_side,
+                    params={
+                        'stopPrice': adjusted_tp,
+                        'workingType': 'MARK_PRICE',
+                        'closePosition': True,
+                    }
+                )
+                logger.info(f"✅ 테이크프로핏 재시도 성공 - {symbol} @ ${adjusted_tp:.4f} (closePosition)")
+            except Exception as retry_e:
+                logger.error(f"❌ 테이크프로핏 재시도도 실패: {str(retry_e)}")
+                tp_order = None
         
         # 트레일링 스탑 설정 (지원하는 경우)
         if trailing_stop_percent and trailing_activation_percent:
