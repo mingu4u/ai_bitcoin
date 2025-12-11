@@ -1134,6 +1134,9 @@ def get_db_connection():
     """DB 연결 반환 (초기화 메시지 없음)"""
     return sqlite3.connect('integrated_trades.db')
 
+# 🆕 별칭 추가 (호환성)
+init_db = get_db_connection
+
 def init_db_once():
     """DB 초기화 - 프로그램 시작 시 1회만 실행 (🆕 position_type 지원)"""
     conn = sqlite3.connect('integrated_trades.db')
@@ -5995,47 +5998,82 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                 logger.warning(f"[{user_name}] 포지션 조회 실패, 진입 수량 사용: {str(e)}")
                 total_position_amount = amount
             
-            # Stop Loss 주문 (closePosition=True로 전체 청산)
+            # 🆕 v7.4: 바이낸스 심볼 형식 변환 (BTC/USDT -> BTCUSDT)
+            binance_symbol = symbol.replace('/', '')
+            
+            # Stop Loss 주문 (직접 바이낸스 API 호출)
             sl_order = None
             try:
-                sl_side = 'sell' if action == 'buy' else 'buy'
-                sl_params = {
-                    'stopPrice': adjusted_sl,
+                sl_side = 'SELL' if action == 'buy' else 'BUY'
+                
+                # 방법 1: 직접 API 호출 (closePosition 방식)
+                sl_order = user_exchange.fapiPrivate_post_order({
+                    'symbol': binance_symbol,
+                    'side': sl_side,
+                    'type': 'STOP_MARKET',
+                    'stopPrice': str(adjusted_sl),
+                    'closePosition': 'true',
                     'workingType': 'MARK_PRICE',
-                    'closePosition': True,  # 전체 포지션 청산
-                }
-                sl_order = user_exchange.create_order(
-                    symbol=symbol,
-                    type='STOP_MARKET',
-                    side=sl_side,
-                    amount=total_position_amount,  # 전체 포지션 크기 사용
-                    params=sl_params
-                )
-                logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (전체 포지션 청산: {total_position_amount:.6f})")
+                    'priceProtect': 'true'
+                })
+                logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (closePosition)")
+                
             except Exception as e:
-                logger.error(f"[{user_name}] Stop Loss 설정 실패: {str(e)}")
-                logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+                logger.warning(f"[{user_name}] SL 1차 시도 실패: {str(e)}")
+                
+                # 방법 2: reduceOnly 방식 재시도
+                try:
+                    sl_order = user_exchange.fapiPrivate_post_order({
+                        'symbol': binance_symbol,
+                        'side': sl_side,
+                        'type': 'STOP_MARKET',
+                        'quantity': str(total_position_amount),
+                        'stopPrice': str(adjusted_sl),
+                        'reduceOnly': 'true',
+                        'workingType': 'MARK_PRICE',
+                        'priceProtect': 'true'
+                    })
+                    logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (reduceOnly)")
+                except Exception as retry_e:
+                    logger.error(f"[{user_name}] Stop Loss 설정 실패: {str(retry_e)}")
+                    logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}")
             
-            # Take Profit 주문 (closePosition=True로 전체 청산)
+            # Take Profit 주문 (직접 바이낸스 API 호출)
             tp_order = None
             try:
-                tp_side = 'sell' if action == 'buy' else 'buy'
-                tp_params = {
-                    'stopPrice': adjusted_tp,
+                tp_side = 'SELL' if action == 'buy' else 'BUY'
+                
+                # 방법 1: 직접 API 호출 (closePosition 방식)
+                tp_order = user_exchange.fapiPrivate_post_order({
+                    'symbol': binance_symbol,
+                    'side': tp_side,
+                    'type': 'TAKE_PROFIT_MARKET',
+                    'stopPrice': str(adjusted_tp),
+                    'closePosition': 'true',
                     'workingType': 'MARK_PRICE',
-                    'closePosition': True,  # 전체 포지션 청산
-                }
-                tp_order = user_exchange.create_order(
-                    symbol=symbol,
-                    type='TAKE_PROFIT_MARKET',
-                    side=tp_side,
-                    amount=total_position_amount,  # 전체 포지션 크기 사용
-                    params=tp_params
-                )
-                logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (전체 포지션 청산: {total_position_amount:.6f})")
+                    'priceProtect': 'true'
+                })
+                logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (closePosition)")
+                
             except Exception as e:
-                logger.error(f"[{user_name}] Take Profit 설정 실패: {str(e)}")
-                logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+                logger.warning(f"[{user_name}] TP 1차 시도 실패: {str(e)}")
+                
+                # 방법 2: reduceOnly 방식 재시도
+                try:
+                    tp_order = user_exchange.fapiPrivate_post_order({
+                        'symbol': binance_symbol,
+                        'side': tp_side,
+                        'type': 'TAKE_PROFIT_MARKET',
+                        'quantity': str(total_position_amount),
+                        'stopPrice': str(adjusted_tp),
+                        'reduceOnly': 'true',
+                        'workingType': 'MARK_PRICE',
+                        'priceProtect': 'true'
+                    })
+                    logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (reduceOnly)")
+                except Exception as retry_e:
+                    logger.error(f"[{user_name}] Take Profit 설정 실패: {str(retry_e)}")
+                    logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}")
             
             success_count += 1
             
@@ -6209,80 +6247,77 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         adjusted_sl = price_check['sl']
         adjusted_tp = price_check['tp']
         
+        # 🆕 v7.4: 바이낸스 심볼 형식 변환
+        binance_symbol = symbol.replace('/', '')
+        
         sl_order = None
         try:
-            # 스탑로스 주문
-            sl_side = 'sell' if action == 'buy' else 'buy'
-            sl_order = exchange.create_order(
-                symbol=symbol,
-                type='STOP_MARKET',  # 🆕 대문자로 통일
-                side=sl_side,
-                amount=amount,  # 🆕 활성화
-                params={
-                    'stopPrice': adjusted_sl,  # 🆕 검증된 가격
-                    'workingType': 'MARK_PRICE',
-                    'reduceOnly': True,  # 🆕 활성화
-                }
-            )
+            # 스탑로스 주문 (직접 바이낸스 API 호출)
+            sl_side = 'SELL' if action == 'buy' else 'BUY'
             
-            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${adjusted_sl:.4f} (reduceOnly, 수량: {amount:.6f})")
+            sl_order = exchange.fapiPrivate_post_order({
+                'symbol': binance_symbol,
+                'side': sl_side,
+                'type': 'STOP_MARKET',
+                'stopPrice': str(adjusted_sl),
+                'closePosition': 'true',
+                'workingType': 'MARK_PRICE',
+                'priceProtect': 'true'
+            })
+            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${adjusted_sl:.4f} (closePosition)")
+            
         except Exception as sl_error:
-            logger.error(f"❌ 스탑로스 설정 실패: {str(sl_error)}")
-            logger.error(f"실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
-            # 🆕 재시도 (closePosition 방식)
+            logger.warning(f"SL 1차 시도 실패: {str(sl_error)}")
+            # reduceOnly 방식 재시도
             try:
-                logger.info(f"closePosition 방식으로 재시도...")
-                sl_order = exchange.create_order(
-                    symbol=symbol,
-                    type='STOP_MARKET',
-                    side=sl_side,
-                    params={
-                        'stopPrice': adjusted_sl,
-                        'workingType': 'MARK_PRICE',
-                        'closePosition': True,
-                    }
-                )
-                logger.info(f"✅ 스탑로스 재시도 성공 - {symbol} @ ${adjusted_sl:.4f} (closePosition)")
+                sl_order = exchange.fapiPrivate_post_order({
+                    'symbol': binance_symbol,
+                    'side': sl_side,
+                    'type': 'STOP_MARKET',
+                    'quantity': str(amount),
+                    'stopPrice': str(adjusted_sl),
+                    'reduceOnly': 'true',
+                    'workingType': 'MARK_PRICE',
+                    'priceProtect': 'true'
+                })
+                logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${adjusted_sl:.4f} (reduceOnly)")
             except Exception as retry_e:
-                logger.error(f"❌ 스탑로스 재시도도 실패: {str(retry_e)}")
+                logger.error(f"❌ 스탑로스 설정 실패: {str(retry_e)}")
                 sl_order = None
         
         tp_order = None
         try:
-            # 테이크프로핏 주문
-            tp_side = 'sell' if action == 'buy' else 'buy'
-            tp_order = exchange.create_order(
-                symbol=symbol,
-                type='TAKE_PROFIT_MARKET',  # 🆕 대문자로 통일
-                side=tp_side,
-                amount=amount,  # 🆕 활성화
-                params={
-                    'stopPrice': adjusted_tp,  # 🆕 검증된 가격
-                    'workingType': 'MARK_PRICE',
-                    'reduceOnly': True,  # 🆕 활성화
-                }
-            )
+            # 테이크프로핏 주문 (직접 바이낸스 API 호출)
+            tp_side = 'SELL' if action == 'buy' else 'BUY'
             
-            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${adjusted_tp:.4f} (reduceOnly, 수량: {amount:.6f})")
+            tp_order = exchange.fapiPrivate_post_order({
+                'symbol': binance_symbol,
+                'side': tp_side,
+                'type': 'TAKE_PROFIT_MARKET',
+                'stopPrice': str(adjusted_tp),
+                'closePosition': 'true',
+                'workingType': 'MARK_PRICE',
+                'priceProtect': 'true'
+            })
+            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${adjusted_tp:.4f} (closePosition)")
+            
         except Exception as tp_error:
-            logger.error(f"❌ 테이크프로핏 설정 실패: {str(tp_error)}")
-            logger.error(f"실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
-            # 🆕 재시도 (closePosition 방식)
+            logger.warning(f"TP 1차 시도 실패: {str(tp_error)}")
+            # reduceOnly 방식 재시도
             try:
-                logger.info(f"closePosition 방식으로 재시도...")
-                tp_order = exchange.create_order(
-                    symbol=symbol,
-                    type='TAKE_PROFIT_MARKET',
-                    side=tp_side,
-                    params={
-                        'stopPrice': adjusted_tp,
-                        'workingType': 'MARK_PRICE',
-                        'closePosition': True,
-                    }
-                )
-                logger.info(f"✅ 테이크프로핏 재시도 성공 - {symbol} @ ${adjusted_tp:.4f} (closePosition)")
+                tp_order = exchange.fapiPrivate_post_order({
+                    'symbol': binance_symbol,
+                    'side': tp_side,
+                    'type': 'TAKE_PROFIT_MARKET',
+                    'quantity': str(amount),
+                    'stopPrice': str(adjusted_tp),
+                    'reduceOnly': 'true',
+                    'workingType': 'MARK_PRICE',
+                    'priceProtect': 'true'
+                })
+                logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${adjusted_tp:.4f} (reduceOnly)")
             except Exception as retry_e:
-                logger.error(f"❌ 테이크프로핏 재시도도 실패: {str(retry_e)}")
+                logger.error(f"❌ 테이크프로핏 설정 실패: {str(retry_e)}")
                 tp_order = None
         
         # 트레일링 스탑 설정 (지원하는 경우)
