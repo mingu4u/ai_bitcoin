@@ -1134,7 +1134,7 @@ def get_db_connection():
     """DB 연결 반환 (초기화 메시지 없음)"""
     return sqlite3.connect('integrated_trades.db')
 
-# 🆕 별칭 추가 (호환성)
+# init_db 별칭 (호환성 유지)
 init_db = get_db_connection
 
 def init_db_once():
@@ -2703,6 +2703,164 @@ def get_fear_and_greed_index():
     except requests.exceptions.RequestException as e:
         logger.error(f"Error fetching Fear and Greed Index: {e}")
         return None
+
+
+# ============ v7.4 장기 추세 여력 판단 (Patience Logic) ============
+def check_trend_remaining_room(df_hourly, df_4h, position_side: str, pnl_percent: float) -> dict:
+    """
+    🆕 v7.4: 1H/4H 기준 추세 여력 판단
+    수익 포지션이 조기 종료되지 않도록 인내심 점수 계산
+    
+    Args:
+        df_hourly: 1시간봉 데이터
+        df_4h: 4시간봉 데이터
+        position_side: 'long' or 'short'
+        pnl_percent: 현재 수익률
+    
+    Returns:
+        dict: {
+            'has_room': bool,  # 추세 여력 있음
+            'patience_score': int,  # 인내심 점수 (높을수록 더 기다려야 함)
+            'block_exit': bool,  # True면 종료 차단
+            'reason': str,
+            'details': list
+        }
+    """
+    result = {
+        'has_room': False,
+        'patience_score': 0,
+        'block_exit': False,
+        'reason': '',
+        'details': []
+    }
+    
+    # 손실 중이면 인내심 로직 적용 안함
+    if pnl_percent <= 0:
+        result['reason'] = '손실 중 - 인내심 로직 미적용'
+        return result
+    
+    try:
+        # 최신 데이터 가져오기
+        h1_latest = df_hourly.iloc[-1] if len(df_hourly) > 0 else None
+        h4_latest = df_4h.iloc[-1] if len(df_4h) > 0 else None
+        
+        if h1_latest is None or h4_latest is None:
+            return result
+        
+        # 지표 추출
+        rsi_1h = h1_latest.get('RSI', 50)
+        rsi_4h = h4_latest.get('RSI', 50)
+        adx_1h = h1_latest.get('ADX', 20)
+        adx_4h = h4_latest.get('ADX', 20)
+        di_plus_4h = h4_latest.get('DI+', 20)
+        di_minus_4h = h4_latest.get('DI-', 20)
+        macd_hist_1h = h1_latest.get('MACD_hist', 0)
+        stoch_k_1h = h1_latest.get('Stoch_K', 50)
+        stoch_k_4h = h4_latest.get('Stoch_K', 50)
+        
+        patience_score = 0
+        details = []
+        
+        if position_side == 'long':
+            # ===== LONG 포지션 추세 여력 판단 =====
+            
+            # 4H RSI 여력
+            if rsi_4h < 55:
+                patience_score += 3
+                details.append(f"📈 4H RSI {rsi_4h:.1f} < 55 → 상승 여력 매우 충분 (+3)")
+            elif rsi_4h < 65:
+                patience_score += 2
+                details.append(f"📈 4H RSI {rsi_4h:.1f} < 65 → 상승 여력 충분 (+2)")
+            elif rsi_4h < 75:
+                patience_score += 1
+                details.append(f"⚠️ 4H RSI {rsi_4h:.1f} < 75 → 상승 여력 일부 (+1)")
+            else:
+                details.append(f"🔴 4H RSI {rsi_4h:.1f} >= 75 → 과매수 진입")
+            
+            # 4H Stochastic 여력
+            if stoch_k_4h < 70:
+                patience_score += 2
+                details.append(f"📈 4H Stoch {stoch_k_4h:.1f} < 70 → 상승 여력 (+2)")
+            elif stoch_k_4h < 85:
+                patience_score += 1
+                details.append(f"⚠️ 4H Stoch {stoch_k_4h:.1f} < 85 → 약간의 여력 (+1)")
+            
+            # 4H ADX + DI 트렌드 강도
+            if adx_4h > 25 and di_plus_4h > di_minus_4h:
+                patience_score += 2
+                details.append(f"💪 4H ADX {adx_4h:.1f} + DI+ > DI- → 상승 트렌드 강함 (+2)")
+            
+            # 1H MACD 모멘텀
+            if macd_hist_1h > 0:
+                patience_score += 1
+                details.append(f"📊 1H MACD 히스토그램 양수 → 모멘텀 유지 (+1)")
+            
+            # 1H RSI 여력
+            if rsi_1h < 70:
+                patience_score += 1
+                details.append(f"📈 1H RSI {rsi_1h:.1f} < 70 → 1H 여력 (+1)")
+        
+        else:  # SHORT 포지션
+            # ===== SHORT 포지션 추세 여력 판단 =====
+            
+            # 4H RSI 여력
+            if rsi_4h > 45:
+                patience_score += 3
+                details.append(f"📉 4H RSI {rsi_4h:.1f} > 45 → 하락 여력 매우 충분 (+3)")
+            elif rsi_4h > 35:
+                patience_score += 2
+                details.append(f"📉 4H RSI {rsi_4h:.1f} > 35 → 하락 여력 충분 (+2)")
+            elif rsi_4h > 25:
+                patience_score += 1
+                details.append(f"⚠️ 4H RSI {rsi_4h:.1f} > 25 → 하락 여력 일부 (+1)")
+            else:
+                details.append(f"🔴 4H RSI {rsi_4h:.1f} <= 25 → 과매도 진입")
+            
+            # 4H Stochastic 여력
+            if stoch_k_4h > 30:
+                patience_score += 2
+                details.append(f"📉 4H Stoch {stoch_k_4h:.1f} > 30 → 하락 여력 (+2)")
+            elif stoch_k_4h > 15:
+                patience_score += 1
+                details.append(f"⚠️ 4H Stoch {stoch_k_4h:.1f} > 15 → 약간의 여력 (+1)")
+            
+            # 4H ADX + DI 트렌드 강도
+            if adx_4h > 25 and di_minus_4h > di_plus_4h:
+                patience_score += 2
+                details.append(f"💪 4H ADX {adx_4h:.1f} + DI- > DI+ → 하락 트렌드 강함 (+2)")
+            
+            # 1H MACD 모멘텀
+            if macd_hist_1h < 0:
+                patience_score += 1
+                details.append(f"📊 1H MACD 히스토그램 음수 → 모멘텀 유지 (+1)")
+            
+            # 1H RSI 여력
+            if rsi_1h > 30:
+                patience_score += 1
+                details.append(f"📉 1H RSI {rsi_1h:.1f} > 30 → 1H 여력 (+1)")
+        
+        # 결과 판정
+        result['patience_score'] = patience_score
+        result['details'] = details
+        
+        if patience_score >= 5:
+            result['has_room'] = True
+            result['block_exit'] = True
+            result['reason'] = f"🔒 추세 여력 충분 (점수: {patience_score}/10) - EXIT 차단!"
+        elif patience_score >= 3:
+            result['has_room'] = True
+            result['block_exit'] = False  # 경고만
+            result['reason'] = f"⚠️ 추세 여력 있음 (점수: {patience_score}/10) - 신중히 결정"
+        else:
+            result['has_room'] = False
+            result['block_exit'] = False
+            result['reason'] = f"✅ 추세 여력 부족 (점수: {patience_score}/10) - EXIT 허용"
+        
+    except Exception as e:
+        logger.error(f"추세 여력 판단 오류: {e}")
+        result['reason'] = f"판단 오류: {e}"
+    
+    return result
 
 
 # ============ v7.3 Rule-Based Validation System ============
@@ -4742,6 +4900,34 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
   • 🔒 Cut losses when momentum confirms against position
   • ✅ Consider exit if 15m + 1H both show adverse signals'''}
 
+🆕 **v7.4 PATIENCE RULES - 장기 추세 여력 확인:**
+{'''━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 **BEFORE ANY EXIT, CHECK THESE FIRST:**
+
+1. **4H 추세 여력 (Trend Remaining Room):**
+   • BUY position: 4H RSI < 65 → 상승 여력 충분, HOLD
+   • BUY position: 4H RSI 65-75 → 주의, 1H 확인 필요
+   • BUY position: 4H RSI > 75 → 과매수 진입, EXIT 고려
+   • SELL position: 4H RSI > 35 → 하락 여력 충분, HOLD
+   • SELL position: 4H RSI 25-35 → 주의, 1H 확인 필요
+   • SELL position: 4H RSI < 25 → 과매도 진입, EXIT 고려
+
+2. **1H 모멘텀 확인:**
+   • MACD 히스토그램이 포지션 방향과 일치 → HOLD
+   • ADX > 25 + DI가 포지션 방향 지지 → HOLD (강한 트렌드)
+   • Stochastic이 중립권 (30-70) → HOLD (조정 구간)
+
+3. **15분봉 노이즈 vs 실제 반전 구분:**
+   • 15m RSI 극단 + 1H/4H 트렌드 유지 → NOISE (무시!)
+   • 15m RSI 극단 + 1H RSI도 극단 → 주의 (부분 청산 고려)
+   • 15m + 1H + 4H 모두 극단 → EXIT (확정 반전)
+
+⚠️ **핵심 원칙:**
+   • 수익 중이면 4H/1H가 극단값에 도달할 때까지 기다려라!
+   • 15분봉 하나로 수익 포지션을 절대 종료하지 마라!
+   • "조금 더 기다렸으면 더 벌었을텐데"를 최소화하라!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━''' if pnl_percent > 0 else '''• 손실 포지션은 모든 TF 고려하여 빠른 손절'''}
+
 **EXIT DECISION HIERARCHY (When in Profit):**
   1. 🥇 4H Trend Reversal → EXIT (highest priority)
   2. 🥈 1H Trend Reversal + 4H Weakening → EXIT
@@ -4859,11 +5045,18 @@ ADAPTIVE DECISION FRAMEWORK:
 - Volatility matters: 5% move in BTC ≠ 5% move in altcoin
 
 🎯 CRITICAL - PROFIT ZONE RULES:
-- When IN PROFIT: Use 4H and 1H for exit decisions, IGNORE 15m noise
+  4890	- When IN PROFIT: Use 4H and 1H for exit decisions, IGNORE 15m noise
 - 15m signals alone should NEVER trigger exit of profitable positions
 - Wait for 1H or 4H confirmation before closing winning trades
 - Short-term pullbacks (15m) are NORMAL during profitable trends
 - Only exit profits when LONGER TIMEFRAMES show clear reversal
+
+🆕 v7.4 PATIENCE RULES (수익 포지션 인내심):
+- BUY + 4H RSI < 65 → 상승 여력 충분, 절대 종료하지 마라!
+- SELL + 4H RSI > 35 → 하락 여력 충분, 절대 종료하지 마라!
+- 15m RSI 극단값은 1H/4H 확인 없이 EXIT 금지
+- "조금 더 기다렸으면" 후회를 최소화하라!
+- 수익 중 4H 트렌드가 살아있으면 HOLD!
 
 PRIORITY OBJECTIVES:
 1. Protect Capital: Exit when multiple timeframes show reversal
@@ -4983,6 +5176,61 @@ Your response must be a single JSON object."""
                         result['reason'] = f"👀 WATCH ZONE (40-60min): Original decision was {original_decision}. Approaching normal monitoring. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
                         result['exit_type'] = 'none'
                         result['urgency'] = 'watch'
+                
+                # 🆕 v7.4: 60분 이후 수익 포지션 인내심 로직 (장기 추세 여력 확인)
+                elif holding_time >= 60 and pnl_percent > 0 and result['decision'] in ['close', 'partial_close']:
+                    try:
+                        # 시장 데이터 가져오기
+                        market_data = get_market_data(symbol)
+                        if market_data and 'df_hourly' in market_data and 'df_4h' in market_data:
+                            position_side = side  # 'long' or 'short'
+                            
+                            # 추세 여력 판단
+                            patience_result = check_trend_remaining_room(
+                                market_data['df_hourly'],
+                                market_data['df_4h'],
+                                position_side,
+                                pnl_percent
+                            )
+                            
+                            # 로깅
+                            logger.info(f"🔍 v7.4 인내심 점검: {patience_result['reason']}")
+                            for detail in patience_result['details'][:5]:
+                                logger.info(f"   {detail}")
+                            
+                            # 추세 여력이 충분하면 종료 차단
+                            if patience_result['block_exit']:
+                                logger.warning(f"🔒 인내심 로직 발동: {result['decision']} → HOLD")
+                                logger.warning(f"   인내심 점수: {patience_result['patience_score']}/10")
+                                logger.warning(f"   수익률: {pnl_percent:+.2f}% | 4H/1H 추세 여력 충분")
+                                
+                                result['decision'] = 'hold'
+                                result['percentage'] = 0
+                                result['reason'] = f"🔒 PATIENCE OVERRIDE: 4H/1H 추세 여력 충분 (점수: {patience_result['patience_score']}/10). 원래 결정: {original_decision}. {patience_result['reason']}"
+                                result['exit_type'] = 'none'
+                                result['urgency'] = 'watch'
+                                
+                                if ENABLE_TELEGRAM:
+                                    send_telegram_notification(
+                                        f"🔒 <b>인내심 로직 발동</b>\n\n"
+                                        f"<b>심볼:</b> {symbol}\n"
+                                        f"<b>포지션:</b> {side.upper()}\n"
+                                        f"<b>수익률:</b> {pnl_percent:+.2f}%\n"
+                                        f"<b>인내심 점수:</b> {patience_result['patience_score']}/10\n\n"
+                                        f"<b>원래 결정:</b> {original_decision.upper()}\n"
+                                        f"<b>변경 결정:</b> HOLD\n\n"
+                                        f"💡 4H/1H 추세 여력이 남아있습니다.\n"
+                                        f"더 큰 수익을 위해 기다립니다!",
+                                        'info'
+                                    )
+                            elif patience_result['has_room'] and result['decision'] == 'close':
+                                # 여력이 있지만 완전 차단은 아님 → partial_close로 변경
+                                logger.warning(f"⚠️ 인내심 로직: close → partial_close (여력 일부 남음)")
+                                result['decision'] = 'partial_close'
+                                result['percentage'] = 50
+                                result['reason'] = f"⚠️ PATIENCE ADJUSTMENT: 일부 추세 여력 남음 (점수: {patience_result['patience_score']}/10). 50% 부분 청산. {result['reason'][:100]}"
+                    except Exception as patience_error:
+                        logger.error(f"인내심 로직 오류: {patience_error}")
             
             logger.info(
                 f"✅ 포지션 모니터 결정: {result['decision']} "
@@ -5998,82 +6246,45 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                 logger.warning(f"[{user_name}] 포지션 조회 실패, 진입 수량 사용: {str(e)}")
                 total_position_amount = amount
             
-            # 🆕 v7.4: 바이낸스 심볼 형식 변환 (BTC/USDT -> BTCUSDT)
-            binance_symbol = symbol.replace('/', '')
-            
-            # Stop Loss 주문 (직접 바이낸스 API 호출)
+            # Stop Loss 주문 (reduceOnly 방식 - 가장 안정적)
             sl_order = None
             try:
-                sl_side = 'SELL' if action == 'buy' else 'BUY'
-                
-                # 방법 1: 직접 API 호출 (closePosition 방식)
-                sl_order = user_exchange.fapiPrivate_post_order({
-                    'symbol': binance_symbol,
-                    'side': sl_side,
-                    'type': 'STOP_MARKET',
-                    'stopPrice': str(adjusted_sl),
-                    'closePosition': 'true',
-                    'workingType': 'MARK_PRICE',
-                    'priceProtect': 'true'
-                })
-                logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (closePosition)")
-                
-            except Exception as e:
-                logger.warning(f"[{user_name}] SL 1차 시도 실패: {str(e)}")
-                
-                # 방법 2: reduceOnly 방식 재시도
-                try:
-                    sl_order = user_exchange.fapiPrivate_post_order({
-                        'symbol': binance_symbol,
-                        'side': sl_side,
-                        'type': 'STOP_MARKET',
-                        'quantity': str(total_position_amount),
-                        'stopPrice': str(adjusted_sl),
-                        'reduceOnly': 'true',
+                sl_side = 'sell' if action == 'buy' else 'buy'
+                sl_order = user_exchange.create_order(
+                    symbol=symbol,
+                    type='STOP_MARKET',
+                    side=sl_side,
+                    amount=total_position_amount,
+                    params={
+                        'stopPrice': adjusted_sl,
                         'workingType': 'MARK_PRICE',
-                        'priceProtect': 'true'
-                    })
-                    logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (reduceOnly)")
-                except Exception as retry_e:
-                    logger.error(f"[{user_name}] Stop Loss 설정 실패: {str(retry_e)}")
-                    logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}")
+                        'reduceOnly': True,  # 포지션 감소만 허용
+                    }
+                )
+                logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (수량: {total_position_amount:.6f})")
+            except Exception as e:
+                logger.error(f"[{user_name}] Stop Loss 설정 실패: {str(e)}")
+                logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
             
-            # Take Profit 주문 (직접 바이낸스 API 호출)
+            # Take Profit 주문 (reduceOnly 방식 - 가장 안정적)
             tp_order = None
             try:
-                tp_side = 'SELL' if action == 'buy' else 'BUY'
-                
-                # 방법 1: 직접 API 호출 (closePosition 방식)
-                tp_order = user_exchange.fapiPrivate_post_order({
-                    'symbol': binance_symbol,
-                    'side': tp_side,
-                    'type': 'TAKE_PROFIT_MARKET',
-                    'stopPrice': str(adjusted_tp),
-                    'closePosition': 'true',
-                    'workingType': 'MARK_PRICE',
-                    'priceProtect': 'true'
-                })
-                logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (closePosition)")
-                
-            except Exception as e:
-                logger.warning(f"[{user_name}] TP 1차 시도 실패: {str(e)}")
-                
-                # 방법 2: reduceOnly 방식 재시도
-                try:
-                    tp_order = user_exchange.fapiPrivate_post_order({
-                        'symbol': binance_symbol,
-                        'side': tp_side,
-                        'type': 'TAKE_PROFIT_MARKET',
-                        'quantity': str(total_position_amount),
-                        'stopPrice': str(adjusted_tp),
-                        'reduceOnly': 'true',
+                tp_side = 'sell' if action == 'buy' else 'buy'
+                tp_order = user_exchange.create_order(
+                    symbol=symbol,
+                    type='TAKE_PROFIT_MARKET',
+                    side=tp_side,
+                    amount=total_position_amount,
+                    params={
+                        'stopPrice': adjusted_tp,
                         'workingType': 'MARK_PRICE',
-                        'priceProtect': 'true'
-                    })
-                    logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (reduceOnly)")
-                except Exception as retry_e:
-                    logger.error(f"[{user_name}] Take Profit 설정 실패: {str(retry_e)}")
-                    logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}")
+                        'reduceOnly': True,  # 포지션 감소만 허용
+                    }
+                )
+                logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (수량: {total_position_amount:.6f})")
+            except Exception as e:
+                logger.error(f"[{user_name}] Take Profit 설정 실패: {str(e)}")
+                logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
             
             success_count += 1
             
@@ -6247,77 +6458,80 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         adjusted_sl = price_check['sl']
         adjusted_tp = price_check['tp']
         
-        # 🆕 v7.4: 바이낸스 심볼 형식 변환
-        binance_symbol = symbol.replace('/', '')
-        
         sl_order = None
         try:
-            # 스탑로스 주문 (직접 바이낸스 API 호출)
-            sl_side = 'SELL' if action == 'buy' else 'BUY'
-            
-            sl_order = exchange.fapiPrivate_post_order({
-                'symbol': binance_symbol,
-                'side': sl_side,
-                'type': 'STOP_MARKET',
-                'stopPrice': str(adjusted_sl),
-                'closePosition': 'true',
-                'workingType': 'MARK_PRICE',
-                'priceProtect': 'true'
-            })
-            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${adjusted_sl:.4f} (closePosition)")
-            
-        except Exception as sl_error:
-            logger.warning(f"SL 1차 시도 실패: {str(sl_error)}")
-            # reduceOnly 방식 재시도
-            try:
-                sl_order = exchange.fapiPrivate_post_order({
-                    'symbol': binance_symbol,
-                    'side': sl_side,
-                    'type': 'STOP_MARKET',
-                    'quantity': str(amount),
-                    'stopPrice': str(adjusted_sl),
-                    'reduceOnly': 'true',
+            # 스탑로스 주문
+            sl_side = 'sell' if action == 'buy' else 'buy'
+            sl_order = exchange.create_order(
+                symbol=symbol,
+                type='STOP_MARKET',  # 🆕 대문자로 통일
+                side=sl_side,
+                amount=amount,  # 🆕 활성화
+                params={
+                    'stopPrice': adjusted_sl,  # 🆕 검증된 가격
                     'workingType': 'MARK_PRICE',
-                    'priceProtect': 'true'
-                })
-                logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${adjusted_sl:.4f} (reduceOnly)")
+                    'reduceOnly': True,  # 🆕 활성화
+                }
+            )
+            
+            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${adjusted_sl:.4f} (reduceOnly, 수량: {amount:.6f})")
+        except Exception as sl_error:
+            logger.error(f"❌ 스탑로스 설정 실패: {str(sl_error)}")
+            logger.error(f"실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
+            # 🆕 재시도 (closePosition 방식)
+            try:
+                logger.info(f"closePosition 방식으로 재시도...")
+                sl_order = exchange.create_order(
+                    symbol=symbol,
+                    type='STOP_MARKET',
+                    side=sl_side,
+                    params={
+                        'stopPrice': adjusted_sl,
+                        'workingType': 'MARK_PRICE',
+                        'closePosition': True,
+                    }
+                )
+                logger.info(f"✅ 스탑로스 재시도 성공 - {symbol} @ ${adjusted_sl:.4f} (closePosition)")
             except Exception as retry_e:
-                logger.error(f"❌ 스탑로스 설정 실패: {str(retry_e)}")
+                logger.error(f"❌ 스탑로스 재시도도 실패: {str(retry_e)}")
                 sl_order = None
         
         tp_order = None
         try:
-            # 테이크프로핏 주문 (직접 바이낸스 API 호출)
-            tp_side = 'SELL' if action == 'buy' else 'BUY'
-            
-            tp_order = exchange.fapiPrivate_post_order({
-                'symbol': binance_symbol,
-                'side': tp_side,
-                'type': 'TAKE_PROFIT_MARKET',
-                'stopPrice': str(adjusted_tp),
-                'closePosition': 'true',
-                'workingType': 'MARK_PRICE',
-                'priceProtect': 'true'
-            })
-            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${adjusted_tp:.4f} (closePosition)")
-            
-        except Exception as tp_error:
-            logger.warning(f"TP 1차 시도 실패: {str(tp_error)}")
-            # reduceOnly 방식 재시도
-            try:
-                tp_order = exchange.fapiPrivate_post_order({
-                    'symbol': binance_symbol,
-                    'side': tp_side,
-                    'type': 'TAKE_PROFIT_MARKET',
-                    'quantity': str(amount),
-                    'stopPrice': str(adjusted_tp),
-                    'reduceOnly': 'true',
+            # 테이크프로핏 주문
+            tp_side = 'sell' if action == 'buy' else 'buy'
+            tp_order = exchange.create_order(
+                symbol=symbol,
+                type='TAKE_PROFIT_MARKET',  # 🆕 대문자로 통일
+                side=tp_side,
+                amount=amount,  # 🆕 활성화
+                params={
+                    'stopPrice': adjusted_tp,  # 🆕 검증된 가격
                     'workingType': 'MARK_PRICE',
-                    'priceProtect': 'true'
-                })
-                logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${adjusted_tp:.4f} (reduceOnly)")
+                    'reduceOnly': True,  # 🆕 활성화
+                }
+            )
+            
+            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${adjusted_tp:.4f} (reduceOnly, 수량: {amount:.6f})")
+        except Exception as tp_error:
+            logger.error(f"❌ 테이크프로핏 설정 실패: {str(tp_error)}")
+            logger.error(f"실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
+            # 🆕 재시도 (closePosition 방식)
+            try:
+                logger.info(f"closePosition 방식으로 재시도...")
+                tp_order = exchange.create_order(
+                    symbol=symbol,
+                    type='TAKE_PROFIT_MARKET',
+                    side=tp_side,
+                    params={
+                        'stopPrice': adjusted_tp,
+                        'workingType': 'MARK_PRICE',
+                        'closePosition': True,
+                    }
+                )
+                logger.info(f"✅ 테이크프로핏 재시도 성공 - {symbol} @ ${adjusted_tp:.4f} (closePosition)")
             except Exception as retry_e:
-                logger.error(f"❌ 테이크프로핏 설정 실패: {str(retry_e)}")
+                logger.error(f"❌ 테이크프로핏 재시도도 실패: {str(retry_e)}")
                 tp_order = None
         
         # 트레일링 스탑 설정 (지원하는 경우)
