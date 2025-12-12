@@ -38,6 +38,33 @@
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║  🎯 핵심 변경: AI 역할 분리 - Rule-Based 검증 + AI 파라미터 조정             ║
 ║                                                                              ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                     v7.4 CHANGELOG (2025-12-12)                              ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  🔴 긴급 수정: 바이낸스 API 변경 대응 (2025-12-09)                          ║
+║                                                                              ║
+║  ❌ 문제:                                                                    ║
+║  - 바이낸스가 STOP_MARKET, TAKE_PROFIT_MARKET 주문을 Algo Order API로 이전  ║
+║  - 기존 /fapi/v1/order 엔드포인트가 -4120 에러 반환                         ║
+║  - CCXT 라이브러리가 아직 미지원                                            ║
+║                                                                              ║
+║  ✅ 해결:                                                                    ║
+║  - 새로운 /fapi/v1/algoOrder 엔드포인트 직접 호출                           ║
+║  - place_algo_order() 함수 추가                                             ║
+║  - place_sl_tp_with_algo_api() 함수 추가                                    ║
+║  - stopPrice → triggerPrice 파라미터명 변경                                 ║
+║  - algoType: "CONDITIONAL" 필수 파라미터 추가                               ║
+║                                                                              ║
+║  🧘 인내심 로직 추가 (조기 종료 방지):                                       ║
+║  - check_trend_remaining_room() 함수 추가                                   ║
+║  - 4H/1H 추세 여력 판단 (patience_score)                                    ║
+║  - 수익 포지션 조기 종료 차단 (5점 이상)                                    ║
+║  - AI 모니터링 프롬프트 강화 (PATIENCE RULES)                               ║
+║                                                                              ║
+║  🔧 기타 수정:                                                               ║
+║  - init_db 별칭 추가 (DB 에러 수정)                                         ║
+╚═══════════════════════════════════════════════════════════════════════════════╝
+║                                                                              ║
 ║  📊 새로운 아키텍처:                                                         ║
 ║  ┌─────────────────────────────────────────────────────────────────────┐     ║
 ║  │  1. 웹훅 Alert 수신                                                 │     ║
@@ -6098,8 +6125,172 @@ def set_leverage(symbol):
         return None
 
 
+# ============ v7.4 바이낸스 Algo Order API (2025-12-09 이후 필수) ============
+def place_algo_order(user_exchange, symbol, side, order_type, trigger_price, quantity=None, 
+                     close_position=False, reduce_only=False, working_type='MARK_PRICE'):
+    """
+    🆕 v7.4: 바이낸스 새로운 Algo Order API 사용
+    2025-12-09부터 STOP_MARKET, TAKE_PROFIT_MARKET 등은 이 API를 통해서만 주문 가능
+    
+    Args:
+        user_exchange: CCXT exchange 인스턴스
+        symbol: 거래 심볼 (예: 'BTC/USDT')
+        side: 'BUY' 또는 'SELL'
+        order_type: 'STOP_MARKET', 'TAKE_PROFIT_MARKET', 'STOP', 'TAKE_PROFIT', 'TRAILING_STOP_MARKET'
+        trigger_price: 트리거 가격 (이전의 stopPrice)
+        quantity: 수량 (close_position=True일 때는 None)
+        close_position: 전체 포지션 청산 여부
+        reduce_only: 포지션 감소만 허용
+        working_type: 'MARK_PRICE' 또는 'CONTRACT_PRICE'
+    
+    Returns:
+        dict: 주문 결과 또는 None
+    """
+    try:
+        # 심볼 형식 변환 (BTC/USDT → BTCUSDT)
+        binance_symbol = symbol.replace('/', '')
+        
+        # 타임스탬프 생성
+        timestamp = int(time.time() * 1000)
+        
+        # 요청 파라미터 구성
+        params = {
+            'algoType': 'CONDITIONAL',
+            'symbol': binance_symbol,
+            'side': side.upper(),
+            'type': order_type.upper(),
+            'triggerPrice': str(trigger_price),  # stopPrice → triggerPrice
+            'workingType': working_type,
+            'timestamp': timestamp,
+        }
+        
+        # closePosition과 quantity는 동시에 사용 불가
+        if close_position:
+            params['closePosition'] = 'true'
+        elif quantity:
+            params['quantity'] = str(quantity)
+            if reduce_only:
+                params['reduceOnly'] = 'true'
+        
+        logger.info(f"🆕 Algo Order API 호출: {order_type} {side} {binance_symbol} @ {trigger_price}")
+        logger.debug(f"   파라미터: {params}")
+        
+        # 바이낸스 Algo Order API 직접 호출
+        response = user_exchange.fapiPrivatePostAlgoorder(params)
+        
+        logger.info(f"✅ Algo Order 성공: algoId={response.get('algoId', 'N/A')}")
+        return response
+        
+    except Exception as e:
+        error_str = str(e)
+        logger.error(f"❌ Algo Order 실패: {error_str}")
+        
+        # 구체적인 에러 분석
+        if '-4120' in error_str:
+            logger.error("   → 여전히 기존 API 사용 중 - CCXT 버전 확인 필요")
+        elif '-1102' in error_str:
+            logger.error("   → 필수 파라미터 누락 또는 형식 오류")
+        elif '-2021' in error_str:
+            logger.error("   → 주문이 즉시 트리거됨 - 가격 확인 필요")
+        
+        return None
 
-def validate_and_adjust_prices(user_exchange, symbol, current_price, stop_loss_price, take_profit_price, action):
+
+def place_sl_tp_with_algo_api(user_exchange, symbol, action, sl_price, tp_price, 
+                              quantity, user_name="Unknown"):
+    """
+    🆕 v7.4: Algo Order API를 사용한 TP/SL 설정
+    
+    Args:
+        user_exchange: CCXT exchange 인스턴스
+        symbol: 거래 심볼
+        action: 'buy' 또는 'sell' (원래 포지션 방향)
+        sl_price: Stop Loss 가격
+        tp_price: Take Profit 가격
+        quantity: 포지션 수량
+        user_name: 사용자 이름 (로깅용)
+    
+    Returns:
+        tuple: (sl_order, tp_order)
+    """
+    sl_order = None
+    tp_order = None
+    
+    # SL/TP 방향 결정 (포지션 반대 방향)
+    sl_tp_side = 'SELL' if action.lower() == 'buy' else 'BUY'
+    
+    # Stop Loss 주문
+    try:
+        # 1차: closePosition 방식 시도 (전체 포지션 청산)
+        sl_order = place_algo_order(
+            user_exchange=user_exchange,
+            symbol=symbol,
+            side=sl_tp_side,
+            order_type='STOP_MARKET',
+            trigger_price=sl_price,
+            close_position=True,
+            working_type='MARK_PRICE'
+        )
+        
+        if sl_order:
+            logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료 (Algo API): ${sl_price:.4f}")
+        else:
+            # 2차: reduceOnly + quantity 방식 시도
+            logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
+            sl_order = place_algo_order(
+                user_exchange=user_exchange,
+                symbol=symbol,
+                side=sl_tp_side,
+                order_type='STOP_MARKET',
+                trigger_price=sl_price,
+                quantity=quantity,
+                reduce_only=True,
+                working_type='MARK_PRICE'
+            )
+            if sl_order:
+                logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료 (reduceOnly): ${sl_price:.4f}")
+            
+    except Exception as e:
+        logger.error(f"[{user_name}] Stop Loss 설정 실패: {str(e)}")
+    
+    # Take Profit 주문
+    try:
+        # 1차: closePosition 방식 시도
+        tp_order = place_algo_order(
+            user_exchange=user_exchange,
+            symbol=symbol,
+            side=sl_tp_side,
+            order_type='TAKE_PROFIT_MARKET',
+            trigger_price=tp_price,
+            close_position=True,
+            working_type='MARK_PRICE'
+        )
+        
+        if tp_order:
+            logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료 (Algo API): ${tp_price:.4f}")
+        else:
+            # 2차: reduceOnly + quantity 방식 시도
+            logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
+            tp_order = place_algo_order(
+                user_exchange=user_exchange,
+                symbol=symbol,
+                side=sl_tp_side,
+                order_type='TAKE_PROFIT_MARKET',
+                trigger_price=tp_price,
+                quantity=quantity,
+                reduce_only=True,
+                working_type='MARK_PRICE'
+            )
+            if tp_order:
+                logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료 (reduceOnly): ${tp_price:.4f}")
+            
+    except Exception as e:
+        logger.error(f"[{user_name}] Take Profit 설정 실패: {str(e)}")
+    
+    return sl_order, tp_order
+
+
+
     """
     TP/SL 가격 검증 및 조정
     - 심볼별 tickSize 확인
@@ -6246,44 +6437,21 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                 logger.warning(f"[{user_name}] 포지션 조회 실패, 진입 수량 사용: {str(e)}")
                 total_position_amount = amount
             
-            # Stop Loss 주문 (reduceOnly 방식 - 가장 안정적)
-            sl_order = None
-            try:
-                sl_side = 'sell' if action == 'buy' else 'buy'
-                sl_order = user_exchange.create_order(
-                    symbol=symbol,
-                    type='STOP_MARKET',
-                    side=sl_side,
-                    amount=total_position_amount,
-                    params={
-                        'stopPrice': adjusted_sl,
-                        'workingType': 'MARK_PRICE',
-                        'reduceOnly': True,  # 포지션 감소만 허용
-                    }
-                )
-                logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료: ${adjusted_sl:.4f} (수량: {total_position_amount:.6f})")
-            except Exception as e:
-                logger.error(f"[{user_name}] Stop Loss 설정 실패: {str(e)}")
-                logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+            # 🆕 v7.4: 새로운 Algo Order API 사용 (2025-12-09 바이낸스 API 변경 대응)
+            sl_order, tp_order = place_sl_tp_with_algo_api(
+                user_exchange=user_exchange,
+                symbol=symbol,
+                action=action,
+                sl_price=adjusted_sl,
+                tp_price=adjusted_tp,
+                quantity=total_position_amount,
+                user_name=user_name
+            )
             
-            # Take Profit 주문 (reduceOnly 방식 - 가장 안정적)
-            tp_order = None
-            try:
-                tp_side = 'sell' if action == 'buy' else 'buy'
-                tp_order = user_exchange.create_order(
-                    symbol=symbol,
-                    type='TAKE_PROFIT_MARKET',
-                    side=tp_side,
-                    amount=total_position_amount,
-                    params={
-                        'stopPrice': adjusted_tp,
-                        'workingType': 'MARK_PRICE',
-                        'reduceOnly': True,  # 포지션 감소만 허용
-                    }
-                )
-                logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료: ${adjusted_tp:.4f} (수량: {total_position_amount:.6f})")
-            except Exception as e:
-                logger.error(f"[{user_name}] Take Profit 설정 실패: {str(e)}")
+            # 결과 로깅
+            if not sl_order:
+                logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+            if not tp_order:
                 logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
             
             success_count += 1
@@ -6458,81 +6626,22 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         adjusted_sl = price_check['sl']
         adjusted_tp = price_check['tp']
         
-        sl_order = None
-        try:
-            # 스탑로스 주문
-            sl_side = 'sell' if action == 'buy' else 'buy'
-            sl_order = exchange.create_order(
-                symbol=symbol,
-                type='STOP_MARKET',  # 🆕 대문자로 통일
-                side=sl_side,
-                amount=amount,  # 🆕 활성화
-                params={
-                    'stopPrice': adjusted_sl,  # 🆕 검증된 가격
-                    'workingType': 'MARK_PRICE',
-                    'reduceOnly': True,  # 🆕 활성화
-                }
-            )
-            
-            logger.info(f"✅ 스탑로스 주문 완료 - {symbol} @ ${adjusted_sl:.4f} (reduceOnly, 수량: {amount:.6f})")
-        except Exception as sl_error:
-            logger.error(f"❌ 스탑로스 설정 실패: {str(sl_error)}")
-            logger.error(f"실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
-            # 🆕 재시도 (closePosition 방식)
-            try:
-                logger.info(f"closePosition 방식으로 재시도...")
-                sl_order = exchange.create_order(
-                    symbol=symbol,
-                    type='STOP_MARKET',
-                    side=sl_side,
-                    params={
-                        'stopPrice': adjusted_sl,
-                        'workingType': 'MARK_PRICE',
-                        'closePosition': True,
-                    }
-                )
-                logger.info(f"✅ 스탑로스 재시도 성공 - {symbol} @ ${adjusted_sl:.4f} (closePosition)")
-            except Exception as retry_e:
-                logger.error(f"❌ 스탑로스 재시도도 실패: {str(retry_e)}")
-                sl_order = None
+        # 🆕 v7.4: 새로운 Algo Order API 사용 (2025-12-09 바이낸스 API 변경 대응)
+        sl_order, tp_order = place_sl_tp_with_algo_api(
+            user_exchange=exchange,
+            symbol=symbol,
+            action=action,
+            sl_price=adjusted_sl,
+            tp_price=adjusted_tp,
+            quantity=amount,
+            user_name="Primary"
+        )
         
-        tp_order = None
-        try:
-            # 테이크프로핏 주문
-            tp_side = 'sell' if action == 'buy' else 'buy'
-            tp_order = exchange.create_order(
-                symbol=symbol,
-                type='TAKE_PROFIT_MARKET',  # 🆕 대문자로 통일
-                side=tp_side,
-                amount=amount,  # 🆕 활성화
-                params={
-                    'stopPrice': adjusted_tp,  # 🆕 검증된 가격
-                    'workingType': 'MARK_PRICE',
-                    'reduceOnly': True,  # 🆕 활성화
-                }
-            )
-            
-            logger.info(f"✅ 테이크프로핏 주문 완료 - {symbol} @ ${adjusted_tp:.4f} (reduceOnly, 수량: {amount:.6f})")
-        except Exception as tp_error:
-            logger.error(f"❌ 테이크프로핏 설정 실패: {str(tp_error)}")
+        # 결과 로깅
+        if not sl_order:
+            logger.error(f"실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
+        if not tp_order:
             logger.error(f"실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
-            # 🆕 재시도 (closePosition 방식)
-            try:
-                logger.info(f"closePosition 방식으로 재시도...")
-                tp_order = exchange.create_order(
-                    symbol=symbol,
-                    type='TAKE_PROFIT_MARKET',
-                    side=tp_side,
-                    params={
-                        'stopPrice': adjusted_tp,
-                        'workingType': 'MARK_PRICE',
-                        'closePosition': True,
-                    }
-                )
-                logger.info(f"✅ 테이크프로핏 재시도 성공 - {symbol} @ ${adjusted_tp:.4f} (closePosition)")
-            except Exception as retry_e:
-                logger.error(f"❌ 테이크프로핏 재시도도 실패: {str(retry_e)}")
-                tp_order = None
         
         # 트레일링 스탑 설정 (지원하는 경우)
         if trailing_stop_percent and trailing_activation_percent:
