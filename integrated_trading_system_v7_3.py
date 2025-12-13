@@ -6290,7 +6290,7 @@ def place_sl_tp_with_algo_api(user_exchange, symbol, action, sl_price, tp_price,
     return sl_order, tp_order
 
 
-
+def validate_and_adjust_prices(user_exchange, symbol, current_price, stop_loss_price, take_profit_price, action):
     """
     TP/SL 가격 검증 및 조정
     - 심볼별 tickSize 확인
