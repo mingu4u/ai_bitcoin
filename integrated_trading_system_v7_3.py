@@ -8033,6 +8033,220 @@ def sync_positions():
         logger.error(f"포지션 동기화 오류: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/positions/close', methods=['POST'])
+def close_position_api():
+    """
+    🆕 v7.6: 포지션 수동 종료 API
+    모든 유저의 해당 심볼 포지션을 종료합니다.
+    
+    Request Body:
+        {
+            "symbol": "BTC/USDT",
+            "reason": "Manual close from dashboard"  (optional)
+        }
+    
+    Response:
+        {
+            "status": "success",
+            "symbol": "BTC/USDT",
+            "closed_users": 3,
+            "total_users": 3,
+            "message": "..."
+        }
+    """
+    try:
+        data = request.get_json()
+        
+        if not data or 'symbol' not in data:
+            return jsonify({'error': 'symbol is required'}), 400
+        
+        symbol = data['symbol']
+        reason = data.get('reason', 'Manual close from dashboard')
+        
+        logger.info(f"🔴 수동 포지션 종료 요청: {symbol}")
+        logger.info(f"   이유: {reason}")
+        
+        # 심볼 형식 정규화 (BTCUSDT -> BTC/USDT)
+        if '/' not in symbol:
+            symbol = symbol[:-4] + '/' + symbol[-4:]  # BTCUSDT -> BTC/USDT
+        
+        # 모든 유저 포지션 종료
+        success_count = 0
+        failed_users = []
+        closed_details = []
+        
+        for user_id, user_exchange in exchanges.items():
+            user_name = USER_CONFIGS[user_id]['name']
+            
+            try:
+                # 포지션 확인
+                positions = user_exchange.fetch_positions([symbol])
+                active_position = None
+                
+                for pos in positions:
+                    if float(pos.get('contracts', 0)) != 0:
+                        active_position = pos
+                        break
+                
+                if not active_position:
+                    logger.info(f"[{user_name}] {symbol} 포지션 없음")
+                    continue
+                
+                # 포지션 정보 저장
+                contracts = float(active_position['contracts'])
+                side = 'sell' if active_position['side'] == 'long' else 'buy'
+                entry_price = float(active_position.get('entryPrice', 0))
+                mark_price = float(active_position.get('markPrice', 0))
+                unrealized_pnl = float(active_position.get('unrealizedPnl', 0))
+                
+                # 포지션 청산
+                close_order = user_exchange.create_market_order(symbol, side, abs(contracts))
+                logger.info(f"[{user_name}] ✅ 포지션 청산: {symbol} {side} {abs(contracts):.6f}")
+                
+                # TP/SL 자동 취소
+                try:
+                    cancelled = cancel_symbol_orders(user_exchange, symbol, user_name)
+                    if cancelled > 0:
+                        logger.info(f"[{user_name}] 🗑️ TP/SL 주문 {cancelled}개 자동 취소")
+                except Exception as cancel_err:
+                    logger.warning(f"[{user_name}] TP/SL 취소 오류 (무시): {cancel_err}")
+                
+                closed_details.append({
+                    'user': user_name,
+                    'contracts': abs(contracts),
+                    'side': active_position['side'],
+                    'entry_price': entry_price,
+                    'close_price': mark_price,
+                    'pnl': unrealized_pnl
+                })
+                
+                success_count += 1
+                
+            except Exception as e:
+                logger.error(f"[{user_name}] 포지션 청산 실패: {str(e)}")
+                failed_users.append({'user': user_name, 'error': str(e)})
+        
+        # 내부 포지션 추적에서도 제거
+        if symbol in current_positions:
+            del current_positions[symbol]
+            logger.info(f"🗑️ {symbol} 내부 추적에서 제거")
+        
+        # Peak profit 기록 삭제
+        clear_peak_profit(symbol)
+        
+        # 텔레그램 알림
+        if ENABLE_TELEGRAM and success_count > 0:
+            total_pnl = sum(d['pnl'] for d in closed_details)
+            send_telegram_notification(
+                f"🔴 <b>수동 포지션 종료</b>\n\n"
+                f"<b>심볼:</b> {symbol}\n"
+                f"<b>이유:</b> {reason}\n"
+                f"<b>종료된 유저:</b> {success_count}명\n"
+                f"<b>총 PnL:</b> ${total_pnl:+.2f}\n\n"
+                f"{'⚠️ 실패: ' + ', '.join([f['user'] for f in failed_users]) if failed_users else '✅ 모든 유저 성공'}",
+                'warning' if total_pnl < 0 else 'success'
+            )
+        
+        # DB에 기록 (Primary User만)
+        if success_count > 0:
+            try:
+                # 첫 번째 성공한 거래 정보로 기록
+                first_close = closed_details[0] if closed_details else {}
+                record_trade(
+                    symbol=symbol,
+                    trade_type='close',
+                    side=first_close.get('side', 'unknown'),
+                    entry_price=first_close.get('entry_price', 0),
+                    exit_price=first_close.get('close_price', 0),
+                    amount=first_close.get('contracts', 0),
+                    pnl_usdt=sum(d['pnl'] for d in closed_details),
+                    pnl_percent=0,  # 계산 복잡하므로 생략
+                    position_size_usdt=0,
+                    holding_time_minutes=0,
+                    close_reason=f"Manual: {reason}",
+                    leverage=10,
+                    is_win=sum(d['pnl'] for d in closed_details) > 0,
+                    position_type='manual'
+                )
+            except Exception as db_err:
+                logger.warning(f"DB 기록 실패 (무시): {db_err}")
+        
+        return jsonify({
+            'status': 'success',
+            'symbol': symbol,
+            'closed_users': success_count,
+            'total_users': len(exchanges),
+            'closed_details': closed_details,
+            'failed_users': failed_users,
+            'message': f'{symbol} 포지션 {success_count}명 종료 완료'
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"포지션 종료 API 오류: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/positions/list', methods=['GET'])
+def list_positions_api():
+    """
+    🆕 v7.6: 모든 유저의 현재 포지션 조회 API
+    
+    Response:
+        {
+            "status": "success",
+            "positions": [
+                {
+                    "symbol": "BTC/USDT",
+                    "users": [...]
+                }
+            ]
+        }
+    """
+    try:
+        all_positions = {}
+        
+        for user_id, user_exchange in exchanges.items():
+            user_name = USER_CONFIGS[user_id]['name']
+            
+            try:
+                positions = user_exchange.fetch_positions()
+                
+                for pos in positions:
+                    if float(pos.get('contracts', 0)) != 0:
+                        symbol = pos['symbol']
+                        
+                        if symbol not in all_positions:
+                            all_positions[symbol] = {
+                                'symbol': symbol,
+                                'users': []
+                            }
+                        
+                        all_positions[symbol]['users'].append({
+                            'user': user_name,
+                            'side': pos['side'],
+                            'contracts': float(pos['contracts']),
+                            'entry_price': float(pos.get('entryPrice', 0)),
+                            'mark_price': float(pos.get('markPrice', 0)),
+                            'unrealized_pnl': float(pos.get('unrealizedPnl', 0)),
+                            'leverage': int(pos.get('leverage', 10))
+                        })
+                        
+            except Exception as e:
+                logger.warning(f"[{user_name}] 포지션 조회 실패: {e}")
+        
+        return jsonify({
+            'status': 'success',
+            'positions': list(all_positions.values()),
+            'total_symbols': len(all_positions)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"포지션 목록 조회 오류: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/config', methods=['GET', 'POST'])
 def config():
     """심볼 설정 관리"""

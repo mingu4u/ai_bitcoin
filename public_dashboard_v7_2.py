@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Public Dashboard v7.5 Complete - 모든 기능 완벽 통합
+Public Dashboard v7.6 Complete - 모든 기능 완벽 통합 + 수동 종료
 =======================================================
-v7.3의 모든 기능 + AI 모니터링 탭 재구현 + Symbol Analytics 완전 구현 + AI Reflection 복원/개선
+v7.5의 모든 기능 + 수동 포지션 종료 기능 추가
 
 주요 기능:
 1. 🔥 Exchange 연결 문제 해결 (v7.2)
@@ -13,8 +13,9 @@ v7.3의 모든 기능 + AI 모니터링 탭 재구현 + Symbol Analytics 완전 
 6. 🤖 AI 모니터링 탭 재구현 (v7.4)
 7. 📊 Symbol Analytics 완전 구현 (v7.4)
 8. 🧠 AI Reflection 복원 및 개선 (v7.5)
+9. 🔴 수동 포지션 종료 기능 (v7.6) - 모든 유저 대상
 
-작성일: 2025-11-22
+작성일: 2025-12-14
 """
 
 import streamlit as st
@@ -37,7 +38,7 @@ load_dotenv()
 
 # 페이지 설정
 st.set_page_config(
-    page_title="Trading Dashboard v7.3 Complete",
+    page_title="Trading Dashboard v7.6 Complete",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -117,6 +118,38 @@ st.markdown("""
     
     .positive-value { color: #2ca02c; }
     .negative-value { color: #d62728; }
+    
+    /* v7.6: 포지션 종료 버튼 스타일 */
+    .close-btn {
+        background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+        color: white;
+        border: none;
+        padding: 0.3rem 0.8rem;
+        border-radius: 5px;
+        cursor: pointer;
+        font-size: 0.8rem;
+        font-weight: bold;
+    }
+    
+    .close-btn:hover {
+        opacity: 0.8;
+    }
+    
+    .position-card {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 1rem;
+        margin-bottom: 0.5rem;
+        border-left: 4px solid #1f77b4;
+    }
+    
+    .position-card.long {
+        border-left-color: #2ca02c;
+    }
+    
+    .position-card.short {
+        border-left-color: #d62728;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -213,6 +246,34 @@ def fetch_positions_from_binance(exchange):
     except Exception as e:
         st.error(f"포지션 조회 오류: {e}")
         return []
+
+
+def close_position_api(symbol, reason="Manual close from dashboard"):
+    """
+    🆕 v7.6: 포지션 종료 API 호출
+    트레이딩 봇의 /positions/close 엔드포인트 호출
+    """
+    try:
+        response = requests.post(
+            f"{TRADING_BOT_URL}/positions/close",
+            json={
+                "symbol": symbol,
+                "reason": reason
+            },
+            timeout=30
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": f"API 오류: {response.status_code} - {response.text}"}
+            
+    except requests.exceptions.Timeout:
+        return {"error": "요청 시간 초과 (30초)"}
+    except requests.exceptions.ConnectionError:
+        return {"error": "트레이딩 봇에 연결할 수 없습니다"}
+    except Exception as e:
+        return {"error": str(e)}
 
 def get_or_set_initial_balance():
     """초기 잔고 가져오기 또는 설정"""
@@ -410,7 +471,7 @@ def get_equity_history(current_balance, days=None, lifetime_start_balance=None):
 # ==========================================
 
 def main():
-    st.markdown('<h1 class="main-header">⚡ Automated Trading Dashboard v7.3 Complete</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">⚡ Automated Trading Dashboard v7.6 Complete</h1>', unsafe_allow_html=True)
     
     # Realtime Badge
     col1, col2, col3 = st.columns([2, 1, 2])
@@ -490,7 +551,119 @@ def main():
             with col3:
                 st.metric("포지션 가치", f"${total_position_value:,.2f}")
             
-            # 포지션 테이블
+            # 🆕 v7.6: 수동 종료 섹션
+            st.markdown("---")
+            st.markdown("### 🔴 Position Control (All Users)")
+            st.warning("⚠️ 아래 버튼을 클릭하면 **모든 유저**의 해당 포지션이 시장가로 즉시 종료됩니다.")
+            
+            # 각 포지션에 대해 종료 버튼 표시
+            for i, pos in enumerate(positions):
+                symbol = pos['symbol']
+                side = pos['side']
+                pnl = pos['unrealized_pnl']
+                pnl_pct = pos['pnl_percent']
+                
+                # 색상 설정
+                side_color = "🟢" if side == 'long' else "🔴"
+                pnl_color = "green" if pnl >= 0 else "red"
+                
+                col_info, col_pnl, col_btn = st.columns([3, 2, 1])
+                
+                with col_info:
+                    st.markdown(f"""
+                    **{side_color} {symbol}** ({side.upper()})  
+                    Entry: ${pos['entry_price']:,.4f} → Current: ${pos['mark_price']:,.4f}  
+                    Amount: {pos['amount']:.4f} | Leverage: {pos['leverage']}x
+                    """)
+                
+                with col_pnl:
+                    pnl_display = f"${pnl:+,.2f}" if pnl >= 0 else f"-${abs(pnl):,.2f}"
+                    st.markdown(f"""
+                    <div style="padding: 10px; text-align: center;">
+                        <span style="font-size: 1.5rem; font-weight: bold; color: {pnl_color};">
+                            {pnl_display}
+                        </span><br>
+                        <span style="color: {pnl_color};">({pnl_pct:+.2f}%)</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col_btn:
+                    # 고유한 키 생성
+                    btn_key = f"close_{symbol.replace('/', '_')}_{i}"
+                    
+                    if st.button(f"🔴 종료", key=btn_key, type="primary"):
+                        # 확인 메시지를 위한 세션 상태 설정
+                        st.session_state[f'confirm_{btn_key}'] = True
+                
+                # 확인 다이얼로그
+                if st.session_state.get(f'confirm_{btn_key}', False):
+                    st.warning(f"⚠️ **{symbol}** 포지션을 정말 종료하시겠습니까?")
+                    st.info(f"현재 PnL: {pnl_display} ({pnl_pct:+.2f}%)")
+                    
+                    confirm_col1, confirm_col2 = st.columns(2)
+                    
+                    with confirm_col1:
+                        if st.button(f"✅ 확인 - 종료 실행", key=f"confirm_yes_{btn_key}", type="primary"):
+                            with st.spinner(f"{symbol} 포지션 종료 중..."):
+                                result = close_position_api(symbol, "Manual close from dashboard")
+                                
+                                if 'error' in result:
+                                    st.error(f"❌ 종료 실패: {result['error']}")
+                                else:
+                                    st.success(f"✅ {symbol} 포지션 종료 완료!")
+                                    st.json(result)
+                                    # 상태 초기화 및 페이지 새로고침
+                                    st.session_state[f'confirm_{btn_key}'] = False
+                                    time_module.sleep(1)
+                                    st.rerun()
+                    
+                    with confirm_col2:
+                        if st.button(f"❌ 취소", key=f"confirm_no_{btn_key}"):
+                            st.session_state[f'confirm_{btn_key}'] = False
+                            st.rerun()
+                
+                st.markdown("---")
+            
+            # 🆕 v7.6: 전체 포지션 종료 버튼
+            st.markdown("### ⚠️ Emergency: Close All Positions")
+            
+            if st.button("🚨 모든 포지션 즉시 종료", type="secondary"):
+                st.session_state['confirm_close_all'] = True
+            
+            if st.session_state.get('confirm_close_all', False):
+                st.error("⚠️ **경고**: 모든 포지션을 종료하시겠습니까? 이 작업은 되돌릴 수 없습니다!")
+                
+                col_all1, col_all2 = st.columns(2)
+                
+                with col_all1:
+                    if st.button("✅ 예, 모두 종료", type="primary", key="confirm_all_yes"):
+                        with st.spinner("모든 포지션 종료 중..."):
+                            all_success = True
+                            for pos in positions:
+                                result = close_position_api(pos['symbol'], "Emergency close all from dashboard")
+                                if 'error' in result:
+                                    st.error(f"❌ {pos['symbol']} 종료 실패: {result['error']}")
+                                    all_success = False
+                                else:
+                                    st.success(f"✅ {pos['symbol']} 종료 완료")
+                            
+                            if all_success:
+                                st.balloons()
+                                st.success("🎉 모든 포지션 종료 완료!")
+                            
+                            st.session_state['confirm_close_all'] = False
+                            time_module.sleep(2)
+                            st.rerun()
+                
+                with col_all2:
+                    if st.button("❌ 취소", key="confirm_all_no"):
+                        st.session_state['confirm_close_all'] = False
+                        st.rerun()
+            
+            st.markdown("---")
+            
+            # 포지션 테이블 (기존)
+            st.subheader("📋 Position Details")
             df_positions = pd.DataFrame(positions)
             
             # 컬럼 포맷팅
@@ -2086,7 +2259,7 @@ def main():
         st.markdown("---")
         
         # 정보
-        st.caption("Trading Dashboard v7.3 Complete")
+        st.caption("Trading Dashboard v7.6 Complete")
         st.caption("© 2025 Automated Trading System")
 
 if __name__ == "__main__":
