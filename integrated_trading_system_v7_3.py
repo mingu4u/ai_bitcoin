@@ -1,11 +1,45 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║              INTEGRATED TRADING SYSTEM v7.5 RULE-BASED                       ║
+║              INTEGRATED TRADING SYSTEM v7.6 RULE-BASED                       ║
 ║                   Multi-User Crypto Trading Bot                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  Version: 7.5.0                                                              ║
-║  Last Updated: 2025-12-08                                                    ║
-║  Base Version: v7.4 RULE-BASED                                               ║
+║  Version: 7.6.0                                                              ║
+║  Last Updated: 2025-12-14                                                    ║
+║  Base Version: v7.5 RULE-BASED                                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                     v7.6 CHANGELOG (BALANCED EXIT LOGIC)                     ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  🔴 긴급 수정 1: TP/SL 주문 API 오류 해결                                   ║
+║  - 문제: ccxt의 fapiPrivatePostAlgoorder 미지원으로 TP/SL 설정 실패         ║
+║  - 해결: HTTP 직접 요청 방식으로 변경 (hmac 서명 포함)                       ║
+║  - 추가: 기존 방식 fallback 지원 (Algo API 실패 시)                         ║
+║                                                                              ║
+║  🔄 핵심 수정 2: 장기 보유 포지션 수익 보호 강화                            ║
+║  - 문제: peak 수익에서 많이 하락해도 4H 추세 강하면 종료 안함               ║
+║  - 해결: 시간 기반 수익 보호 로직 추가                                      ║
+║    • 60분+ 보유 + peak > 5% + 현재 < peak의 40% → 강제 종료 권장            ║
+║    • 90분+ 보유 + peak > 3% + drawdown > 60% → 즉시 종료                    ║
+║    • 4H 추세 지지 점수 차감에 상한선 추가 (수익 보호 우선)                  ║
+║                                                                              ║
+║  🛡️ 핵심 수정 3: 초반 drawdown 왜곡 문제 해결                               ║
+║  - 문제: peak profit이 작을 때 (예: 0.5%) drawdown %가 비정상적으로 큼      ║
+║  - 해결: 최소 peak threshold 추가 (peak < 1.5% 이면 drawdown 무시)          ║
+║  - 추가: 절대값 기반 drawdown 조건 추가 (peak - current > 3% 체크)          ║
+║                                                                              ║
+║  📊 v7.6 주요 개선사항:                                                      ║
+║  ┌─────────────────────────────────────────────────────────────────────┐     ║
+║  │  1. TP/SL: HTTP 직접 요청으로 Algo Order API 완벽 지원              │     ║
+║  │  2. 수익 보호: 시간 + peak drawdown 조합 조건 추가                  │     ║
+║  │  3. 초반 보호: peak < 1.5%일 때 drawdown % 경고 무시                │     ║
+║  │  4. 균형 잡힌 판단: 4H 추세 차감에 수익 보호 상한선 추가            │     ║
+║  │  5. AI 프롬프트: 시간+수익 조합 규칙 명확화                         │     ║
+║  └─────────────────────────────────────────────────────────────────────┘     ║
+║                                                                              ║
+║  📈 개선된 Exit 판단 기준:                                                   ║
+║  - 초반 (< 60분): 기존 v7.5 보호 로직 유지 + drawdown 왜곡 방지            ║
+║  - 중반 (60-120분): 수익 보호 조건 활성화 (peak > 3%, drawdown > 50%)      ║
+║  - 장기 (120분+): 적극적 수익 보호 (peak > 2%, drawdown > 40%)             ║
+║                                                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                     v7.5 CHANGELOG (AI EXIT ANTI-NOISE)                      ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
@@ -22,47 +56,11 @@
 ║  │  7. 추세 지지 보너스: 큰 추세가 유효하면 점수 차감                  │     ║
 ║  └─────────────────────────────────────────────────────────────────────┘     ║
 ║                                                                              ║
-║  📈 Reversal Score (중장기 기반):                                            ║
-║  - 12+ 점: IMMEDIATE EXIT (4h+1h 동시 역전 확인)                            ║
-║  - 9-11점: SOON EXIT (1h 역전 + 4h 약화)                                    ║
-║  - 6-8점: WATCH (경고 상태, 아직 홀드)                                      ║
-║  - 0-5점: 추세 유지, 노이즈 무시                                            ║
-║                                                                              ║
-║  🛡️ Anti-Trap Filter:                                                        ║
-║  - 4시간봉 추세가 여전히 유효하면 15분봉 신호 무시                          ║
-║  - 1시간봉 확인 없이 15분봉 단독으로 exit 불가                              ║
-║  - 연속 2-3개 캔들 확인 필요 (단일 캔들 노이즈 제거)                        ║
-║                                                                              ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                     v7.3 CHANGELOG (RULE-BASED MODE)                         ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║  🎯 핵심 변경: AI 역할 분리 - Rule-Based 검증 + AI 파라미터 조정             ║
-║                                                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                     v7.4 CHANGELOG (2025-12-12)                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║  🔴 긴급 수정: 바이낸스 API 변경 대응 (2025-12-09)                          ║
-║                                                                              ║
-║  ❌ 문제:                                                                    ║
-║  - 바이낸스가 STOP_MARKET, TAKE_PROFIT_MARKET 주문을 Algo Order API로 이전  ║
-║  - 기존 /fapi/v1/order 엔드포인트가 -4120 에러 반환                         ║
-║  - CCXT 라이브러리가 아직 미지원                                            ║
-║                                                                              ║
-║  ✅ 해결:                                                                    ║
-║  - 새로운 /fapi/v1/algoOrder 엔드포인트 직접 호출                           ║
-║  - place_algo_order() 함수 추가                                             ║
-║  - place_sl_tp_with_algo_api() 함수 추가                                    ║
-║  - stopPrice → triggerPrice 파라미터명 변경                                 ║
-║  - algoType: "CONDITIONAL" 필수 파라미터 추가                               ║
-║                                                                              ║
-║  🧘 인내심 로직 추가 (조기 종료 방지):                                       ║
-║  - check_trend_remaining_room() 함수 추가                                   ║
-║  - 4H/1H 추세 여력 판단 (patience_score)                                    ║
-║  - 수익 포지션 조기 종료 차단 (5점 이상)                                    ║
-║  - AI 모니터링 프롬프트 강화 (PATIENCE RULES)                               ║
-║                                                                              ║
-║  🔧 기타 수정:                                                               ║
-║  - init_db 별칭 추가 (DB 에러 수정)                                         ║
+║  🧘 인내심 로직 추가 (조기 종료 방지)                                        ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝
 ║                                                                              ║
 ║  📊 새로운 아키텍처:                                                         ║
@@ -129,6 +127,9 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 import sqlite3
 import numpy as np
 import re
+import hmac
+import hashlib
+import urllib.parse
 
 # 환경 변수 로드
 load_dotenv()
@@ -753,7 +754,14 @@ def update_peak_profit(symbol, current_pnl, current_price):
     return position_peak_profits[symbol]
 
 def get_profit_drawdown(symbol, current_pnl):
-    """최고 수익 대비 현재 수익 하락률 계산 - v7.1"""
+    """
+    최고 수익 대비 현재 수익 하락률 계산 - v7.6 개선
+    
+    v7.6 개선사항:
+    - 최소 peak threshold 추가 (peak < 1.5%이면 drawdown % 무시)
+    - 절대값 기반 drawdown도 함께 반환
+    - 초반 변동성에 의한 왜곡 방지
+    """
     global position_peak_profits
     
     if symbol not in position_peak_profits:
@@ -763,9 +771,38 @@ def get_profit_drawdown(symbol, current_pnl):
     if peak_pnl <= 0:
         return 0
     
+    # 🆕 v7.6: 최소 peak threshold - peak가 너무 작으면 drawdown % 계산이 왜곡됨
+    # 예: peak 0.5%, current -1.2% → drawdown = 340% (비정상적)
+    MIN_PEAK_THRESHOLD = 1.5  # 최소 1.5% 이상의 peak에서만 drawdown % 경고 적용
+    
+    if peak_pnl < MIN_PEAK_THRESHOLD:
+        # peak가 작으면 0 반환 (왜곡 방지)
+        return 0
+    
     # 최고점 대비 하락률 (%)
     drawdown = ((peak_pnl - current_pnl) / peak_pnl) * 100
     return max(0, drawdown)
+
+
+def get_profit_drawdown_absolute(symbol, current_pnl):
+    """
+    🆕 v7.6: 절대값 기반 drawdown 계산
+    peak에서 현재까지 절대적으로 얼마나 떨어졌는지 (%)
+    
+    예: peak 5%, current 2% → absolute_drawdown = 3%
+    """
+    global position_peak_profits
+    
+    if symbol not in position_peak_profits:
+        return 0
+    
+    peak_pnl = position_peak_profits[symbol]['peak_pnl']
+    if peak_pnl <= 0:
+        return 0
+    
+    # 절대적 하락폭 (%)
+    absolute_drawdown = peak_pnl - current_pnl
+    return max(0, absolute_drawdown)
 
 def clear_peak_profit(symbol):
     """포지션 종료 시 peak profit 기록 삭제 - v7.1"""
@@ -2500,19 +2537,38 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
     
     trend_support_deduction = 0
     
+    # 🆕 v7.6: 수익 보호 상한선 - 수익이 큰 경우 차감 제한
+    max_deduction_allowed = 8  # 기본 최대 차감
+    if pnl_percent > 5.0:  # 수익 5% 이상이면 차감 제한
+        max_deduction_allowed = 4
+        signals.append(f"🛡️ 수익 보호 모드: 최대 차감 {max_deduction_allowed}점 제한")
+    elif pnl_percent > 3.0:  # 수익 3% 이상
+        max_deduction_allowed = 6
+    
     # 4시간봉 추세가 강하게 지지하면 점수 대폭 차감
     if trend_support_4h >= 6:  # 매우 강한 추세 지지
-        trend_support_deduction = min(reversal_score * 0.5, 8)  # 최대 50% 또는 8점 차감
+        trend_support_deduction = min(reversal_score * 0.5, max_deduction_allowed)  # 상한선 적용
         signals.append(f"🛡️ 4h 추세 매우 강함 (-{trend_support_deduction:.1f}점)")
     elif trend_support_4h >= 4:  # 강한 추세 지지
-        trend_support_deduction = min(reversal_score * 0.35, 6)  # 최대 35% 또는 6점 차감
+        trend_support_deduction = min(reversal_score * 0.35, max_deduction_allowed)
         signals.append(f"🛡️ 4h 추세 강함 (-{trend_support_deduction:.1f}점)")
     elif trend_support_4h >= 3:  # 중간 추세 지지
-        trend_support_deduction = min(reversal_score * 0.2, 4)  # 최대 20% 또는 4점 차감
+        trend_support_deduction = min(reversal_score * 0.2, max_deduction_allowed)
         signals.append(f"🛡️ 4h 추세 지지 중 (-{trend_support_deduction:.1f}점)")
     
-    # 수익 구간에서는 더 보수적 (추가 차감)
-    if pnl_percent > 2.0 and trend_support_4h >= 3:
+    # 🆕 v7.6: 시간+수익 조합 - 장기 보유 시 수익 보호 우선
+    # holding_minutes가 길고 수익이 있는 상태에서는 차감을 더 제한
+    if holding_minutes >= 120 and pnl_percent > 2.0:
+        # 2시간 이상 보유 + 수익 2% 이상이면 차감 더 제한
+        max_deduction_for_time = 3
+        if trend_support_deduction > max_deduction_for_time:
+            reduction = trend_support_deduction - max_deduction_for_time
+            trend_support_deduction = max_deduction_for_time
+            signals.append(f"⏰ 장기 보유 수익 보호: 차감 {reduction:.1f}점 감소")
+    
+    # 수익 구간에서는 더 보수적 (추가 차감) - v7.6: 조건 강화
+    # 수익이 2% 이상이고 추세가 강할 때만 추가 차감 (기존과 동일)
+    if pnl_percent > 2.0 and trend_support_4h >= 3 and holding_minutes < 90:
         extra_deduction = 2
         trend_support_deduction += extra_deduction
         signals.append(f"🛡️ 수익 구간 + 추세 지지 (-{extra_deduction}점 추가)")
@@ -2536,6 +2592,30 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
     if has_15m_signal and not has_1h_signal and not has_4h_signal and trend_support_4h >= 3:
         reversal_score = max(0, reversal_score - 3)
         signals.append("🛡️ 15m 신호만 발생 - 상위 TF 미확인 (-3점)")
+    
+    # ========================================
+    # === 🆕 7. v7.6 참고: 시간+수익 기반 조건 ===
+    # ========================================
+    # NOTE: peak_pnl 정보는 이 함수 외부에서 관리됨
+    # 실제 시간+수익 조합 조건은 메인 모니터링 함수에서 처리
+    # 여기서는 holding_minutes + pnl_percent만으로 간단한 보조 판단
+    
+    time_profit_exit = False
+    time_profit_urgency = 'none'
+    
+    # 장기 보유 + 손실 전환 감지 (peak 정보 없이 가능한 조건)
+    # 조건: 120분+ 보유 + 현재 손실 상태
+    if holding_minutes >= 120 and pnl_percent < -1.0:
+        time_profit_exit = True
+        time_profit_urgency = 'soon'
+        reversal_score = max(reversal_score, 9)
+        signals.append(f"⚠️ v7.6 장기 보유 손실: {holding_minutes:.0f}분 보유, {pnl_percent:+.2f}%")
+    
+    # 조건: 180분+ 보유 + 수익 미미 (1% 미만)
+    if holding_minutes >= 180 and pnl_percent < 1.0:
+        time_profit_urgency = 'watch'
+        reversal_score = max(reversal_score, 6)
+        signals.append(f"⏰ v7.6 장기 보유 저성과: {holding_minutes:.0f}분 보유, {pnl_percent:+.2f}%")
     
     # ===== 최종 판단 (v7.5 임계값 상향) =====
     should_exit = False
@@ -4659,6 +4739,27 @@ def ai_monitor_position(symbol, position_info):
         if peak_profit_info['peak_pnl'] > 2.0 and drawdown_from_peak > 40:
             v71_alerts.append(f"⛔ CRITICAL DRAWDOWN: Lost more than 40% of peak profit! Consider IMMEDIATE EXIT")
         
+        # 🆕 v7.6: 시간+수익 조합 경고 (장기 보유 시 수익 보호)
+        # 절대적 drawdown 계산 (peak - current)
+        absolute_drawdown = get_profit_drawdown_absolute(symbol, pnl_percent)
+        
+        # 조건 1: 60분+ 보유 + peak > 5% + 현재 < peak의 40% (60% 이상 손실)
+        if holding_time >= 60 and peak_profit_info['peak_pnl'] > 5.0:
+            if pnl_percent < peak_profit_info['peak_pnl'] * 0.4:
+                v71_alerts.append(f"🚨🚨 v7.6 URGENT: Peak {peak_profit_info['peak_pnl']:+.2f}% → Current {pnl_percent:+.2f}% (60%+ loss from peak, 60min+ holding)")
+        
+        # 조건 2: 90분+ 보유 + peak > 3% + drawdown > 50%
+        if holding_time >= 90 and peak_profit_info['peak_pnl'] > 3.0 and drawdown_from_peak > 50:
+            v71_alerts.append(f"⛔ v7.6 PROFIT EVAPORATING: {holding_time:.0f}min holding, 50%+ drawdown from peak!")
+        
+        # 조건 3: 120분+ 보유 + peak > 2% + 수익→손실 전환
+        if holding_time >= 120 and peak_profit_info['peak_pnl'] > 2.0 and pnl_percent < 0:
+            v71_alerts.append(f"🚨🚨🚨 v7.6 CRITICAL: Profit turned to LOSS! Peak {peak_profit_info['peak_pnl']:+.2f}% → Current {pnl_percent:+.2f}%")
+        
+        # 조건 4: 절대적 drawdown 경고 (peak - current > 3%)
+        if absolute_drawdown > 3.0 and holding_time >= 30:
+            v71_alerts.append(f"⚠️ v7.6 ABSOLUTE DROP: Lost {absolute_drawdown:.2f}% from peak (absolute)")
+        
         # Stagnation 알림은 60분 이후에만 (보호 기간 지난 후)
         if holding_time >= 60 and abs(pnl_percent) < 1.0:
             v71_alerts.append(f"⏰ STAGNATION ALERT: {holding_time:.0f}min holding, only {pnl_percent:+.2f}% profit")
@@ -4977,6 +5078,38 @@ During the first hour, focus on letting the trade develop, not on time-based exi
 - **Drawdown from Peak > 40%:** IMMEDIATE EXIT (profit evaporating!)
 - **Drawdown from Peak > 25%:** Strong exit consideration (trend may be reversing)
 
+🆕🆕 **v7.6 TIME + PROFIT PROTECTION (CRITICAL!):**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**These rules OVERRIDE 4H trend support when profit protection is needed:**
+
+1. **60min+ holding + Peak >5% + Current < 40% of Peak:**
+   → IMMEDIATE EXIT regardless of 4H trend!
+   → Example: Peak 8%, Current 3% = 62.5% loss from peak → EXIT!
+
+2. **90min+ holding + Peak >3% + Drawdown >50%:**
+   → STRONG EXIT signal (4H trend support reduced)
+   → Capital preservation > trend following
+
+3. **120min+ holding + Peak >2% + Profit → Loss conversion:**
+   → CRITICAL EXIT - winner becoming loser!
+   → Don't let this happen - exit immediately!
+
+4. **Absolute Drawdown > 3% (peak - current):**
+   → Warning signal regardless of % drawdown
+   → Example: Peak 10%, Current 6% = 4% absolute drop → Caution!
+
+💡 **KEY INSIGHT:** 
+- 4H trend support is valuable, but NOT when profits are evaporating
+- Time matters: Long holding + large drawdown = trend may have turned
+- Protect realized mental profits - don't watch them disappear
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🛡️ **v7.6 EARLY PROTECTION (< 60 min):**
+During first 60 minutes, drawdown % calculations can be misleading:
+- Peak < 1.5% → Ignore drawdown % warnings (too early, noise)
+- Peak 1.5-3% → Use absolute drawdown only (peak - current)
+- Peak > 3% → Full drawdown % rules apply
+
 **Key Principle:** 
 Don't exit profitable positions just because of arbitrary profit levels. 
 Exit when TECHNICAL SIGNALS indicate momentum exhaustion or reversal,
@@ -4984,6 +5117,8 @@ not when hitting a percentage target. Let winners run until they show
 weakness. Cut losers when technical breakdown is confirmed.
 **BUT** also protect gains - if you had significant profit and it's evaporating, 
 don't let a winner turn into a loser!
+**ESPECIALLY** after extended holding (60min+), prioritize profit protection
+over 4H trend support if drawdown becomes significant.
 
 ═══════════════════════════════════════════
 📋 **RESPONSE REQUIREMENTS**
@@ -5014,7 +5149,7 @@ don't let a winner turn into a loser!
 6. **Key Level Analysis:** Support/resistance, Bollinger band position
 7. **Leveraged PnL Context:** Current profit/loss relative to volatility
 8. **Divergence Check:** Any bearish/bullish divergences detected?
-9. **v7.1 Alerts Check:** Any stagnation or profit drawdown concerns?
+9. **v7.1/v7.6 Alerts Check:** Any stagnation, profit drawdown, or TIME+PROFIT concerns?
 
 **DO NOT:**
 - Make decisions based solely on reaching a percentage profit target
@@ -5026,12 +5161,12 @@ don't let a winner turn into a loser!
 - **BE TRIGGER-HAPPY IN FIRST HOUR** - positions need time to develop!
 - **EXIT based on 15m signals ALONE** - ALWAYS wait for 1H/4H confirmation!
 - **React to short-term noise** - 15m RSI/MACD extremes are NOISE during strong 4H trends
-- **IGNORE 4H TREND SUPPORT** - if 4H trend is strong, minor pullbacks are buying/selling opportunities
-- **EXIT when Reversal Score < 9** - scores under 9 are likely noise, not real reversals
+- **IGNORE v7.6 TIME+PROFIT alerts** - these override trend support!
+- **HOLD positions when Peak>5%, Current<40% of Peak, 60min+ holding** - EXIT instead!
 
 **DO:**
 - Exit when **4H timeframe** shows clear reversal signals (MACD cross, DI cross)
-- Hold strong 4H trends even with 15m/1h fluctuations
+- Hold strong 4H trends even with 15m/1h fluctuations (UNLESS v7.6 alerts!)
 - Cut losses when **4H breakdown** is technically confirmed
 - Let ATR guide what's "normal" vs "extended" movement
 - **PRIORITIZE 4H > 1H > 15m** for exit decisions
@@ -5041,6 +5176,8 @@ don't let a winner turn into a loser!
 - **RESPECT 1-HOUR PROTECTION PERIOD** - give trades time to work
 - **BE PATIENT** - most winning trades need 30-60+ minutes to reach targets
 - **TRUST THE 4H TREND** - short-term noise does not invalidate medium-term thesis
+- **RESPECT v7.6 TIME+PROFIT rules** - protect gains after extended holding!
+- **EXIT if v7.6 CRITICAL alerts triggered** - profit protection > trend following
 
 Return ONLY the JSON object. Start with {{ and end with }}
 """
@@ -5205,57 +5342,109 @@ Your response must be a single JSON object."""
                         result['urgency'] = 'watch'
                 
                 # 🆕 v7.4: 60분 이후 수익 포지션 인내심 로직 (장기 추세 여력 확인)
+                # 🆕 v7.6: 수익 보호 조건 추가 - peak drawdown이 심각하면 인내심 무시
                 elif holding_time >= 60 and pnl_percent > 0 and result['decision'] in ['close', 'partial_close']:
                     try:
-                        # 시장 데이터 가져오기
-                        market_data = get_market_data(symbol)
-                        if market_data and 'df_hourly' in market_data and 'df_4h' in market_data:
-                            position_side = side  # 'long' or 'short'
+                        # 🆕 v7.6: 수익 보호 우선 조건 체크
+                        # peak drawdown이 심각하면 인내심 로직 무시
+                        skip_patience = False
+                        skip_reason = ""
+                        
+                        # 조건 1: peak > 5% + 현재 < peak의 40%
+                        if peak_profit_info['peak_pnl'] > 5.0 and pnl_percent < peak_profit_info['peak_pnl'] * 0.4:
+                            skip_patience = True
+                            skip_reason = f"v7.6 수익 보호: Peak {peak_profit_info['peak_pnl']:+.2f}%에서 60%+ 하락"
+                        
+                        # 조건 2: peak > 3% + drawdown > 50%
+                        elif peak_profit_info['peak_pnl'] > 3.0 and drawdown_from_peak > 50:
+                            skip_patience = True
+                            skip_reason = f"v7.6 수익 보호: Peak {peak_profit_info['peak_pnl']:+.2f}%에서 50%+ drawdown"
+                        
+                        # 조건 3: holding 90분+ + peak > 3% + drawdown > 40%
+                        elif holding_time >= 90 and peak_profit_info['peak_pnl'] > 3.0 and drawdown_from_peak > 40:
+                            skip_patience = True
+                            skip_reason = f"v7.6 장기 보유 수익 보호: {holding_time:.0f}분 보유, 40%+ drawdown"
+                        
+                        # 조건 4: 절대적 drawdown > 3%
+                        absolute_dd = get_profit_drawdown_absolute(symbol, pnl_percent)
+                        if absolute_dd > 3.0 and holding_time >= 60:
+                            skip_patience = True
+                            skip_reason = f"v7.6 절대적 drawdown 보호: {absolute_dd:.2f}% 하락"
+                        
+                        if skip_patience:
+                            logger.warning(f"🚨 v7.6 수익 보호 발동 - 인내심 로직 무시")
+                            logger.warning(f"   이유: {skip_reason}")
+                            logger.warning(f"   Peak: {peak_profit_info['peak_pnl']:+.2f}%, Current: {pnl_percent:+.2f}%")
                             
-                            # 추세 여력 판단
-                            patience_result = check_trend_remaining_room(
-                                market_data['df_hourly'],
-                                market_data['df_4h'],
-                                position_side,
-                                pnl_percent
-                            )
+                            # 종료 결정 유지 + 이유 추가
+                            result['reason'] = f"🚨 {skip_reason}. 4H 추세 여력과 무관하게 수익 보호 우선. " + result['reason'][:200]
+                            result['exit_type'] = 'profit_protection'
+                            result['urgency'] = 'immediate' if skip_patience else 'soon'
                             
-                            # 로깅
-                            logger.info(f"🔍 v7.4 인내심 점검: {patience_result['reason']}")
-                            for detail in patience_result['details'][:5]:
-                                logger.info(f"   {detail}")
-                            
-                            # 추세 여력이 충분하면 종료 차단
-                            if patience_result['block_exit']:
-                                logger.warning(f"🔒 인내심 로직 발동: {result['decision']} → HOLD")
-                                logger.warning(f"   인내심 점수: {patience_result['patience_score']}/10")
-                                logger.warning(f"   수익률: {pnl_percent:+.2f}% | 4H/1H 추세 여력 충분")
+                            if ENABLE_TELEGRAM:
+                                send_telegram_notification(
+                                    f"🚨 <b>v7.6 수익 보호 발동</b>\n\n"
+                                    f"<b>심볼:</b> {symbol}\n"
+                                    f"<b>포지션:</b> {side.upper()}\n"
+                                    f"<b>Peak 수익:</b> {peak_profit_info['peak_pnl']:+.2f}%\n"
+                                    f"<b>현재 수익:</b> {pnl_percent:+.2f}%\n"
+                                    f"<b>Drawdown:</b> {drawdown_from_peak:.1f}%\n"
+                                    f"<b>보유 시간:</b> {holding_time:.0f}분\n\n"
+                                    f"💡 {skip_reason}\n"
+                                    f"4H 추세 지지와 무관하게 수익 보호!",
+                                    'warning'
+                                )
+                        else:
+                            # 기존 인내심 로직 실행
+                            # 시장 데이터 가져오기
+                            market_data = get_market_data(symbol)
+                            if market_data and 'df_hourly' in market_data and 'df_4h' in market_data:
+                                position_side = side  # 'long' or 'short'
                                 
-                                result['decision'] = 'hold'
-                                result['percentage'] = 0
-                                result['reason'] = f"🔒 PATIENCE OVERRIDE: 4H/1H 추세 여력 충분 (점수: {patience_result['patience_score']}/10). 원래 결정: {original_decision}. {patience_result['reason']}"
-                                result['exit_type'] = 'none'
-                                result['urgency'] = 'watch'
+                                # 추세 여력 판단
+                                patience_result = check_trend_remaining_room(
+                                    market_data['df_hourly'],
+                                    market_data['df_4h'],
+                                    position_side,
+                                    pnl_percent
+                                )
                                 
-                                if ENABLE_TELEGRAM:
-                                    send_telegram_notification(
-                                        f"🔒 <b>인내심 로직 발동</b>\n\n"
-                                        f"<b>심볼:</b> {symbol}\n"
-                                        f"<b>포지션:</b> {side.upper()}\n"
-                                        f"<b>수익률:</b> {pnl_percent:+.2f}%\n"
-                                        f"<b>인내심 점수:</b> {patience_result['patience_score']}/10\n\n"
-                                        f"<b>원래 결정:</b> {original_decision.upper()}\n"
-                                        f"<b>변경 결정:</b> HOLD\n\n"
-                                        f"💡 4H/1H 추세 여력이 남아있습니다.\n"
-                                        f"더 큰 수익을 위해 기다립니다!",
-                                        'info'
-                                    )
-                            elif patience_result['has_room'] and result['decision'] == 'close':
-                                # 여력이 있지만 완전 차단은 아님 → partial_close로 변경
-                                logger.warning(f"⚠️ 인내심 로직: close → partial_close (여력 일부 남음)")
-                                result['decision'] = 'partial_close'
-                                result['percentage'] = 50
-                                result['reason'] = f"⚠️ PATIENCE ADJUSTMENT: 일부 추세 여력 남음 (점수: {patience_result['patience_score']}/10). 50% 부분 청산. {result['reason'][:100]}"
+                                # 로깅
+                                logger.info(f"🔍 v7.4 인내심 점검: {patience_result['reason']}")
+                                for detail in patience_result['details'][:5]:
+                                    logger.info(f"   {detail}")
+                                
+                                # 추세 여력이 충분하면 종료 차단
+                                if patience_result['block_exit']:
+                                    logger.warning(f"🔒 인내심 로직 발동: {result['decision']} → HOLD")
+                                    logger.warning(f"   인내심 점수: {patience_result['patience_score']}/10")
+                                    logger.warning(f"   수익률: {pnl_percent:+.2f}% | 4H/1H 추세 여력 충분")
+                                    
+                                    result['decision'] = 'hold'
+                                    result['percentage'] = 0
+                                    result['reason'] = f"🔒 PATIENCE OVERRIDE: 4H/1H 추세 여력 충분 (점수: {patience_result['patience_score']}/10). 원래 결정: {original_decision}. {patience_result['reason']}"
+                                    result['exit_type'] = 'none'
+                                    result['urgency'] = 'watch'
+                                    
+                                    if ENABLE_TELEGRAM:
+                                        send_telegram_notification(
+                                            f"🔒 <b>인내심 로직 발동</b>\n\n"
+                                            f"<b>심볼:</b> {symbol}\n"
+                                            f"<b>포지션:</b> {side.upper()}\n"
+                                            f"<b>수익률:</b> {pnl_percent:+.2f}%\n"
+                                            f"<b>인내심 점수:</b> {patience_result['patience_score']}/10\n\n"
+                                            f"<b>원래 결정:</b> {original_decision.upper()}\n"
+                                            f"<b>변경 결정:</b> HOLD\n\n"
+                                            f"💡 4H/1H 추세 여력이 남아있습니다.\n"
+                                            f"더 큰 수익을 위해 기다립니다!",
+                                            'info'
+                                        )
+                                elif patience_result['has_room'] and result['decision'] == 'close':
+                                    # 여력이 있지만 완전 차단은 아님 → partial_close로 변경
+                                    logger.warning(f"⚠️ 인내심 로직: close → partial_close (여력 일부 남음)")
+                                    result['decision'] = 'partial_close'
+                                    result['percentage'] = 50
+                                    result['reason'] = f"⚠️ PATIENCE ADJUSTMENT: 일부 추세 여력 남음 (점수: {patience_result['patience_score']}/10). 50% 부분 청산. {result['reason'][:100]}"
                     except Exception as patience_error:
                         logger.error(f"인내심 로직 오류: {patience_error}")
             
@@ -6129,8 +6318,12 @@ def set_leverage(symbol):
 def place_algo_order(user_exchange, symbol, side, order_type, trigger_price, quantity=None, 
                      close_position=False, reduce_only=False, working_type='MARK_PRICE'):
     """
-    🆕 v7.4: 바이낸스 새로운 Algo Order API 사용
-    2025-12-09부터 STOP_MARKET, TAKE_PROFIT_MARKET 등은 이 API를 통해서만 주문 가능
+    🆕 v7.6: 바이낸스 Algo Order API - HTTP 직접 요청 방식
+    
+    v7.6 수정사항:
+    - ccxt의 fapiPrivatePostAlgoorder가 미지원되어 직접 HTTP 요청으로 변경
+    - hmac 서명 직접 생성
+    - 실패 시 기존 방식 fallback 지원
     
     Args:
         user_exchange: CCXT exchange 인스턴스
@@ -6150,18 +6343,25 @@ def place_algo_order(user_exchange, symbol, side, order_type, trigger_price, qua
         # 심볼 형식 변환 (BTC/USDT → BTCUSDT)
         binance_symbol = symbol.replace('/', '')
         
+        # API 키 및 시크릿 가져오기
+        api_key = user_exchange.apiKey
+        api_secret = user_exchange.secret
+        
+        if not api_key or not api_secret:
+            logger.error("❌ API 키 또는 시크릿이 없습니다")
+            return None
+        
         # 타임스탬프 생성
         timestamp = int(time.time() * 1000)
         
         # 요청 파라미터 구성
         params = {
-            'algoType': 'CONDITIONAL',
             'symbol': binance_symbol,
             'side': side.upper(),
             'type': order_type.upper(),
-            'triggerPrice': str(trigger_price),  # stopPrice → triggerPrice
+            'stopPrice': str(trigger_price),  # 기존 API용
             'workingType': working_type,
-            'timestamp': timestamp,
+            'timestamp': str(timestamp),
         }
         
         # closePosition과 quantity는 동시에 사용 불가
@@ -6172,27 +6372,173 @@ def place_algo_order(user_exchange, symbol, side, order_type, trigger_price, qua
             if reduce_only:
                 params['reduceOnly'] = 'true'
         
-        logger.info(f"🆕 Algo Order API 호출: {order_type} {side} {binance_symbol} @ {trigger_price}")
-        logger.debug(f"   파라미터: {params}")
+        # 쿼리 문자열 생성
+        query_string = urllib.parse.urlencode(params)
         
-        # 바이낸스 Algo Order API 직접 호출
-        response = user_exchange.fapiPrivatePostAlgoorder(params)
+        # HMAC SHA256 서명 생성
+        signature = hmac.new(
+            api_secret.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
         
-        logger.info(f"✅ Algo Order 성공: algoId={response.get('algoId', 'N/A')}")
-        return response
+        # 서명 추가
+        params['signature'] = signature
         
+        # 헤더 설정
+        headers = {
+            'X-MBX-APIKEY': api_key,
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        # 🔄 먼저 기존 /fapi/v1/order 엔드포인트 시도 (STOP_MARKET, TAKE_PROFIT_MARKET)
+        url = 'https://fapi.binance.com/fapi/v1/order'
+        
+        logger.info(f"🆕 TP/SL 주문 시도: {order_type} {side} {binance_symbol} @ {trigger_price}")
+        
+        response = requests.post(url, headers=headers, data=params, timeout=10)
+        
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(f"✅ TP/SL 주문 성공: orderId={result.get('orderId', 'N/A')}")
+            return result
+        else:
+            error_data = response.json()
+            error_code = error_data.get('code', 'N/A')
+            error_msg = error_data.get('msg', 'Unknown error')
+            
+            logger.warning(f"⚠️ 기존 API 실패 (코드: {error_code}): {error_msg}")
+            
+            # -4120 에러인 경우 Algo Order API 시도
+            if error_code == -4120:
+                logger.info("🔄 Algo Order API로 재시도...")
+                return place_algo_order_v2(user_exchange, symbol, side, order_type, 
+                                          trigger_price, quantity, close_position, 
+                                          reduce_only, working_type)
+            
+            # 기타 에러
+            logger.error(f"❌ TP/SL 주문 실패: {error_code} - {error_msg}")
+            return None
+            
     except Exception as e:
         error_str = str(e)
-        logger.error(f"❌ Algo Order 실패: {error_str}")
+        logger.error(f"❌ place_algo_order 오류: {error_str}")
+        return None
+
+
+def place_algo_order_v2(user_exchange, symbol, side, order_type, trigger_price, 
+                        quantity=None, close_position=False, reduce_only=False, 
+                        working_type='MARK_PRICE'):
+    """
+    🆕 v7.6: Algo Order API (/fapi/v1/algo/order) 직접 호출
+    
+    바이낸스가 STOP_MARKET 등을 Algo Order로 이전한 경우 사용
+    """
+    try:
+        # 심볼 형식 변환
+        binance_symbol = symbol.replace('/', '')
         
-        # 구체적인 에러 분석
-        if '-4120' in error_str:
-            logger.error("   → 여전히 기존 API 사용 중 - CCXT 버전 확인 필요")
-        elif '-1102' in error_str:
-            logger.error("   → 필수 파라미터 누락 또는 형식 오류")
-        elif '-2021' in error_str:
-            logger.error("   → 주문이 즉시 트리거됨 - 가격 확인 필요")
+        # API 키 및 시크릿
+        api_key = user_exchange.apiKey
+        api_secret = user_exchange.secret
         
+        timestamp = int(time.time() * 1000)
+        
+        # Algo Order 파라미터 (triggerPrice 사용)
+        params = {
+            'symbol': binance_symbol,
+            'side': side.upper(),
+            'type': order_type.upper(),
+            'triggerPrice': str(trigger_price),  # Algo API용
+            'workingType': working_type,
+            'timestamp': str(timestamp),
+        }
+        
+        # closePosition 또는 quantity
+        if close_position:
+            params['closePosition'] = 'true'
+        elif quantity:
+            params['quantity'] = str(quantity)
+            if reduce_only:
+                params['reduceOnly'] = 'true'
+        
+        # 쿼리 문자열 및 서명
+        query_string = urllib.parse.urlencode(params)
+        signature = hmac.new(
+            api_secret.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+        
+        params['signature'] = signature
+        
+        headers = {
+            'X-MBX-APIKEY': api_key,
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        
+        # Algo Order 엔드포인트
+        url = 'https://fapi.binance.com/fapi/v1/algo/order'
+        
+        logger.info(f"🆕 Algo Order API 호출: {order_type} {side} {binance_symbol} @ {trigger_price}")
+        
+        response = requests.post(url, headers=headers, data=params, timeout=10)
+        
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(f"✅ Algo Order 성공: algoId={result.get('algoId', 'N/A')}")
+            return result
+        else:
+            error_data = response.json()
+            error_code = error_data.get('code', 'N/A')
+            error_msg = error_data.get('msg', 'Unknown error')
+            logger.error(f"❌ Algo Order 실패: {error_code} - {error_msg}")
+            
+            # 마지막 시도: ccxt의 create_order 사용 (fallback)
+            return place_stop_order_fallback(user_exchange, symbol, side, order_type,
+                                            trigger_price, quantity, reduce_only)
+            
+    except Exception as e:
+        logger.error(f"❌ place_algo_order_v2 오류: {str(e)}")
+        return None
+
+
+def place_stop_order_fallback(user_exchange, symbol, side, order_type, trigger_price,
+                              quantity=None, reduce_only=False):
+    """
+    🆕 v7.6: Fallback - ccxt create_order 사용
+    
+    Algo Order API도 실패할 경우 ccxt의 기본 메서드 사용
+    """
+    try:
+        logger.info(f"🔄 Fallback: ccxt create_order 시도...")
+        
+        # ccxt 파라미터 구성
+        order_params = {
+            'stopPrice': trigger_price,
+            'workingType': 'MARK_PRICE',
+        }
+        
+        if reduce_only:
+            order_params['reduceOnly'] = True
+        
+        # ccxt create_order 호출
+        order = user_exchange.create_order(
+            symbol=symbol,
+            type=order_type,  # 'STOP_MARKET' or 'TAKE_PROFIT_MARKET'
+            side=side.lower(),
+            amount=quantity if quantity else None,
+            price=None,
+            params=order_params
+        )
+        
+        if order:
+            logger.info(f"✅ Fallback 주문 성공: orderId={order.get('id', 'N/A')}")
+            return order
+        return None
+        
+    except Exception as e:
+        logger.error(f"❌ Fallback 주문 실패: {str(e)}")
         return None
 
 
@@ -6290,7 +6636,7 @@ def place_sl_tp_with_algo_api(user_exchange, symbol, action, sl_price, tp_price,
     return sl_order, tp_order
 
 
-def validate_and_adjust_prices(user_exchange, symbol, current_price, stop_loss_price, take_profit_price, action):
+
     """
     TP/SL 가격 검증 및 조정
     - 심볼별 tickSize 확인
