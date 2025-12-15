@@ -3206,7 +3206,13 @@ def calculate_risk_score(df_15min, df_hourly, df_4h, action: str) -> dict:
 
 def calculate_approval_score(df_15min, df_hourly, df_4h, action: str) -> dict:
     """
-    🆕 v7.3: Rule-Based Approval Score 계산
+    🆕 v7.6: Rule-Based Approval Score 계산 (단기 신호 강화)
+    
+    v7.6 변경사항:
+    - 4H 추세 의존도 감소 (25점 → 20점)
+    - 15분/1H 모멘텀 신호 점수 증가
+    - 멀티타임프레임 정렬 보너스 추가
+    - 단기 급등/급락 신호 반영
     
     Returns:
         dict: {
@@ -3239,6 +3245,10 @@ def calculate_approval_score(df_15min, df_hourly, df_4h, action: str) -> dict:
     di_plus_1h = safe_get(df_hourly, 'di_plus', 25)
     di_minus_1h = safe_get(df_hourly, 'di_minus', 25)
     
+    adx_15m = safe_get(df_15min, 'adx', 25)
+    di_plus_15m = safe_get(df_15min, 'di_plus', 25)
+    di_minus_15m = safe_get(df_15min, 'di_minus', 25)
+    
     cmf_15m = safe_get(df_15min, 'cmf', 0)
     cmf_1h = safe_get(df_hourly, 'cmf', 0)
     cmf_4h = safe_get(df_4h, 'cmf', 0)
@@ -3247,146 +3257,204 @@ def calculate_approval_score(df_15min, df_hourly, df_4h, action: str) -> dict:
     macd_signal_4h = safe_get(df_4h, 'macd_signal', 0)
     macd_diff_4h = safe_get(df_4h, 'macd_diff', 0)
     
+    macd_1h = safe_get(df_hourly, 'macd', 0)
+    macd_signal_1h = safe_get(df_hourly, 'macd_signal', 0)
+    
+    macd_15m = safe_get(df_15min, 'macd', 0)
+    macd_signal_15m = safe_get(df_15min, 'macd_signal', 0)
+    
     sma_1h = safe_get(df_hourly, 'sma_20', 0)
+    sma_15m = safe_get(df_15min, 'sma_20', 0)
     current_price = safe_get(df_15min, 'close', 0)
+    
+    # Stochastic 추출
+    stoch_k_15m = safe_get(df_15min, 'stoch_k', 50)
+    stoch_k_1h = safe_get(df_hourly, 'stoch_k', 50)
     
     if action.lower() == 'buy':
         # ========== BUY Signal Approval Factors ==========
         
-        # Primary Factors (max 50 points)
-        # 4h 추세 확인
+        # === 1. 4H 추세 (max 20점 - 감소됨) ===
         if di_plus_4h > di_minus_4h and adx_4h > 20:
             if adx_4h > 25:
-                approval_score += 25
-                details.append(f"4h DI+ {di_plus_4h:.1f} > DI- {di_minus_4h:.1f} with ADX {adx_4h:.1f} > 25 → +25 (strong uptrend)")
-            else:
                 approval_score += 20
-                details.append(f"4h DI+ {di_plus_4h:.1f} > DI- {di_minus_4h:.1f} with ADX {adx_4h:.1f} > 20 → +20 (uptrend confirmed)")
+                details.append(f"4h DI+ {di_plus_4h:.1f} > DI- {di_minus_4h:.1f} with ADX {adx_4h:.1f} > 25 → +20 (strong uptrend)")
+            else:
+                approval_score += 15
+                details.append(f"4h DI+ {di_plus_4h:.1f} > DI- {di_minus_4h:.1f} with ADX {adx_4h:.1f} > 20 → +15 (uptrend)")
+        elif adx_4h < 20:
+            # 4H 추세 약함 - 단기 신호에 더 의존
+            approval_score += 5
+            details.append(f"4h ADX {adx_4h:.1f} < 20 (no clear trend) - relying on short-term signals → +5")
         
-        # 1h RSI 최적 영역
-        if 35 <= rsi_1h <= 55:
+        # === 2. 1H 모멘텀 (max 20점 - 증가됨) ===
+        if di_plus_1h > di_minus_1h:
+            if adx_1h > 25:
+                approval_score += 15
+                details.append(f"1h DI+ {di_plus_1h:.1f} > DI- {di_minus_1h:.1f} with ADX {adx_1h:.1f} → +15 (1h bullish)")
+            elif adx_1h > 20:
+                approval_score += 10
+                details.append(f"1h DI+ {di_plus_1h:.1f} > DI- {di_minus_1h:.1f} → +10 (1h bullish)")
+        
+        if macd_1h > macd_signal_1h:
+            approval_score += 5
+            details.append(f"1h MACD bullish → +5")
+        
+        # === 3. 15분 모멘텀 (max 20점 - 신규) ===
+        if di_plus_15m > di_minus_15m and adx_15m > 20:
+            approval_score += 10
+            details.append(f"15m DI+ {di_plus_15m:.1f} > DI- with ADX {adx_15m:.1f} → +10 (15m momentum)")
+        
+        if macd_15m > macd_signal_15m:
+            approval_score += 5
+            details.append(f"15m MACD bullish → +5")
+        
+        # Stochastic 상승 신호
+        if stoch_k_15m > 20 and stoch_k_15m < 80:
+            approval_score += 5
+            details.append(f"15m Stoch %K {stoch_k_15m:.1f} in good zone → +5")
+        
+        # === 4. RSI 조건 (max 15점) ===
+        # 과매도 아닌 상태에서 진입 가능
+        if 30 <= rsi_1h <= 65:
+            approval_score += 10
+            details.append(f"1h RSI {rsi_1h:.1f} in acceptable zone (30-65) → +10")
+        elif 25 <= rsi_1h <= 70:
+            approval_score += 5
+            details.append(f"1h RSI {rsi_1h:.1f} marginally acceptable → +5")
+        
+        if 30 <= rsi_15m <= 70:
+            approval_score += 5
+            details.append(f"15m RSI {rsi_15m:.1f} not overbought → +5")
+        
+        # === 5. CMF/자금흐름 (max 10점) ===
+        if cmf_1h > 0:
+            approval_score += 5
+            details.append(f"1h CMF {cmf_1h:.2f} positive → +5 (money inflow)")
+        if cmf_15m > 0:
+            approval_score += 5
+            details.append(f"15m CMF {cmf_15m:.2f} positive → +5")
+        
+        # === 6. 멀티타임프레임 정렬 보너스 (max 15점 - 신규) ===
+        bullish_count = 0
+        if di_plus_15m > di_minus_15m:
+            bullish_count += 1
+        if di_plus_1h > di_minus_1h:
+            bullish_count += 1
+        if di_plus_4h > di_minus_4h:
+            bullish_count += 1
+        
+        if bullish_count == 3:
             approval_score += 15
-            details.append(f"1h RSI {rsi_1h:.1f} in optimal zone (35-55) → +15")
-        elif 30 <= rsi_1h <= 60:
+            details.append(f"All 3 timeframes aligned bullish → +15 (strong alignment)")
+        elif bullish_count == 2:
             approval_score += 10
-            details.append(f"1h RSI {rsi_1h:.1f} in acceptable zone (30-60) → +10")
-        
-        # 1h 추세 정렬
-        if current_price > sma_1h and di_plus_1h > di_minus_1h:
-            approval_score += 10
-            details.append(f"Price above 1h SMA with bullish DI → +10 (trend aligned)")
-        
-        # Secondary Factors (max 30 points)
-        # CMF 확인
-        if cmf_1h > 0 and cmf_4h > 0:
-            approval_score += 10
-            details.append(f"CMF positive on 1h ({cmf_1h:.2f}) and 4h ({cmf_4h:.2f}) → +10 (money inflow)")
-        elif cmf_4h > 0:
+            details.append(f"2/3 timeframes aligned bullish → +10")
+        elif bullish_count == 1:
             approval_score += 5
-            details.append(f"CMF positive on 4h ({cmf_4h:.2f}) → +5")
-        
-        # MACD 확인
-        if macd_4h > macd_signal_4h:
-            approval_score += 8
-            details.append(f"4h MACD {macd_4h:.2f} > Signal {macd_signal_4h:.2f} → +8 (bullish)")
-        
-        # ADX 상승 중
-        try:
-            adx_prev = df_4h['adx'].iloc[-2] if len(df_4h) > 1 else adx_4h
-            if adx_4h > adx_prev:
-                approval_score += 5
-                details.append(f"4h ADX rising ({adx_prev:.1f} → {adx_4h:.1f}) → +5 (trend strengthening)")
-        except:
-            pass
-        
-        # Bonus Factors (max 20 points)
-        # 거래량 확인
-        try:
-            vol = df_hourly['volume'].iloc[-1]
-            vol_ma = df_hourly['volume'].rolling(20).mean().iloc[-1]
-            if vol > vol_ma:
-                approval_score += 5
-                details.append(f"Volume above 20-period average → +5")
-        except:
-            pass
-        
-        # 15m 진입 타이밍
-        if 30 <= rsi_15m <= 65:
-            approval_score += 5
-            details.append(f"15m RSI {rsi_15m:.1f} good entry timing → +5")
+            details.append(f"1/3 timeframes bullish → +5 (weak but valid)")
             
     else:  # SELL signal
         # ========== SELL Signal Approval Factors ==========
         
-        # Primary Factors (max 50 points)
-        # 4h 추세 확인
+        # === 1. 4H 추세 (max 20점 - 감소됨) ===
         if di_minus_4h > di_plus_4h and adx_4h > 20:
             if adx_4h > 25:
-                approval_score += 25
-                details.append(f"4h DI- {di_minus_4h:.1f} > DI+ {di_plus_4h:.1f} with ADX {adx_4h:.1f} > 25 → +25 (strong downtrend)")
-            else:
                 approval_score += 20
-                details.append(f"4h DI- {di_minus_4h:.1f} > DI+ {di_plus_4h:.1f} with ADX {adx_4h:.1f} > 20 → +20 (downtrend confirmed)")
+                details.append(f"4h DI- {di_minus_4h:.1f} > DI+ {di_plus_4h:.1f} with ADX {adx_4h:.1f} > 25 → +20 (strong downtrend)")
+            else:
+                approval_score += 15
+                details.append(f"4h DI- {di_minus_4h:.1f} > DI+ {di_plus_4h:.1f} with ADX {adx_4h:.1f} > 20 → +15 (downtrend)")
+        elif adx_4h < 20:
+            approval_score += 5
+            details.append(f"4h ADX {adx_4h:.1f} < 20 (no clear trend) - relying on short-term signals → +5")
         
-        # 1h RSI 최적 영역
-        if 45 <= rsi_1h <= 65:
+        # === 2. 1H 모멘텀 (max 20점 - 증가됨) ===
+        if di_minus_1h > di_plus_1h:
+            if adx_1h > 25:
+                approval_score += 15
+                details.append(f"1h DI- {di_minus_1h:.1f} > DI+ {di_plus_1h:.1f} with ADX {adx_1h:.1f} → +15 (1h bearish)")
+            elif adx_1h > 20:
+                approval_score += 10
+                details.append(f"1h DI- {di_minus_1h:.1f} > DI+ {di_plus_1h:.1f} → +10 (1h bearish)")
+        
+        if macd_1h < macd_signal_1h:
+            approval_score += 5
+            details.append(f"1h MACD bearish → +5")
+        
+        # === 3. 15분 모멘텀 (max 20점 - 신규) ===
+        if di_minus_15m > di_plus_15m and adx_15m > 20:
+            approval_score += 10
+            details.append(f"15m DI- {di_minus_15m:.1f} > DI+ with ADX {adx_15m:.1f} → +10 (15m momentum)")
+        
+        if macd_15m < macd_signal_15m:
+            approval_score += 5
+            details.append(f"15m MACD bearish → +5")
+        
+        # Stochastic 하락 신호
+        if stoch_k_15m > 20 and stoch_k_15m < 80:
+            approval_score += 5
+            details.append(f"15m Stoch %K {stoch_k_15m:.1f} in good zone → +5")
+        
+        # === 4. RSI 조건 (max 15점) ===
+        if 35 <= rsi_1h <= 70:
+            approval_score += 10
+            details.append(f"1h RSI {rsi_1h:.1f} in acceptable zone (35-70) → +10")
+        elif 30 <= rsi_1h <= 75:
+            approval_score += 5
+            details.append(f"1h RSI {rsi_1h:.1f} marginally acceptable → +5")
+        
+        if 30 <= rsi_15m <= 70:
+            approval_score += 5
+            details.append(f"15m RSI {rsi_15m:.1f} not oversold → +5")
+        
+        # === 5. CMF/자금흐름 (max 10점) ===
+        if cmf_1h < 0:
+            approval_score += 5
+            details.append(f"1h CMF {cmf_1h:.2f} negative → +5 (money outflow)")
+        if cmf_15m < 0:
+            approval_score += 5
+            details.append(f"15m CMF {cmf_15m:.2f} negative → +5")
+        
+        # === 6. 멀티타임프레임 정렬 보너스 (max 15점 - 신규) ===
+        bearish_count = 0
+        if di_minus_15m > di_plus_15m:
+            bearish_count += 1
+        if di_minus_1h > di_plus_1h:
+            bearish_count += 1
+        if di_minus_4h > di_plus_4h:
+            bearish_count += 1
+        
+        if bearish_count == 3:
             approval_score += 15
-            details.append(f"1h RSI {rsi_1h:.1f} in optimal zone (45-65) → +15")
-        elif 40 <= rsi_1h <= 70:
+            details.append(f"All 3 timeframes aligned bearish → +15 (strong alignment)")
+        elif bearish_count == 2:
             approval_score += 10
-            details.append(f"1h RSI {rsi_1h:.1f} in acceptable zone (40-70) → +10")
-        
-        # 1h 추세 정렬
-        if current_price < sma_1h and di_minus_1h > di_plus_1h:
-            approval_score += 10
-            details.append(f"Price below 1h SMA with bearish DI → +10 (trend aligned)")
-        
-        # Secondary Factors (max 30 points)
-        # CMF 확인
-        if cmf_1h < 0 and cmf_4h < 0:
-            approval_score += 10
-            details.append(f"CMF negative on 1h ({cmf_1h:.2f}) and 4h ({cmf_4h:.2f}) → +10 (money outflow)")
-        elif cmf_4h < 0:
+            details.append(f"2/3 timeframes aligned bearish → +10")
+        elif bearish_count == 1:
             approval_score += 5
-            details.append(f"CMF negative on 4h ({cmf_4h:.2f}) → +5")
-        
-        # MACD 확인
-        if macd_4h < macd_signal_4h:
-            approval_score += 8
-            details.append(f"4h MACD {macd_4h:.2f} < Signal {macd_signal_4h:.2f} → +8 (bearish)")
-        
-        # ADX 상승 중
-        try:
-            adx_prev = df_4h['adx'].iloc[-2] if len(df_4h) > 1 else adx_4h
-            if adx_4h > adx_prev:
-                approval_score += 5
-                details.append(f"4h ADX rising ({adx_prev:.1f} → {adx_4h:.1f}) → +5 (trend strengthening)")
-        except:
-            pass
-        
-        # Bonus Factors (max 20 points)
-        # 거래량 확인
-        try:
-            vol = df_hourly['volume'].iloc[-1]
-            vol_ma = df_hourly['volume'].rolling(20).mean().iloc[-1]
-            if vol > vol_ma:
-                approval_score += 5
-                details.append(f"Volume above 20-period average → +5")
-        except:
-            pass
-        
-        # 15m 진입 타이밍
-        if 35 <= rsi_15m <= 70:
-            approval_score += 5
-            details.append(f"15m RSI {rsi_15m:.1f} good entry timing → +5")
+            details.append(f"1/3 timeframes bearish → +5 (weak but valid)")
     
     if not details:
         details.append("No approval factors detected → +0")
     
+    # 🆕 v7.6: 최소 기본 점수 보장 (단기 신호만으로도 진입 가능)
+    # 과매수/과매도가 아니면 최소 30점 보장
+    if action.lower() == 'buy':
+        if rsi_15m < 75 and rsi_1h < 70 and rsi_4h < 70:
+            if approval_score < 30:
+                approval_score = 30
+                details.append(f"Base score guaranteed (not overbought) → min 30")
+    else:
+        if rsi_15m > 25 and rsi_1h > 30 and rsi_4h > 30:
+            if approval_score < 30:
+                approval_score = 30
+                details.append(f"Base score guaranteed (not oversold) → min 30")
+    
     return {
         'total_score': approval_score,
         'details': details,
-        'is_approved': approval_score >= 70
+        'is_approved': approval_score >= 60  # 🆕 v7.6: 임계값 70 → 60으로 낮춤
     }
 
 
@@ -3839,15 +3907,15 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         base_position_pct = 20
         
     # STEP 3: 승인 점수 충분 → APPROVE 또는 MODIFY
-    elif approval_score >= 70:
-        if risk_score <= 4:
+    elif approval_score >= 60:  # 🆕 v7.6: 70 → 60으로 낮춤
+        if risk_score <= 4 and approval_score >= 75:
             decision = 'approve'
             reason = f"APPROVED - Low Risk ({risk_score}), High Approval ({approval_score})"
             base_leverage = 15
             base_position_pct = 30
         else:
             decision = 'modify'
-            reason = f"MODIFY - Medium Risk ({risk_score}), Good Approval ({approval_score})"
+            reason = f"MODIFY - Risk ({risk_score}), Approval ({approval_score})"
             base_leverage = 10
             base_position_pct = 20
         
@@ -3857,11 +3925,26 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         else:
             default_sl = current_price + (atr_4h * 2.0)
             default_tp = current_price - (atr_4h * 3.5)
+    
+    # 🆕 v7.6: 50~60점 범위도 MODIFY로 진행 (보수적 파라미터)
+    elif approval_score >= 50:
+        decision = 'modify'
+        reason = f"MODIFY (Conservative) - Approval Score {approval_score} in marginal zone (50-60)"
+        
+        if action.lower() == 'buy':
+            default_sl = current_price - (atr_4h * 1.5)  # 더 타이트한 SL
+            default_tp = current_price + (atr_4h * 2.5)  # 더 낮은 TP
+        else:
+            default_sl = current_price + (atr_4h * 1.5)
+            default_tp = current_price - (atr_4h * 2.5)
+        
+        base_leverage = 6  # 낮은 레버리지
+        base_position_pct = 12  # 작은 포지션
             
     # STEP 4: 낮은 승인 점수 → REJECT
     else:
         decision = 'reject'
-        reason = f"REJECTED - Approval Score {approval_score} below threshold (70)"
+        reason = f"REJECTED - Approval Score {approval_score} below threshold (50)"
         
         if action.lower() == 'buy':
             default_sl = current_price - (atr_4h * 2.0)
@@ -3895,7 +3978,7 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     logger.info(f"   Risk Score: {risk_score}/8 {'⚠️ HIGH' if risk_score >= 8 else '✓ OK'}")
     for detail in risk_result['details'][:5]:
         logger.info(f"      - {detail}")
-    logger.info(f"   Approval Score: {approval_score}/100 {'✓ PASS' if approval_score >= 70 else '✗ FAIL'}")
+    logger.info(f"   Approval Score: {approval_score}/100 {'✓ PASS' if approval_score >= 50 else '✗ FAIL'}")  # 🆕 v7.6
     for detail in approval_result['details'][:5]:
         logger.info(f"      - {detail}")
     
@@ -6636,12 +6719,28 @@ def place_sl_tp_with_algo_api(user_exchange, symbol, action, sl_price, tp_price,
     return sl_order, tp_order
 
 
-
+def validate_and_adjust_prices(user_exchange, symbol, action, current_price, stop_loss_price, take_profit_price):
     """
-    TP/SL 가격 검증 및 조정
+    🆕 v7.6: TP/SL 가격 검증 및 조정
     - 심볼별 tickSize 확인
     - 현재가와의 최소 거리 확인
     - 가격 정밀도 조정
+    
+    Args:
+        user_exchange: CCXT exchange 인스턴스
+        symbol: 거래 심볼
+        action: 'buy' 또는 'sell'
+        current_price: 현재가
+        stop_loss_price: 손절가
+        take_profit_price: 익절가
+    
+    Returns:
+        dict: {
+            'sl': 조정된 손절가,
+            'tp': 조정된 익절가,
+            'tick_size': 최소 가격 변동폭,
+            'price_precision': 가격 정밀도
+        }
     """
     try:
         # 마켓 정보 가져오기
@@ -6672,7 +6771,7 @@ def place_sl_tp_with_algo_api(user_exchange, symbol, action, sl_price, tp_price,
         # 최소 거리 검증 (0.1% 이상)
         min_distance_percent = 0.001  # 0.1%
         
-        if action == 'buy':
+        if action.lower() == 'buy':
             # 롱 포지션: SL < 현재가 < TP
             min_sl = current_price * (1 - min_distance_percent)
             min_tp = current_price * (1 + min_distance_percent)
@@ -6757,10 +6856,10 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
             actual_entry = float(main_order['average']) if main_order.get('average') else current_price
             logger.info(f"[{user_name}] ✅ 메인 주문 체결: {symbol} {order_side} {amount:.6f} @ ${actual_entry:.4f}")
 
-            # 🆕 가격 검증 및 조정
+            # 🆕 v7.6: 가격 검증 및 조정
             price_check = validate_and_adjust_prices(
-                user_exchange, symbol, current_price, 
-                stop_loss_price, take_profit_price, action
+                user_exchange, symbol, action, current_price, 
+                stop_loss_price, take_profit_price
             )
             adjusted_sl = price_check['sl']
             adjusted_tp = price_check['tp']
@@ -6964,10 +7063,10 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         # SL/TP 주문 설정
         time.sleep(1)
         
-        # 🆕 가격 검증 및 조정
+        # 🆕 v7.6: 가격 검증 및 조정
         price_check = validate_and_adjust_prices(
-            exchange, symbol, current_price, 
-            stop_loss_price, take_profit_price, action
+            exchange, symbol, action, current_price, 
+            stop_loss_price, take_profit_price
         )
         adjusted_sl = price_check['sl']
         adjusted_tp = price_check['tp']
