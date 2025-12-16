@@ -6397,145 +6397,56 @@ def set_leverage(symbol):
         return None
 
 
-# ============ v7.4 바이낸스 Algo Order API (2025-12-09 이후 필수) ============
-def place_algo_order(user_exchange, symbol, side, order_type, trigger_price, quantity=None, 
-                     close_position=False, reduce_only=False, working_type='MARK_PRICE'):
+# ============ v7.6 바이낸스 SL/TP API (2025-12-09 이후 새 방식) ============
+def place_conditional_order(user_exchange, symbol, side, order_type, stop_price, limit_price=None,
+                           quantity=None, close_position=False, reduce_only=False, 
+                           working_type='MARK_PRICE'):
     """
-    🆕 v7.6: 바이낸스 Algo Order API - HTTP 직접 요청 방식
+    🆕 v7.6: 바이낸스 Algo Order API (2025-12-09 이후)
     
-    v7.6 수정사항:
-    - ccxt의 fapiPrivatePostAlgoorder가 미지원되어 직접 HTTP 요청으로 변경
-    - hmac 서명 직접 생성
-    - 실패 시 기존 방식 fallback 지원
+    바이낸스 변경사항:
+    - 엔드포인트: /fapi/v1/algoOrder
+    - 필수 파라미터: algoType = "CONDITIONAL"
+    - stopPrice → triggerPrice
+    - 응답: orderId → algoId
     
     Args:
         user_exchange: CCXT exchange 인스턴스
         symbol: 거래 심볼 (예: 'BTC/USDT')
         side: 'BUY' 또는 'SELL'
         order_type: 'STOP_MARKET', 'TAKE_PROFIT_MARKET', 'STOP', 'TAKE_PROFIT', 'TRAILING_STOP_MARKET'
-        trigger_price: 트리거 가격 (이전의 stopPrice)
-        quantity: 수량 (close_position=True일 때는 None)
+        stop_price: 트리거 가격
+        limit_price: 지정가 (STOP, TAKE_PROFIT에만 필요)
+        quantity: 수량
         close_position: 전체 포지션 청산 여부
-        reduce_only: 포지션 감소만 허용
+        reduce_only: 감소 전용 여부
         working_type: 'MARK_PRICE' 또는 'CONTRACT_PRICE'
     
     Returns:
         dict: 주문 결과 또는 None
     """
     try:
-        # 심볼 형식 변환 (BTC/USDT → BTCUSDT)
         binance_symbol = symbol.replace('/', '')
-        
-        # API 키 및 시크릿 가져오기
-        api_key = user_exchange.apiKey
-        api_secret = user_exchange.secret
-        
-        if not api_key or not api_secret:
-            logger.error("❌ API 키 또는 시크릿이 없습니다")
-            return None
-        
-        # 타임스탬프 생성
-        timestamp = int(time.time() * 1000)
-        
-        # 요청 파라미터 구성
-        params = {
-            'symbol': binance_symbol,
-            'side': side.upper(),
-            'type': order_type.upper(),
-            'stopPrice': str(trigger_price),  # 기존 API용
-            'workingType': working_type,
-            'timestamp': str(timestamp),
-        }
-        
-        # closePosition과 quantity는 동시에 사용 불가
-        if close_position:
-            params['closePosition'] = 'true'
-        elif quantity:
-            params['quantity'] = str(quantity)
-            if reduce_only:
-                params['reduceOnly'] = 'true'
-        
-        # 쿼리 문자열 생성
-        query_string = urllib.parse.urlencode(params)
-        
-        # HMAC SHA256 서명 생성
-        signature = hmac.new(
-            api_secret.encode('utf-8'),
-            query_string.encode('utf-8'),
-            hashlib.sha256
-        ).hexdigest()
-        
-        # 서명 추가
-        params['signature'] = signature
-        
-        # 헤더 설정
-        headers = {
-            'X-MBX-APIKEY': api_key,
-            'Content-Type': 'application/x-www-form-urlencoded'
-        }
-        
-        # 🔄 먼저 기존 /fapi/v1/order 엔드포인트 시도 (STOP_MARKET, TAKE_PROFIT_MARKET)
-        url = 'https://fapi.binance.com/fapi/v1/order'
-        
-        logger.info(f"🆕 TP/SL 주문 시도: {order_type} {side} {binance_symbol} @ {trigger_price}")
-        
-        response = requests.post(url, headers=headers, data=params, timeout=10)
-        
-        if response.status_code == 200:
-            result = response.json()
-            logger.info(f"✅ TP/SL 주문 성공: orderId={result.get('orderId', 'N/A')}")
-            return result
-        else:
-            error_data = response.json()
-            error_code = error_data.get('code', 'N/A')
-            error_msg = error_data.get('msg', 'Unknown error')
-            
-            logger.warning(f"⚠️ 기존 API 실패 (코드: {error_code}): {error_msg}")
-            
-            # -4120 에러인 경우 Algo Order API 시도
-            if error_code == -4120:
-                logger.info("🔄 Algo Order API로 재시도...")
-                return place_algo_order_v2(user_exchange, symbol, side, order_type, 
-                                          trigger_price, quantity, close_position, 
-                                          reduce_only, working_type)
-            
-            # 기타 에러
-            logger.error(f"❌ TP/SL 주문 실패: {error_code} - {error_msg}")
-            return None
-            
-    except Exception as e:
-        error_str = str(e)
-        logger.error(f"❌ place_algo_order 오류: {error_str}")
-        return None
-
-
-def place_algo_order_v2(user_exchange, symbol, side, order_type, trigger_price, 
-                        quantity=None, close_position=False, reduce_only=False, 
-                        working_type='MARK_PRICE'):
-    """
-    🆕 v7.6: Algo Order API (/fapi/v1/algo/order) 직접 호출
-    
-    바이낸스가 STOP_MARKET 등을 Algo Order로 이전한 경우 사용
-    """
-    try:
-        # 심볼 형식 변환
-        binance_symbol = symbol.replace('/', '')
-        
-        # API 키 및 시크릿
         api_key = user_exchange.apiKey
         api_secret = user_exchange.secret
         
         timestamp = int(time.time() * 1000)
         
-        # Algo Order 파라미터 (triggerPrice 사용)
+        # 🆕 v7.6: 새로운 Algo Order API 파라미터
         params = {
+            'algoType': 'CONDITIONAL',  # 필수!
             'symbol': binance_symbol,
             'side': side.upper(),
             'type': order_type.upper(),
-            'triggerPrice': str(trigger_price),  # Algo API용
+            'triggerPrice': str(stop_price),  # stopPrice → triggerPrice
             'workingType': working_type,
             'timestamp': str(timestamp),
         }
+        
+        # STOP, TAKE_PROFIT (지정가)인 경우 price 추가
+        if order_type.upper() in ['STOP', 'TAKE_PROFIT'] and limit_price:
+            params['price'] = str(limit_price)
+            params['timeInForce'] = 'GTC'
         
         # closePosition 또는 quantity
         if close_position:
@@ -6545,14 +6456,13 @@ def place_algo_order_v2(user_exchange, symbol, side, order_type, trigger_price,
             if reduce_only:
                 params['reduceOnly'] = 'true'
         
-        # 쿼리 문자열 및 서명
+        # 서명 생성
         query_string = urllib.parse.urlencode(params)
         signature = hmac.new(
             api_secret.encode('utf-8'),
             query_string.encode('utf-8'),
             hashlib.sha256
         ).hexdigest()
-        
         params['signature'] = signature
         
         headers = {
@@ -6560,82 +6470,44 @@ def place_algo_order_v2(user_exchange, symbol, side, order_type, trigger_price,
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         
-        # Algo Order 엔드포인트
-        url = 'https://fapi.binance.com/fapi/v1/algo/order'
+        # 🆕 v7.6: 올바른 엔드포인트
+        url = 'https://fapi.binance.com/fapi/v1/algoOrder'
         
-        logger.info(f"🆕 Algo Order API 호출: {order_type} {side} {binance_symbol} @ {trigger_price}")
+        logger.info(f"🆕 Algo Order API 호출: {order_type} {side} {binance_symbol} @ triggerPrice={stop_price}")
         
         response = requests.post(url, headers=headers, data=params, timeout=10)
         
         if response.status_code == 200:
             result = response.json()
-            logger.info(f"✅ Algo Order 성공: algoId={result.get('algoId', 'N/A')}")
+            algo_id = result.get('algoId', 'N/A')
+            logger.info(f"✅ Algo Order 성공: algoId={algo_id}, status={result.get('algoStatus', 'N/A')}")
             return result
         else:
-            error_data = response.json()
-            error_code = error_data.get('code', 'N/A')
-            error_msg = error_data.get('msg', 'Unknown error')
-            logger.error(f"❌ Algo Order 실패: {error_code} - {error_msg}")
-            
-            # 마지막 시도: ccxt의 create_order 사용 (fallback)
-            return place_stop_order_fallback(user_exchange, symbol, side, order_type,
-                                            trigger_price, quantity, reduce_only)
+            try:
+                error_data = response.json()
+                error_code = error_data.get('code', 'N/A')
+                error_msg = error_data.get('msg', 'Unknown error')
+                logger.error(f"❌ Algo Order 실패: {error_code} - {error_msg}")
+            except:
+                logger.error(f"❌ API 응답 파싱 실패: {response.text}")
+            return None
             
     except Exception as e:
-        logger.error(f"❌ place_algo_order_v2 오류: {str(e)}")
+        logger.error(f"❌ place_conditional_order 오류: {str(e)}")
         return None
 
 
-def place_stop_order_fallback(user_exchange, symbol, side, order_type, trigger_price,
-                              quantity=None, reduce_only=False):
+def place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price, 
+                       quantity, user_name="Unknown"):
     """
-    🆕 v7.6: Fallback - ccxt create_order 사용
-    
-    Algo Order API도 실패할 경우 ccxt의 기본 메서드 사용
-    """
-    try:
-        logger.info(f"🔄 Fallback: ccxt create_order 시도...")
-        
-        # ccxt 파라미터 구성
-        order_params = {
-            'stopPrice': trigger_price,
-            'workingType': 'MARK_PRICE',
-        }
-        
-        if reduce_only:
-            order_params['reduceOnly'] = True
-        
-        # ccxt create_order 호출
-        order = user_exchange.create_order(
-            symbol=symbol,
-            type=order_type,  # 'STOP_MARKET' or 'TAKE_PROFIT_MARKET'
-            side=side.lower(),
-            amount=quantity if quantity else None,
-            price=None,
-            params=order_params
-        )
-        
-        if order:
-            logger.info(f"✅ Fallback 주문 성공: orderId={order.get('id', 'N/A')}")
-            return order
-        return None
-        
-    except Exception as e:
-        logger.error(f"❌ Fallback 주문 실패: {str(e)}")
-        return None
-
-
-def place_sl_tp_with_algo_api(user_exchange, symbol, action, sl_price, tp_price, 
-                              quantity, user_name="Unknown"):
-    """
-    🆕 v7.4: Algo Order API를 사용한 TP/SL 설정
+    🆕 v7.6: TP/SL 주문 설정 (2025-12-09 이후 Algo Order API)
     
     Args:
         user_exchange: CCXT exchange 인스턴스
         symbol: 거래 심볼
         action: 'buy' 또는 'sell' (원래 포지션 방향)
-        sl_price: Stop Loss 가격
-        tp_price: Take Profit 가격
+        sl_price: Stop Loss 트리거 가격
+        tp_price: Take Profit 트리거 가격
         quantity: 포지션 수량
         user_name: 사용자 이름 (로깅용)
     
@@ -6648,75 +6520,138 @@ def place_sl_tp_with_algo_api(user_exchange, symbol, action, sl_price, tp_price,
     # SL/TP 방향 결정 (포지션 반대 방향)
     sl_tp_side = 'SELL' if action.lower() == 'buy' else 'BUY'
     
-    # Stop Loss 주문
+    # ============ Stop Loss 주문 ============
     try:
-        # 1차: closePosition 방식 시도 (전체 포지션 청산)
-        sl_order = place_algo_order(
+        logger.info(f"[{user_name}] 🛡️ SL 주문 시도: STOP_MARKET {sl_tp_side} @ triggerPrice={sl_price:.5f}")
+        
+        # 방법 1: closePosition 방식 (전체 포지션 청산)
+        sl_order = place_conditional_order(
             user_exchange=user_exchange,
             symbol=symbol,
             side=sl_tp_side,
             order_type='STOP_MARKET',
-            trigger_price=sl_price,
+            stop_price=sl_price,
             close_position=True,
             working_type='MARK_PRICE'
         )
         
         if sl_order:
-            logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료 (Algo API): ${sl_price:.4f}")
+            logger.info(f"[{user_name}] ✅ Stop Loss 설정 완료: ${sl_price:.5f} (algoId={sl_order.get('algoId', 'N/A')})")
         else:
-            # 2차: reduceOnly + quantity 방식 시도
+            # 방법 2: reduceOnly + quantity 방식
             logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
-            sl_order = place_algo_order(
+            sl_order = place_conditional_order(
                 user_exchange=user_exchange,
                 symbol=symbol,
                 side=sl_tp_side,
                 order_type='STOP_MARKET',
-                trigger_price=sl_price,
+                stop_price=sl_price,
                 quantity=quantity,
                 reduce_only=True,
                 working_type='MARK_PRICE'
             )
             if sl_order:
-                logger.info(f"[{user_name}] 🛡️ Stop Loss 설정 완료 (reduceOnly): ${sl_price:.4f}")
-            
+                logger.info(f"[{user_name}] ✅ Stop Loss 설정 완료 (reduceOnly): ${sl_price:.5f}")
+                
     except Exception as e:
-        logger.error(f"[{user_name}] Stop Loss 설정 실패: {str(e)}")
+        logger.error(f"[{user_name}] ❌ Stop Loss 설정 실패: {str(e)}")
     
-    # Take Profit 주문
+    # ============ Take Profit 주문 ============
     try:
-        # 1차: closePosition 방식 시도
-        tp_order = place_algo_order(
+        logger.info(f"[{user_name}] 🎯 TP 주문 시도: TAKE_PROFIT_MARKET {sl_tp_side} @ triggerPrice={tp_price:.5f}")
+        
+        # 방법 1: closePosition 방식
+        tp_order = place_conditional_order(
             user_exchange=user_exchange,
             symbol=symbol,
             side=sl_tp_side,
             order_type='TAKE_PROFIT_MARKET',
-            trigger_price=tp_price,
+            stop_price=tp_price,
             close_position=True,
             working_type='MARK_PRICE'
         )
         
         if tp_order:
-            logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료 (Algo API): ${tp_price:.4f}")
+            logger.info(f"[{user_name}] ✅ Take Profit 설정 완료: ${tp_price:.5f} (algoId={tp_order.get('algoId', 'N/A')})")
         else:
-            # 2차: reduceOnly + quantity 방식 시도
+            # 방법 2: reduceOnly + quantity 방식
             logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
-            tp_order = place_algo_order(
+            tp_order = place_conditional_order(
                 user_exchange=user_exchange,
                 symbol=symbol,
                 side=sl_tp_side,
                 order_type='TAKE_PROFIT_MARKET',
-                trigger_price=tp_price,
+                stop_price=tp_price,
                 quantity=quantity,
                 reduce_only=True,
                 working_type='MARK_PRICE'
             )
             if tp_order:
-                logger.info(f"[{user_name}] 🎯 Take Profit 설정 완료 (reduceOnly): ${tp_price:.4f}")
-            
+                logger.info(f"[{user_name}] ✅ Take Profit 설정 완료 (reduceOnly): ${tp_price:.5f}")
+                
     except Exception as e:
-        logger.error(f"[{user_name}] Take Profit 설정 실패: {str(e)}")
+        logger.error(f"[{user_name}] ❌ Take Profit 설정 실패: {str(e)}")
+    
+    # 결과 요약
+    if sl_order and tp_order:
+        logger.info(f"[{user_name}] ✅✅ SL/TP 모두 설정 완료")
+    elif sl_order:
+        logger.warning(f"[{user_name}] ⚠️ SL만 설정됨, TP 실패")
+    elif tp_order:
+        logger.warning(f"[{user_name}] ⚠️ TP만 설정됨, SL 실패")
+    else:
+        logger.error(f"[{user_name}] ❌❌ SL/TP 모두 실패")
     
     return sl_order, tp_order
+
+
+# 기존 함수를 새 함수로 연결 (호환성 유지)
+def place_algo_order(user_exchange, symbol, side, order_type, trigger_price, quantity=None, 
+                     close_position=False, reduce_only=False, working_type='MARK_PRICE'):
+    """
+    🆕 v7.6: 호환성 래퍼 - 새로운 place_conditional_order로 연결
+    """
+    return place_conditional_order(
+        user_exchange=user_exchange,
+        symbol=symbol,
+        side=side,
+        order_type=order_type,
+        stop_price=trigger_price,
+        limit_price=None,
+        quantity=quantity,
+        close_position=close_position,
+        reduce_only=reduce_only,
+        working_type=working_type
+    )
+
+
+def place_algo_order_v2(user_exchange, symbol, side, order_type, trigger_price, 
+                        quantity=None, close_position=False, reduce_only=False, 
+                        working_type='MARK_PRICE'):
+    """
+    🆕 v7.6: 호환성 래퍼 - place_algo_order와 동일
+    """
+    return place_algo_order(user_exchange, symbol, side, order_type, trigger_price,
+                           quantity, close_position, reduce_only, working_type)
+
+
+def place_stop_order_fallback(user_exchange, symbol, side, order_type, trigger_price,
+                              quantity=None, reduce_only=False):
+    """
+    🆕 v7.6: Fallback은 더 이상 사용하지 않음 (Algo API로 통합)
+    """
+    logger.warning("⚠️ Fallback 함수 호출됨 - Algo API로 재시도")
+    return place_algo_order(user_exchange, symbol, side, order_type, trigger_price,
+                           quantity, False, reduce_only)
+
+
+def place_sl_tp_with_algo_api(user_exchange, symbol, action, sl_price, tp_price, 
+                              quantity, user_name="Unknown"):
+    """
+    🆕 v7.6: 호환성 래퍼 - 새로운 place_sl_tp_orders로 연결
+    """
+    return place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price, 
+                              quantity, user_name)
 
 
 def validate_and_adjust_prices(user_exchange, symbol, action, current_price, stop_loss_price, take_profit_price):
