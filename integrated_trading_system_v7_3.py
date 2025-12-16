@@ -253,8 +253,8 @@ class EmergencyTradingDecision(BaseModel):
 # ============ 다중 종목 설정 ============
 SYMBOL_CONFIG = {
     'BTC/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -262,8 +262,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SAHARA/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -271,8 +271,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ETH/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -280,8 +280,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RESOLV/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -289,8 +289,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'BIO/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -298,8 +298,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'UNI/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -307,8 +307,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PENGU/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -316,8 +316,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'UMA/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -325,8 +325,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'COMP/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -334,8 +334,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'XLM/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -343,8 +343,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DOT/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -352,8 +352,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ENA/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -361,8 +361,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RLC/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -370,8 +370,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ETHFI/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -379,8 +379,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SOL/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -388,8 +388,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PYTH/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -397,8 +397,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'LINK/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -406,8 +406,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ADA/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -415,8 +415,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'XRP/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -424,8 +424,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'BNB/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -433,8 +433,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DOGE/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -442,8 +442,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ACH/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -451,8 +451,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'CRV/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -460,8 +460,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RONIN/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -469,8 +469,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'BCH/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -478,8 +478,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'LSK/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -487,8 +487,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'HBAR/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -496,8 +496,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'AGLD/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -505,8 +505,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ONDO/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -514,8 +514,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'HOME/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -523,8 +523,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'TRX/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -532,8 +532,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ASTER/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -541,8 +541,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DASH/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -550,8 +550,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'TRUMP/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -559,8 +559,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SUI/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -568,8 +568,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'WLD/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -577,8 +577,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'GIGGLE/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -586,8 +586,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'LTC/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -595,8 +595,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DUSK/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -604,8 +604,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'FET/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -613,8 +613,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PENDLE/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -622,8 +622,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'FIL/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -631,8 +631,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'AR/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -640,8 +640,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'OG/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -649,8 +649,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'F/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -658,8 +658,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'TAO/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -667,8 +667,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'COTI/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -676,8 +676,8 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RAYSOL/USDT': {
-        'leverage': 10,
-        'position_size_percent': 30,
+        'leverage': 20,
+        'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
         'enabled': True,
@@ -3800,6 +3800,8 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     🆕 v7.3: Rule-Based 종합 검증
     AI 대신 Python 로직으로 진입 여부 결정
     
+    🆕 v7.6: Leverage, Position Size는 CONFIG 고정값 사용
+    
     Returns:
         dict: {
             'decision': 'approve' | 'reject' | 'modify' | 'reverse',
@@ -3815,6 +3817,13 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     df_hourly = market_data['df_hourly']
     df_4h = market_data['df_4h']
     current_price = market_data['current_price']
+    
+    # 🆕 v7.6: CONFIG에서 고정값 가져오기
+    config = get_symbol_config(symbol)
+    base_leverage = config.get('leverage', 10)
+    base_position_pct = config.get('position_size_percent', 30)
+    
+    logger.info(f"📌 CONFIG 기반 고정값: Leverage={base_leverage}x, Position={base_position_pct}%")
     
     # 1. Reverse Score 계산 (먼저 체크 - 극단적 신호 감지)
     reverse_result = calculate_reverse_score(df_15min, df_hourly, df_4h, action)
@@ -3857,8 +3866,7 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
             default_sl = current_price + (atr_4h * 1.5)
             default_tp = current_price - (atr_4h * 2.5)
         
-        base_leverage = 8   # 반전은 보수적으로
-        base_position_pct = 20
+        # 🆕 v7.6: CONFIG 고정값 유지 (동적 변경 제거)
     
     # 🆕 v7.4 STEP 0.5: HOLD 판단 (애매한 상황)
     elif reverse_result.get('should_hold', False):
@@ -3873,8 +3881,7 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
             default_sl = current_price + (atr_4h * 2.0)
             default_tp = current_price - (atr_4h * 3.5)
         
-        base_leverage = 5
-        base_position_pct = 10
+        # 🆕 v7.6: CONFIG 고정값 유지
         
     # STEP 1: 높은 리스크 → REJECT
     elif risk_score >= 8:
@@ -3888,8 +3895,7 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
             default_sl = current_price + (atr_4h * 2.0)
             default_tp = current_price - (atr_4h * 3.5)
         
-        base_leverage = 5
-        base_position_pct = 10
+        # 🆕 v7.6: CONFIG 고정값 유지
         
     # STEP 2: 중간 리스크 + 낮은 승인 → MODIFY
     elif risk_score >= 5 and approval_score < 75:
@@ -3903,21 +3909,16 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
             default_sl = current_price + (atr_4h * 2.0)
             default_tp = current_price - (atr_4h * 3.5)
         
-        base_leverage = 10
-        base_position_pct = 20
+        # 🆕 v7.6: CONFIG 고정값 유지
         
     # STEP 3: 승인 점수 충분 → APPROVE 또는 MODIFY
     elif approval_score >= 60:  # 🆕 v7.6: 70 → 60으로 낮춤
         if risk_score <= 4 and approval_score >= 75:
             decision = 'approve'
             reason = f"APPROVED - Low Risk ({risk_score}), High Approval ({approval_score})"
-            base_leverage = 15
-            base_position_pct = 30
         else:
             decision = 'modify'
             reason = f"MODIFY - Risk ({risk_score}), Approval ({approval_score})"
-            base_leverage = 10
-            base_position_pct = 20
         
         if action.lower() == 'buy':
             default_sl = current_price - (atr_4h * 2.0)
@@ -3925,8 +3926,10 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         else:
             default_sl = current_price + (atr_4h * 2.0)
             default_tp = current_price - (atr_4h * 3.5)
+        
+        # 🆕 v7.6: CONFIG 고정값 유지
     
-    # 🆕 v7.6: 50~60점 범위도 MODIFY로 진행 (보수적 파라미터)
+    # 🆕 v7.6: 50~60점 범위도 MODIFY로 진행
     elif approval_score >= 50:
         decision = 'modify'
         reason = f"MODIFY (Conservative) - Approval Score {approval_score} in marginal zone (50-60)"
@@ -3938,8 +3941,7 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
             default_sl = current_price + (atr_4h * 1.5)
             default_tp = current_price - (atr_4h * 2.5)
         
-        base_leverage = 6  # 낮은 레버리지
-        base_position_pct = 12  # 작은 포지션
+        # 🆕 v7.6: CONFIG 고정값 유지
             
     # STEP 4: 낮은 승인 점수 → REJECT
     else:
@@ -3953,8 +3955,7 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
             default_sl = current_price + (atr_4h * 2.0)
             default_tp = current_price - (atr_4h * 3.5)
         
-        base_leverage = 5
-        base_position_pct = 10
+        # 🆕 v7.6: CONFIG 고정값 유지
     
     # ========== 로깅 ==========
     logger.info(f"📊 Rule-Based Validation for {symbol} {action.upper()}")
@@ -4010,7 +4011,7 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
 def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, market_data: dict) -> dict:
     """
     🆕 v7.3: AI 파라미터 조정
-    Rule-Based 결정 후 AI가 레버리지, 포지션 사이즈, TP/SL만 미세조정
+    🆕 v7.6: Leverage, Position Size는 CONFIG 고정값 사용, AI는 TP/SL만 조정
     
     Returns:
         dict: 최종 트레이딩 파라미터
@@ -4024,6 +4025,11 @@ def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, m
     
     params = rule_based_result['recommended_params']
     decision = rule_based_result['decision']
+    
+    # 🆕 v7.6: CONFIG에서 고정값 가져오기
+    config = get_symbol_config(symbol)
+    fixed_leverage = config.get('leverage', 10)
+    fixed_position_pct = config.get('position_size_percent', 30)
     
     # reject인 경우 AI 호출 안함
     if decision == 'reject':
@@ -4042,10 +4048,10 @@ def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, m
     risk_score = rule_based_result['risk_score']['total_score']
     approval_score = rule_based_result['approval_score']['total_score']
     
-    # 간단한 프롬프트
+    # 🆕 v7.6: TP/SL 조정만 요청하는 간단한 프롬프트
     prompt = f"""You are a risk management AI for crypto futures trading.
 
-**TASK:** Adjust trading parameters based on the pre-validated signal.
+**TASK:** Adjust ONLY Stop Loss and Take Profit prices based on the market conditions.
 
 **SIGNAL INFO:**
 - Symbol: {symbol}
@@ -4059,23 +4065,22 @@ def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, m
 - Approval Score: {approval_score}/100
 - Reason: {rule_based_result['reason']}
 
-**DEFAULT PARAMETERS (adjust these):**
-- Leverage: {params['leverage']}x (range: 5-20)
-- Position Size: {params['position_percent']}% (range: 10-40)
+**FIXED PARAMETERS (DO NOT CHANGE):**
+- Leverage: {fixed_leverage}x (FIXED)
+- Position Size: {fixed_position_pct}% (FIXED)
+
+**DEFAULT TP/SL (adjust these):**
 - Stop Loss: ${params['stop_loss']:.2f}
 - Take Profit: ${params['take_profit']:.2f}
 
 **ADJUSTMENT RULES:**
-1. Higher Risk Score → Lower Leverage & Position Size
-2. Lower Approval Score → More Conservative Parameters
-3. TP/SL should maintain R:R ratio >= 1.8
-4. Stop Loss: 1.5-2.5x ATR from entry
-5. Take Profit: At least 1.8x the SL distance
+1. TP/SL should maintain R:R ratio >= 1.8
+2. Stop Loss: 1.5-2.5x ATR from entry
+3. Take Profit: At least 1.8x the SL distance
+4. Consider nearby support/resistance levels
 
 **OUTPUT FORMAT (JSON only):**
 {{
-    "leverage": <5-20>,
-    "position_percent": <10-40>,
     "stop_loss": <price>,
     "take_profit": <price>,
     "pl_ratio": <1.8-5.0>,
@@ -4090,7 +4095,7 @@ Return ONLY the JSON object."""
             messages=[
                 {
                     "role": "system",
-                    "content": "You are a risk management AI. Return ONLY valid JSON with adjusted trading parameters. No explanations outside JSON."
+                    "content": "You are a risk management AI. Return ONLY valid JSON with adjusted TP/SL prices. Leverage and Position Size are FIXED - do not include them in your response."
                 },
                 {"role": "user", "content": prompt}
             ],
@@ -4105,9 +4110,11 @@ Return ONLY the JSON object."""
         # JSON 파싱
         result = json.loads(ai_response)
         
-        # 범위 검증 및 보정
-        leverage = max(5, min(20, int(result.get('leverage', params['leverage']))))
-        position_pct = max(10, min(40, int(result.get('position_percent', params['position_percent']))))
+        # 🆕 v7.6: Leverage, Position Size는 CONFIG 고정값 사용 (AI 응답 무시)
+        leverage = fixed_leverage
+        position_pct = fixed_position_pct
+        
+        # TP/SL만 AI에서 가져옴
         stop_loss = float(result.get('stop_loss', params['stop_loss']))
         take_profit = float(result.get('take_profit', params['take_profit']))
         
@@ -4136,7 +4143,7 @@ Return ONLY the JSON object."""
         
     except Exception as e:
         logger.error(f"AI parameter adjustment failed: {e}")
-        # 실패 시 기본값 반환
+        # 🆕 v7.6: 실패 시에도 CONFIG 고정값 사용
         if action.lower() == 'buy':
             sl_dist = abs(current_price - params['stop_loss'])
             tp_dist = abs(params['take_profit'] - current_price)
@@ -4148,8 +4155,8 @@ Return ONLY the JSON object."""
         
         return {
             'decision': decision,
-            'leverage': params['leverage'],
-            'position_percent': params['position_percent'],
+            'leverage': fixed_leverage,  # 🆕 v7.6: CONFIG 고정값
+            'position_percent': fixed_position_pct,  # 🆕 v7.6: CONFIG 고정값
             'stop_loss': params['stop_loss'],
             'take_profit': params['take_profit'],
             'pl_ratio': round(default_pl_ratio, 2),
