@@ -6405,6 +6405,67 @@ def set_leverage(symbol):
 
 
 # ============ v7.6 바이낸스 SL/TP API (2025-12-09 이후 새 방식) ============
+def get_price_precision(user_exchange, symbol):
+    """
+    🆕 v7.6: 심볼의 가격 정밀도(소수점 자릿수) 가져오기
+    """
+    import math
+    
+    try:
+        # 마켓 정보 로드 시도
+        try:
+            if not user_exchange.markets:
+                user_exchange.load_markets()
+            market = user_exchange.market(symbol)
+        except Exception as load_err:
+            logger.warning(f"마켓 정보 로드 실패 ({symbol}): {load_err}")
+            # 가격 기반 기본 정밀도 추정
+            return 5
+        
+        price_precision = 5  # 기본값
+        
+        # 방법 1: info.filters에서 PRICE_FILTER의 tickSize 확인 (가장 정확)
+        if 'info' in market and 'filters' in market['info']:
+            for filter_item in market['info']['filters']:
+                if filter_item.get('filterType') == 'PRICE_FILTER':
+                    tick_size = float(filter_item.get('tickSize', 0.00001))
+                    if tick_size > 0:
+                        price_precision = max(0, int(round(-math.log10(tick_size))))
+                        logger.debug(f"[{symbol}] tickSize={tick_size} → precision={price_precision}")
+                    break
+        # 방법 2: precision.price 사용 (fallback)
+        elif 'precision' in market and 'price' in market['precision']:
+            price_precision = int(market['precision']['price'])
+        
+        return price_precision
+    except Exception as e:
+        logger.warning(f"가격 정밀도 조회 실패 ({symbol}): {e}, 기본값 5 사용")
+        return 5
+
+
+def format_price(price, precision):
+    """
+    🆕 v7.6: 가격을 지정된 정밀도로 포맷팅 (부동소수점 오류 방지)
+    
+    예: format_price(0.020749999999999998, 5) → "0.02075"
+    """
+    from decimal import Decimal, ROUND_HALF_UP
+    
+    if precision <= 0:
+        return str(int(round(price)))
+    
+    try:
+        # Decimal 사용으로 부동소수점 오류 완전 방지
+        decimal_price = Decimal(str(price))
+        quantize_str = '0.' + '0' * precision
+        rounded = decimal_price.quantize(Decimal(quantize_str), rounding=ROUND_HALF_UP)
+        return str(rounded)
+    except Exception:
+        # fallback: 기존 방식
+        rounded = round(price, precision)
+        return f"{rounded:.{precision}f}"
+
+
 def place_conditional_order(user_exchange, symbol, side, order_type, stop_price, limit_price=None,
                            quantity=None, close_position=False, reduce_only=False, 
                            working_type='MARK_PRICE'):
@@ -6437,6 +6498,13 @@ def place_conditional_order(user_exchange, symbol, side, order_type, stop_price,
         api_key = user_exchange.apiKey
         api_secret = user_exchange.secret
         
+        # 🆕 v7.6: 가격 정밀도 가져와서 포맷팅 (부동소수점 오류 방지)
+        price_precision = get_price_precision(user_exchange, symbol)
+        formatted_stop_price = format_price(stop_price, price_precision)
+        formatted_limit_price = format_price(limit_price, price_precision) if limit_price else None
+        
+        logger.info(f"📐 가격 정밀도 적용: {symbol} precision={price_precision}, {stop_price} → {formatted_stop_price}")
+        
         timestamp = int(time.time() * 1000)
         
         # 🆕 v7.6: 새로운 Algo Order API 파라미터
@@ -6445,14 +6513,14 @@ def place_conditional_order(user_exchange, symbol, side, order_type, stop_price,
             'symbol': binance_symbol,
             'side': side.upper(),
             'type': order_type.upper(),
-            'triggerPrice': str(stop_price),  # stopPrice → triggerPrice
+            'triggerPrice': formatted_stop_price,  # 포맷팅된 가격 사용
             'workingType': working_type,
             'timestamp': str(timestamp),
         }
         
         # STOP, TAKE_PROFIT (지정가)인 경우 price 추가
-        if order_type.upper() in ['STOP', 'TAKE_PROFIT'] and limit_price:
-            params['price'] = str(limit_price)
+        if order_type.upper() in ['STOP', 'TAKE_PROFIT'] and formatted_limit_price:
+            params['price'] = formatted_limit_price
             params['timeInForce'] = 'GTC'
         
         # closePosition 또는 quantity
@@ -6480,7 +6548,7 @@ def place_conditional_order(user_exchange, symbol, side, order_type, stop_price,
         # 🆕 v7.6: 올바른 엔드포인트
         url = 'https://fapi.binance.com/fapi/v1/algoOrder'
         
-        logger.info(f"🆕 Algo Order API 호출: {order_type} {side} {binance_symbol} @ triggerPrice={stop_price}")
+        logger.info(f"🆕 Algo Order API 호출: {order_type} {side} {binance_symbol} @ triggerPrice={formatted_stop_price}")
         
         response = requests.post(url, headers=headers, data=params, timeout=10)
         
