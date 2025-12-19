@@ -1886,7 +1886,25 @@ def main():
                     else:
                         st.info("📭 아직 생성된 종합 분석이 없습니다. 거래가 완료되면 자동으로 생성됩니다.")
                 else:
-                    st.warning("⚠️ reflection_history 테이블이 없습니다. 시스템을 재시작하여 테이블을 생성해주세요.")
+                    # 🆕 v7.7: 테이블이 없으면 자동 생성
+                    st.info("🔧 reflection_history 테이블을 생성 중...")
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute('''CREATE TABLE IF NOT EXISTS reflection_history
+                             (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                              timestamp TEXT NOT NULL,
+                              reflection_text TEXT NOT NULL,
+                              total_trades INTEGER,
+                              win_rate REAL,
+                              recent_win_rate REAL,
+                              total_pnl REAL,
+                              risk_reward_ratio REAL,
+                              performance_trend TEXT,
+                              symbols_analyzed TEXT)''')
+                        conn.commit()
+                        st.success("✅ reflection_history 테이블이 생성되었습니다! 페이지를 새로고침 해주세요.")
+                    except Exception as create_err:
+                        st.error(f"❌ 테이블 생성 실패: {create_err}")
             except Exception as comp_err:
                 st.warning(f"종합 분석 조회 실패: {comp_err}")
             
