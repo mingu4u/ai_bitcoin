@@ -1781,6 +1781,119 @@ def main():
         try:
             conn = sqlite3.connect('integrated_trades.db')
             
+            # ==========================================
+            # 🆕 v7.7: 종합 분석 섹션 (reflection_history 테이블)
+            # ==========================================
+            st.markdown("### 📊 종합 성과 분석 (AI Generated)")
+            st.caption("AI가 완료된 거래들을 분석하여 생성한 종합적인 성과 평가입니다.")
+            
+            try:
+                # reflection_history 테이블 존재 확인
+                check_table = pd.read_sql_query(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='reflection_history'", 
+                    conn
+                )
+                
+                if not check_table.empty:
+                    # 최근 종합 분석 조회
+                    comprehensive_query = """
+                    SELECT 
+                        timestamp,
+                        reflection_text,
+                        total_trades,
+                        win_rate,
+                        recent_win_rate,
+                        total_pnl,
+                        risk_reward_ratio,
+                        performance_trend,
+                        symbols_analyzed
+                    FROM reflection_history
+                    ORDER BY timestamp DESC
+                    LIMIT 10
+                    """
+                    comprehensive_df = pd.read_sql_query(comprehensive_query, conn)
+                    
+                    if not comprehensive_df.empty:
+                        comprehensive_df['timestamp'] = pd.to_datetime(comprehensive_df['timestamp'])
+                        
+                        # 최신 종합 분석 통계
+                        latest = comprehensive_df.iloc[0]
+                        
+                        col_comp1, col_comp2, col_comp3, col_comp4 = st.columns(4)
+                        with col_comp1:
+                            st.metric("📈 최근 승률", f"{latest['win_rate']:.1f}%")
+                        with col_comp2:
+                            st.metric("💰 총 PnL", f"${latest['total_pnl']:.2f}")
+                        with col_comp3:
+                            st.metric("⚖️ R:R Ratio", f"{latest['risk_reward_ratio']:.2f}")
+                        with col_comp4:
+                            trend_emoji = "📈" if latest['performance_trend'] == 'improving' else "📉" if latest['performance_trend'] == 'declining' else "➡️"
+                            st.metric("📊 추세", f"{trend_emoji} {latest['performance_trend'].upper()}")
+                        
+                        # 종합 분석 카드들
+                        st.markdown("---")
+                        for idx, row in comprehensive_df.iterrows():
+                            with st.expander(
+                                f"📋 {row['timestamp'].strftime('%Y-%m-%d %H:%M')} | "
+                                f"WR: {row['win_rate']:.1f}% | "
+                                f"PnL: ${row['total_pnl']:.2f} | "
+                                f"Symbols: {row['symbols_analyzed']}",
+                                expanded=(idx == 0)  # 최신 것만 펼침
+                            ):
+                                # 성과 지표
+                                st.markdown("**📊 Performance Metrics:**")
+                                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                                with col_m1:
+                                    st.markdown(f"**총 거래:** `{row['total_trades']}`")
+                                with col_m2:
+                                    st.markdown(f"**승률:** `{row['win_rate']:.1f}%`")
+                                with col_m3:
+                                    st.markdown(f"**최근 승률:** `{row['recent_win_rate']:.1f}%`")
+                                with col_m4:
+                                    st.markdown(f"**R:R:** `{row['risk_reward_ratio']:.2f}`")
+                                
+                                st.markdown("---")
+                                st.markdown("**🧠 AI Analysis:**")
+                                
+                                # Reflection 텍스트 포맷팅
+                                reflection_text = row['reflection_text']
+                                sections = {
+                                    'PERFORMANCE ASSESSMENT': '📊',
+                                    'KEY STRENGTHS': '💪',
+                                    'CRITICAL WEAKNESSES': '⚠️',
+                                    'ACTIONABLE RECOMMENDATIONS': '🎯',
+                                    'SIGNAL VALIDATION GUIDANCE': '✅',
+                                }
+                                
+                                formatted_text = reflection_text
+                                for section, emoji in sections.items():
+                                    if section in formatted_text:
+                                        formatted_text = formatted_text.replace(
+                                            section, 
+                                            f"\n\n**{emoji} {section}**"
+                                        )
+                                
+                                st.markdown(
+                                    f"<div style='background-color: rgba(76, 175, 80, 0.1); "
+                                    f"border-left: 3px solid #4CAF50; "
+                                    f"padding: 15px; border-radius: 5px; white-space: pre-wrap;'>"
+                                    f"{formatted_text}"
+                                    f"</div>",
+                                    unsafe_allow_html=True
+                                )
+                                
+                                st.caption(f"⏰ Generated: {row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+                    else:
+                        st.info("📭 아직 생성된 종합 분석이 없습니다. 거래가 완료되면 자동으로 생성됩니다.")
+                else:
+                    st.warning("⚠️ reflection_history 테이블이 없습니다. 시스템을 재시작하여 테이블을 생성해주세요.")
+            except Exception as comp_err:
+                st.warning(f"종합 분석 조회 실패: {comp_err}")
+            
+            st.markdown("---")
+            st.markdown("### 📝 거래별 신호 분석 (Rule-Based)")
+            st.caption("각 거래 신호에 대한 Rule-Based 검증 결과입니다.")
+            
             # 필터 옵션
             col_filter1, col_filter2, col_filter3 = st.columns([1, 1, 1])
             

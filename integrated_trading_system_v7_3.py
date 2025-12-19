@@ -1077,6 +1077,19 @@ def record_completed_trade(symbol, position_info, exit_price, close_reason='manu
             
             conn.commit()
             logger.info(f"✅ 완료된 거래 기록: {symbol} ({position_type.upper()}) - PnL: ${pnl_usdt:,.2f} ({pnl_percent:.2f}%)")
+            
+            # 🆕 v7.7: 완료된 거래 5건마다 Reflection 생성 트리거
+            try:
+                c.execute("SELECT COUNT(*) FROM completed_trades WHERE close_timestamp >= datetime('now', '-1 hour')")
+                recent_count = c.fetchone()[0]
+                
+                # 최근 1시간 내 5건 이상 완료 시 Reflection 생성
+                if recent_count > 0 and recent_count % 5 == 0:
+                    logger.info(f"🔄 Triggering reflection after {recent_count} recent trades")
+                    # 비동기적으로 실행하지 않고 직접 호출
+                    trigger_reflection_generation()
+            except Exception as refl_err:
+                logger.warning(f"Reflection trigger check failed: {refl_err}")
         else:
             logger.info(f"⏭️  중복 완료 거래 기록 스킵: {symbol}")
         
@@ -1306,6 +1319,19 @@ def init_db_once():
                   position_value REAL,
                   required_margin REAL,
                   liquidation_price REAL)''')
+    
+    # 5. 🆕 v7.7: Reflection History 테이블 (AI 종합 분석 저장)
+    c.execute('''CREATE TABLE IF NOT EXISTS reflection_history
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  timestamp TEXT NOT NULL,
+                  reflection_text TEXT NOT NULL,
+                  total_trades INTEGER,
+                  win_rate REAL,
+                  recent_win_rate REAL,
+                  total_pnl REAL,
+                  risk_reward_ratio REAL,
+                  performance_trend TEXT,
+                  symbols_analyzed TEXT)''')
     
     # 인덱스 생성 (성능 향상)
     c.execute('''CREATE INDEX IF NOT EXISTS idx_trades_timestamp 
@@ -4048,7 +4074,22 @@ def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, m
     risk_score = rule_based_result['risk_score']['total_score']
     approval_score = rule_based_result['approval_score']['total_score']
     
-    # 🆕 v7.6: TP/SL 조정만 요청하는 간단한 프롬프트
+    # 🆕 v7.7: 최신 Reflection 조회
+    latest_reflection = get_latest_reflection(max_age_hours=24)
+    reflection_context = ""
+    if latest_reflection:
+        # Reflection 텍스트를 요약하여 포함 (너무 길면 잘라냄)
+        reflection_summary = latest_reflection[:1500] if len(latest_reflection) > 1500 else latest_reflection
+        reflection_context = f"""
+**RECENT PERFORMANCE REFLECTION (AI Analysis):**
+{reflection_summary}
+
+Use this reflection to inform your TP/SL adjustments. Consider the identified weaknesses and recommendations.
+"""
+    else:
+        reflection_context = "**No recent reflection available.**"
+    
+    # 🆕 v7.7: Reflection을 포함한 프롬프트
     prompt = f"""You are a risk management AI for crypto futures trading.
 
 **TASK:** Adjust ONLY Stop Loss and Take Profit prices based on the market conditions.
@@ -4065,6 +4106,8 @@ def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, m
 - Approval Score: {approval_score}/100
 - Reason: {rule_based_result['reason']}
 
+{reflection_context}
+
 **FIXED PARAMETERS (DO NOT CHANGE):**
 - Leverage: {fixed_leverage}x (FIXED)
 - Position Size: {fixed_position_pct}% (FIXED)
@@ -4078,13 +4121,14 @@ def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, m
 2. Stop Loss: 1.5-2.5x ATR from entry
 3. Take Profit: At least 1.8x the SL distance
 4. Consider nearby support/resistance levels
+5. Apply lessons from the performance reflection if available
 
 **OUTPUT FORMAT (JSON only):**
 {{
     "stop_loss": <price>,
     "take_profit": <price>,
     "pl_ratio": <1.8-5.0>,
-    "reason": "<brief adjustment rationale>"
+    "reason": "<brief adjustment rationale including reflection insights>"
 }}
 
 Return ONLY the JSON object."""
@@ -4542,6 +4586,152 @@ Keep your response concise but packed with specific, actionable insights. Use da
     except Exception as e:
         logger.error(f"Error generating reflection: {e}")
         return None
+
+
+def save_reflection(reflection_text: str, performance: dict, symbols: list = None):
+    """
+    🆕 v7.7: 생성된 AI Reflection을 reflection_history 테이블에 저장
+    
+    Args:
+        reflection_text: generate_reflection에서 생성된 종합 분석 텍스트
+        performance: calculate_performance에서 반환된 성과 데이터
+        symbols: 분석에 포함된 심볼 목록
+    """
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        timestamp = datetime.now().isoformat()
+        symbols_str = ','.join(symbols) if symbols else 'ALL'
+        
+        c.execute("""
+            INSERT INTO reflection_history 
+            (timestamp, reflection_text, total_trades, win_rate, recent_win_rate, 
+             total_pnl, risk_reward_ratio, performance_trend, symbols_analyzed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            timestamp,
+            reflection_text,
+            performance.get('total_trades', 0),
+            performance.get('win_rate', 0),
+            performance.get('recent_win_rate', 0),
+            performance.get('total_pnl', 0),
+            performance.get('risk_reward_ratio', 0),
+            performance.get('recent_trend', 'unknown'),
+            symbols_str
+        ))
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"✅ Reflection saved to history: {len(reflection_text)} chars")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving reflection: {e}")
+        return False
+
+
+def get_latest_reflection(max_age_hours: int = 24) -> str:
+    """
+    🆕 v7.7: 최신 AI Reflection 조회 (AI Validation에서 사용)
+    
+    Args:
+        max_age_hours: 최대 조회 시간 범위 (시간)
+        
+    Returns:
+        str: 최신 reflection 텍스트 또는 None
+    """
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        c.execute("""
+            SELECT reflection_text, timestamp, win_rate, total_pnl, performance_trend
+            FROM reflection_history 
+            WHERE timestamp >= datetime('now', '-' || ? || ' hours')
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """, (max_age_hours,))
+        
+        result = c.fetchone()
+        conn.close()
+        
+        if result:
+            reflection_text, timestamp, win_rate, total_pnl, trend = result
+            logger.info(f"📖 Retrieved reflection from {timestamp}: WR={win_rate:.1f}%, PnL=${total_pnl:.2f}")
+            return reflection_text
+        else:
+            logger.info("📭 No recent reflection found")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error getting latest reflection: {e}")
+        return None
+
+
+def trigger_reflection_generation(symbol: str = None):
+    """
+    🆕 v7.7: Reflection 생성을 트리거하는 함수
+    완료된 거래 발생 시 또는 주기적으로 호출
+    
+    Args:
+        symbol: 특정 심볼 (None이면 전체)
+    """
+    try:
+        conn = get_db_connection()
+        
+        # 최근 거래 데이터 조회 (completed_trades에서)
+        c = conn.cursor()
+        c.execute("""
+            SELECT symbol, side, entry_price, exit_price, pnl_usdt, pnl_percent, 
+                   close_timestamp, is_win
+            FROM completed_trades 
+            ORDER BY close_timestamp DESC
+            LIMIT 50
+        """)
+        
+        trades_data = c.fetchall()
+        
+        if not trades_data or len(trades_data) < 3:
+            logger.info("⏭️ Not enough completed trades for reflection generation")
+            conn.close()
+            return None
+        
+        # DataFrame 생성
+        columns = ['symbol', 'action', 'entry_price', 'exit_price', 'pnl_usdt', 
+                   'pnl_percent', 'timestamp', 'is_win']
+        trades_df = pd.DataFrame(trades_data, columns=columns)
+        
+        # 현재 시장 데이터 (마지막 거래 심볼 기준)
+        last_symbol = trades_df.iloc[0]['symbol'] if not trades_df.empty else 'BTC/USDT'
+        market_data = {
+            'symbol': last_symbol,
+            'current_price': trades_df.iloc[0].get('exit_price', 0) if not trades_df.empty else 0
+        }
+        
+        conn.close()
+        
+        # Reflection 생성
+        reflection = generate_reflection(trades_df, market_data)
+        
+        if reflection:
+            # 성과 데이터 계산
+            performance = calculate_performance(trades_df)
+            
+            # Reflection 저장
+            symbols = trades_df['symbol'].unique().tolist() if 'symbol' in trades_df.columns else []
+            save_reflection(reflection, performance, symbols)
+            
+            logger.info(f"✅ Reflection generated and saved successfully")
+            return reflection
+        else:
+            logger.warning("⚠️ Reflection generation returned empty")
+            return None
+            
+    except Exception as e:
+        logger.error(f"Error triggering reflection: {e}")
+        return None
+
 
 # ============ JSON 추출 헬퍼 함수 ============
 def extract_json_from_text(text: str) -> str:
