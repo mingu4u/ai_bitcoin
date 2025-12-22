@@ -964,6 +964,31 @@ def sync_positions_from_exchange():
                 del current_positions[symbol]
                 clear_peak_profit(symbol)
                 logger.warning(f"⚠️ {symbol} 포지션이 거래소에 없어 메모리에서 제거 및 DB 기록")
+                
+                # 🆕 v7.8: 포지션 종료 감지 시 모든 사용자의 TP/SL 주문 취소
+                try:
+                    total_cancelled = 0
+                    for user_id, user_exchange in exchanges.items():
+                        user_name = USER_CONFIGS[user_id]['name']
+                        cancelled = cancel_symbol_orders(user_exchange, symbol, user_name)
+                        if cancelled > 0:
+                            total_cancelled += cancelled
+                            logger.info(f"[{user_name}] 🗑️ 종료된 포지션 TP/SL {cancelled}개 취소")
+                    
+                    if total_cancelled > 0:
+                        logger.info(f"✅ {symbol} 종료 감지 → 총 {total_cancelled}개 TP/SL 주문 취소 완료")
+                        
+                        if ENABLE_TELEGRAM:
+                            send_telegram_notification(
+                                f"🗑️ <b>TP/SL 자동 정리</b>\n\n"
+                                f"<b>심볼:</b> {symbol}\n"
+                                f"<b>취소된 주문:</b> {total_cancelled}개\n"
+                                f"<b>사유:</b> 포지션 종료 감지\n"
+                                f"⏰ {datetime.now().strftime('%H:%M:%S')}",
+                                'info'
+                            )
+                except Exception as cancel_err:
+                    logger.error(f"❌ {symbol} TP/SL 취소 실패: {cancel_err}")
         
         # 동기화 결과 로깅
         auto_count = sum(1 for pos in current_positions.values() if pos.get('position_type', 'auto') == 'auto')
@@ -1012,6 +1037,92 @@ def cancel_symbol_orders(user_exchange, symbol, user_name="User"):
         
     except Exception as e:
         logger.error(f"[{user_name}] {symbol} 주문 취소 중 오류: {str(e)}")
+        return 0
+
+
+def cleanup_orphan_orders():
+    """
+    🆕 v7.8: 고아 주문 정리 - 포지션 없는 심볼의 열린 주문 모두 취소
+    
+    주기적으로 호출하여 포지션 종료 후 남은 TP/SL 주문을 정리합니다.
+    """
+    total_cancelled = 0
+    orphan_symbols = set()
+    
+    try:
+        logger.info("=== 고아 주문 정리 시작 ===")
+        
+        for user_id, user_exchange in exchanges.items():
+            user_name = USER_CONFIGS[user_id]['name']
+            
+            try:
+                # 1. 모든 열린 주문 조회
+                all_open_orders = user_exchange.fetch_open_orders()
+                
+                if not all_open_orders:
+                    continue
+                
+                # 2. 열린 주문이 있는 심볼 목록
+                order_symbols = set()
+                for order in all_open_orders:
+                    order_symbol = order.get('symbol', '')
+                    if order_symbol:
+                        # 심볼 정규화
+                        normalized = normalize_symbol(order_symbol)
+                        order_symbols.add(normalized)
+                
+                # 3. 각 심볼에 대해 포지션 확인
+                for symbol in order_symbols:
+                    # 메모리에 포지션이 있으면 스킵
+                    if symbol in current_positions:
+                        continue
+                    
+                    # 거래소에서 실제 포지션 확인
+                    try:
+                        positions = user_exchange.fetch_positions([symbol])
+                        has_position = False
+                        
+                        for pos in positions:
+                            if float(pos.get('contracts', 0)) != 0:
+                                has_position = True
+                                break
+                        
+                        if not has_position:
+                            # 포지션 없는데 주문 있음 → 취소
+                            cancelled = cancel_symbol_orders(user_exchange, symbol, user_name)
+                            if cancelled > 0:
+                                total_cancelled += cancelled
+                                orphan_symbols.add(symbol)
+                                logger.warning(f"[{user_name}] 🧹 고아 주문 정리: {symbol} - {cancelled}개 취소")
+                                
+                    except Exception as pos_err:
+                        logger.debug(f"[{user_name}] {symbol} 포지션 확인 실패: {pos_err}")
+                        continue
+                        
+            except Exception as user_err:
+                logger.error(f"[{user_name}] 고아 주문 정리 중 오류: {user_err}")
+                continue
+        
+        # 결과 로깅
+        if total_cancelled > 0:
+            logger.info(f"=== 고아 주문 정리 완료: {total_cancelled}개 취소 (심볼: {', '.join(orphan_symbols)}) ===")
+            
+            if ENABLE_TELEGRAM:
+                send_telegram_notification(
+                    f"🧹 <b>고아 주문 자동 정리</b>\n\n"
+                    f"<b>취소된 주문:</b> {total_cancelled}개\n"
+                    f"<b>정리된 심볼:</b> {', '.join(orphan_symbols)}\n"
+                    f"<b>사유:</b> 포지션 없는 TP/SL 주문\n"
+                    f"⏰ {datetime.now().strftime('%H:%M:%S')}",
+                    'info'
+                )
+        else:
+            logger.info("=== 고아 주문 정리 완료: 정리할 주문 없음 ===")
+        
+        return total_cancelled
+        
+    except Exception as e:
+        logger.error(f"고아 주문 정리 오류: {e}")
         return 0
 
 
@@ -8940,6 +9051,8 @@ def initialize_bot():
     # 주기적 데이터 기록 스레드 시작
     def periodic_data_recording():
         """주기적으로 잔고와 포지션 데이터를 기록"""
+        cleanup_counter = 0  # 🆕 v7.8: 고아 주문 정리 주기 카운터
+        
         while True:
             try:
                 # 잔고 스냅샷 (5분마다)
@@ -8948,6 +9061,13 @@ def initialize_bot():
                 # 포지션이 있을 때만 히스토리 기록
                 if len(current_positions) > 0:
                     record_position_history(exchange)
+                
+                # 🆕 v7.8: 고아 주문 정리 (15분마다 = 5분 * 3)
+                cleanup_counter += 1
+                if cleanup_counter >= 3:
+                    cleanup_counter = 0
+                    logger.info("🧹 주기적 고아 주문 정리 실행...")
+                    cleanup_orphan_orders()
                 
                 # 5분 대기
                 time.sleep(300)
