@@ -666,6 +666,15 @@ SYMBOL_CONFIG = {
         'ai_validation': True,
         'ai_monitoring': True
     },
+    'RAYSOL/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
     'COTI/USDT': {
         'leverage': 20,
         'position_size_percent': 40,
@@ -675,7 +684,7 @@ SYMBOL_CONFIG = {
         'ai_validation': True,
         'ai_monitoring': True
     },
-    'RAYSOL/USDT': {
+    'SOON/USDT': {
         'leverage': 20,
         'position_size_percent': 40,
         'min_position_size': 10,
@@ -683,7 +692,43 @@ SYMBOL_CONFIG = {
         'enabled': True,
         'ai_validation': True,
         'ai_monitoring': True
-    }
+    },
+    'KERNEL/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'SYN/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'HYPE/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'API3/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -7865,7 +7910,17 @@ def webhook():
             'RAYSOLUSDT': 'RAYSOL/USDT',
             'RAYSOLUSDT.P': 'RAYSOL/USDT',
             'COTIUSDT': 'COTI/USDT',
-            'COTIUSDT.P': 'COTI/USDT'
+            'COTIUSDT.P': 'COTI/USDT',
+            'SOONUSDT': 'SOON/USDT',
+            'SOONUSDT.P': 'SOON/USDT',
+            'KERNELUSDT': 'KERNEL/USDT',
+            'KERNELUSDT.P': 'KERNEL/USDT',
+            'SYNUSDT': 'SYN/USDT',
+            'SYNUSDT.P': 'SYN/USDT',
+            'HYPEUSDT': 'HYPE/USDT',
+            'HYPEUSDT.P': 'HYPE/USDT',
+            'API3USDT': 'API3/USDT',
+            'API3USDT.P': 'API3/USDT',                
         }
         
         original_symbol = symbol
