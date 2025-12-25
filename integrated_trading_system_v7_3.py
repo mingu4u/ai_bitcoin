@@ -1,11 +1,50 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║              INTEGRATED TRADING SYSTEM v7.6 RULE-BASED                       ║
+║              INTEGRATED TRADING SYSTEM v7.4 ENHANCED                         ║
 ║                   Multi-User Crypto Trading Bot                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  Version: 7.6.0                                                              ║
-║  Last Updated: 2025-12-14                                                    ║
-║  Base Version: v7.5 RULE-BASED                                               ║
+║  Version: 7.4.0                                                              ║
+║  Last Updated: 2025-12-25                                                    ║
+║  Base Version: v7.6 RULE-BASED → v7.4 ENHANCED                               ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                     v7.4 CHANGELOG (MEAN REVERSION + DYNAMIC FILTER)         ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  🆕 핵심 개선 1: ATR 기반 적응형 손실 제한                                   ║
+║  - 문제: 고정 손실 제한이 알트코인 변동성에 맞지 않음 (노이즈에 민감)         ║
+║  - 해결: ATR의 2.5배 기준 동적 손실 제한 (-25% ~ -40%)                       ║
+║  - 효과: 단기 노이즈에 덜 민감, 정상 변동성 내에서 포지션 유지               ║
+║                                                                              ║
+║  🆕 핵심 개선 2: DB 기반 동적 심볼 필터                                      ║
+║  - 문제: 정적 블랙리스트는 시장 상황 반영 못함                                ║
+║  - 해결: 최근 30일 성과 기반 자동 필터링                                     ║
+║    • 3회+ 거래 & 0% 승률 → BLACKLIST (거래 금지)                            ║
+║    • 승률 <35% & 누적손실 >$500 → REDUCED (사이즈 30%)                       ║
+║    • 거래 없음 → NEUTRAL (정상 거래 허용)                                    ║
+║    • 승률 >60% & 수익 → PREFERRED (사이즈 120%)                              ║
+║                                                                              ║
+║  🆕 핵심 개선 3: Mean Reversion 기회 포착                                    ║
+║  - 문제: 극단적 과매도/과매수에서 신호 방향 진입 기회 놓침                    ║
+║  - 해결: 저점 매수(BUY)/고점 매도(SELL) 신호 Approve 로직 추가               ║
+║    • 4H RSI <25 + BB 하단 이탈 + Stoch 과매도 → BUY 신호 Approve             ║
+║    • 4H RSI >75 + BB 상단 이탈 + Stoch 과매수 → SELL 신호 Approve            ║
+║    • 점수 6점 이상 시 Mean Reversion 진입 허용                               ║
+║                                                                              ║
+║  🆕 핵심 개선 4: Contrarian 진입 조건 강화                                   ║
+║  - 문제: 기존 반대매매 조건이 너무 느슨해서 손실 발생                         ║
+║  - 해결: 더 극단적 조건에서만 반대매매 허용                                   ║
+║    • 필수: 3개 타임프레임 모두 극단값 (4H+1H+15m 동시)                       ║
+║    • 점수 8점 이상 필요 (기존 6점에서 상향)                                  ║
+║    • MACD 다이버전스 + 볼륨 클라이맥스 추가 확인                             ║
+║                                                                              ║
+║  📊 v7.4 요약:                                                               ║
+║  ┌─────────────────────────────────────────────────────────────────────┐     ║
+║  │  1. 손실 제한: 고정값 → ATR 기반 적응형 (-25%~-40%)                 │     ║
+║  │  2. 심볼 필터: 정적 → DB 기반 동적 (30일 성과)                      │     ║
+║  │  3. Mean Reversion: 극단적 과매도/과매수에서 신호방향 Approve        │     ║
+║  │  4. Contrarian: 3TF 극단 + 8점 이상에서만 반대매매                  │     ║
+║  │  5. 4H 가중치: 감소 (30%), 1H 가중치 증가 (35%)                     │     ║
+║  └─────────────────────────────────────────────────────────────────────┘     ║
+║                                                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                     v7.6 CHANGELOG (BALANCED EXIT LOGIC)                     ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
@@ -159,6 +198,515 @@ USER_CONFIGS = {
 SERVER_PORT = 5000  # 하나의 서버에서 모든 유저 관리
 ENABLE_TELEGRAM = True  # Primary User가 텔레그램 관리
 AI_MONITOR_INTERVAL = 5  # AI 포지션 모니터링 간격 (분)
+
+# ============ 🆕 v7.4 새로운 상수 ============
+# 적응형 손실 제한 설정 (보수적 기준)
+V74_ADAPTIVE_LOSS_MIN = -15  # 최소 손실 제한 (20x 기준 실제 -0.75% 가격변동)
+V74_ADAPTIVE_LOSS_MAX = -25  # 최대 손실 제한 (20x 기준 실제 -1.25% 가격변동)
+V74_ATR_MULTIPLIER = 2.0     # ATR 기반 손실 제한 배수 (2.5 → 2.0으로 낮춤)
+
+# Mean Reversion 설정
+V74_MEAN_REVERSION_THRESHOLD = 6  # Mean Reversion 진입 최소 점수
+V74_CONTRARIAN_THRESHOLD = 8      # Contrarian 진입 최소 점수 (더 엄격)
+
+# 동적 심볼 필터 설정
+V74_SYMBOL_FILTER_LOOKBACK_DAYS = 30  # 심볼 성과 조회 기간
+V74_BLACKLIST_MIN_TRADES = 3          # 블랙리스트 최소 거래 수
+V74_BLACKLIST_WIN_RATE = 0            # 블랙리스트 승률 기준
+V74_REDUCED_WIN_RATE = 35             # 축소 사이즈 승률 기준
+V74_REDUCED_MIN_LOSS = -500           # 축소 사이즈 누적손실 기준
+
+
+# ============ 🆕 v7.4 적응형 손실 제한 함수 ============
+def get_adaptive_loss_limit(symbol: str, atr_percent: float, leverage: int) -> float:
+    """
+    🆕 v7.4: ATR 기반 적응형 손실 제한 (보수적 버전)
+    - 알트코인 변동성을 고려한 동적 임계값
+    - 레버리지 반영
+    - 노이즈에 덜 민감하면서도 안전한 설계
+    
+    Args:
+        symbol: 심볼명 (예: 'BTC/USDT')
+        atr_percent: ATR을 가격 대비 퍼센트로 변환한 값
+        leverage: 레버리지 배수
+        
+    Returns:
+        float: 적응형 손실 제한 (음수 퍼센트)
+        
+    손실 제한 범위:
+    - BTC/ETH: -15% ~ -20% (실제 가격 -0.75% ~ -1%)
+    - 알트코인: -18% ~ -25% (실제 가격 -0.9% ~ -1.25%)
+    """
+    # 기본 손실 제한: ATR의 2배 (노이즈 필터링, 하지만 너무 넓지 않게)
+    base_limit = atr_percent * V74_ATR_MULTIPLIER
+    
+    # 심볼 카테고리별 조정
+    if 'BTC' in symbol or 'ETH' in symbol:
+        # 메이저: 변동성 낮음, 더 타이트한 제한 (-15% ~ -20%)
+        adjusted_limit = max(V74_ADAPTIVE_LOSS_MIN, -base_limit * leverage * 0.7)
+        max_limit = -20  # 메이저는 최대 -20%
+    else:
+        # 알트코인: 변동성 높음, 약간 더 넓은 제한 (-18% ~ -25%)
+        adjusted_limit = max(V74_ADAPTIVE_LOSS_MIN * 1.2, -base_limit * leverage * 0.9)
+        max_limit = V74_ADAPTIVE_LOSS_MAX  # 알트는 최대 -25%
+    
+    # 최대 제한 적용 (절대 max_limit 이하로는 안감)
+    return max(adjusted_limit, max_limit)
+
+
+def should_emergency_exit_v74(current_pnl: float, holding_minutes: int, 
+                               atr_percent: float, leverage: int, symbol: str) -> tuple:
+    """
+    🆕 v7.4: 긴급 탈출 조건 - 보수적 버전
+    기존 고정 손실 제한 대신 ATR 기반 적응형 제한 사용
+    
+    Args:
+        current_pnl: 현재 손익 (%)
+        holding_minutes: 보유 시간 (분)
+        atr_percent: ATR 퍼센트
+        leverage: 레버리지
+        symbol: 심볼명
+        
+    Returns:
+        tuple: (should_exit: bool, reason: str or None)
+    """
+    adaptive_limit = get_adaptive_loss_limit(symbol, atr_percent, leverage)
+    
+    # 시간 기반 손실 제한 (보수적으로 조정)
+    # 시간이 지날수록 더 넓은 제한 허용 (포지션이 발전할 시간 제공)
+    time_based_limits = {
+        15: adaptive_limit * 0.5,   # 15분: 적응형 제한의 50% (빠른 손절)
+        30: adaptive_limit * 0.65,  # 30분: 적응형 제한의 65%
+        60: adaptive_limit * 0.8,   # 60분: 적응형 제한의 80%
+        120: adaptive_limit,        # 2시간: 적응형 제한 100%
+    }
+    
+    for minutes, limit in sorted(time_based_limits.items()):
+        if holding_minutes <= minutes:
+            if current_pnl <= limit:
+                return True, f"v7.4 Time-adaptive limit: {current_pnl:.1f}% at {holding_minutes}min (limit: {limit:.1f}%)"
+            break
+    
+    # 절대 손실 제한 (보수적으로 -30%로 낮춤)
+    ABSOLUTE_LIMIT = -30  # 계좌의 30% 손실시 강제 탈출 (기존 -50%에서 낮춤)
+    if current_pnl <= ABSOLUTE_LIMIT:
+        return True, f"v7.4 CATASTROPHIC: Absolute loss {current_pnl:.1f}% exceeds -30% limit"
+    
+    return False, None
+
+
+# ============ 🆕 v7.4 DB 기반 동적 심볼 필터 함수 ============
+def get_symbol_performance_filter(symbol: str, lookback_days: int = 30) -> dict:
+    """
+    🆕 v7.4: 최근 N일간 심볼 성과 기반 동적 필터링
+    - 거래 없으면 중립 (블랙리스트 아님!)
+    - 성과에 따라 포지션 사이즈 조절
+    
+    Args:
+        symbol: 심볼명 (예: 'BTC/USDT')
+        lookback_days: 조회 기간 (일)
+        
+    Returns:
+        dict: {
+            'status': 'BLACKLIST' | 'REDUCED' | 'CAUTION' | 'NORMAL' | 'PREFERRED' | 'NEUTRAL',
+            'size_multiplier': float (0.0 ~ 1.2),
+            'reason': str
+        }
+    """
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        cutoff_date = datetime.now() - timedelta(days=lookback_days)
+        
+        # 최근 30일 해당 심볼 거래 조회
+        c.execute("""
+            SELECT 
+                COUNT(*) as total_trades,
+                SUM(CASE WHEN pnl_usdt > 0 THEN 1 ELSE 0 END) as wins,
+                SUM(pnl_usdt) as total_pnl,
+                AVG(pnl_usdt) as avg_pnl,
+                MIN(pnl_usdt) as worst_trade
+            FROM trades 
+            WHERE symbol = ? 
+            AND close_timestamp >= ?
+            AND close_timestamp IS NOT NULL
+        """, (symbol, cutoff_date.isoformat()))
+        
+        row = c.fetchone()
+        conn.close()
+        
+        total_trades = row[0] or 0
+        wins = row[1] or 0
+        total_pnl = row[2] or 0
+        avg_pnl = row[3] or 0
+        worst_trade = row[4] or 0
+        
+        # 거래 없으면 중립 반환 (블랙리스트 아님!)
+        if total_trades == 0:
+            return {
+                'status': 'NEUTRAL',
+                'size_multiplier': 1.0,
+                'reason': f'No trades in last {lookback_days} days - allowing normal trading'
+            }
+        
+        win_rate = (wins / total_trades) * 100 if total_trades > 0 else 0
+        
+        # 동적 필터링 규칙
+        if total_trades >= V74_BLACKLIST_MIN_TRADES and win_rate == V74_BLACKLIST_WIN_RATE:
+            # 3회 이상 거래 & 0% 승률 → 블랙리스트
+            return {
+                'status': 'BLACKLIST',
+                'size_multiplier': 0,
+                'reason': f'{total_trades} trades, 0% win rate, total PnL: ${total_pnl:.2f}'
+            }
+        
+        elif total_trades >= 2 and win_rate < V74_REDUCED_WIN_RATE and total_pnl < V74_REDUCED_MIN_LOSS:
+            # 2회 이상 & 승률 35% 미만 & 누적손실 $500 이상 → 축소
+            return {
+                'status': 'REDUCED',
+                'size_multiplier': 0.3,
+                'reason': f'{win_rate:.0f}% win rate, ${total_pnl:.2f} total PnL'
+            }
+        
+        elif win_rate < 50 and avg_pnl < 0:
+            # 승률 50% 미만 & 평균 손실 → 소폭 축소
+            return {
+                'status': 'CAUTION',
+                'size_multiplier': 0.6,
+                'reason': f'{win_rate:.0f}% win rate, avg PnL: ${avg_pnl:.2f}'
+            }
+        
+        elif win_rate >= 60 and total_pnl > 0:
+            # 우수 성과 → 사이즈 증가 허용
+            return {
+                'status': 'PREFERRED',
+                'size_multiplier': 1.2,
+                'reason': f'{win_rate:.0f}% win rate, ${total_pnl:.2f} profit'
+            }
+        
+        return {
+            'status': 'NORMAL',
+            'size_multiplier': 1.0,
+            'reason': f'{win_rate:.0f}% win rate over {total_trades} trades'
+        }
+        
+    except Exception as e:
+        logger.warning(f"v7.4 Symbol filter error for {symbol}: {e}")
+        return {
+            'status': 'NEUTRAL',
+            'size_multiplier': 1.0,
+            'reason': f'Filter error, allowing normal trading'
+        }
+
+
+def calculate_position_size_v74(base_size: float, symbol: str) -> float:
+    """
+    🆕 v7.4: 동적 포지션 사이즈 계산
+    DB 기반 심볼 성과를 반영하여 사이즈 조정
+    
+    Args:
+        base_size: 기본 포지션 사이즈 (%)
+        symbol: 심볼명
+        
+    Returns:
+        float: 조정된 포지션 사이즈 (%)
+    """
+    filter_result = get_symbol_performance_filter(symbol)
+    
+    if filter_result['status'] == 'BLACKLIST':
+        logger.warning(f"🚫 v7.4 {symbol} BLACKLISTED: {filter_result['reason']}")
+        return 0
+    
+    adjusted_size = base_size * filter_result['size_multiplier']
+    
+    if filter_result['size_multiplier'] != 1.0:
+        logger.info(f"📊 v7.4 {symbol} size adjusted: {base_size}% → {adjusted_size:.1f}% ({filter_result['status']})")
+    
+    return adjusted_size
+
+
+# ============ 🆕 v7.4 Mean Reversion 기회 포착 함수 ============
+def check_mean_reversion_opportunity(signal_action: str, df_15min, df_hourly, df_4h) -> dict:
+    """
+    🆕 v7.4: 극단적 과매도/과매수에서 신호 방향 Approve
+    - 추세 역행이 아닌, 반등/반락 기회 포착
+    - 신호 방향을 그대로 Approve하는 기준
+    
+    Args:
+        signal_action: 웹훅 신호 방향 ('buy' or 'sell')
+        df_15min, df_hourly, df_4h: 각 타임프레임 데이터프레임
+        
+    Returns:
+        dict: {
+            'is_mean_reversion': bool,
+            'confidence_boost': int (0~30),
+            'reason': str
+        }
+    """
+    # 안전한 값 추출 헬퍼
+    def safe_get(df, col, default=50):
+        try:
+            val = df[col].iloc[-1]
+            return float(val) if pd.notna(val) else default
+        except:
+            return default
+    
+    # 지표 추출
+    rsi_4h = safe_get(df_4h, 'rsi', 50)
+    rsi_1h = safe_get(df_hourly, 'rsi', 50)
+    rsi_15m = safe_get(df_15min, 'rsi', 50)
+    
+    stoch_k_4h = safe_get(df_4h, 'stoch_k', 50)
+    stoch_d_4h = safe_get(df_4h, 'stoch_d', 50)
+    stoch_k_1h = safe_get(df_hourly, 'stoch_k', 50)
+    
+    cmf_4h = safe_get(df_4h, 'cmf', 0)
+    cmf_1h = safe_get(df_hourly, 'cmf', 0)
+    
+    # 볼린저 밴드 위치 계산
+    bb_upper_4h = safe_get(df_4h, 'bb_bbh', 0)
+    bb_lower_4h = safe_get(df_4h, 'bb_bbl', 0)
+    bb_middle_4h = safe_get(df_4h, 'bb_bbm', 0)
+    current_price = safe_get(df_15min, 'close', 0)
+    
+    bb_percent_4h = 50  # 기본값
+    if bb_upper_4h > bb_lower_4h:
+        bb_range = bb_upper_4h - bb_lower_4h
+        bb_percent_4h = ((current_price - bb_lower_4h) / bb_range) * 100
+    
+    result = {
+        'is_mean_reversion': False,
+        'confidence_boost': 0,
+        'reason': ''
+    }
+    
+    # ========== BUY 신호 + 극단적 과매도 ==========
+    if signal_action.lower() == 'buy':
+        oversold_score = 0
+        reasons = []
+        
+        # RSI 과매도 체크 (다중 타임프레임)
+        if rsi_4h < 25:
+            oversold_score += 3
+            reasons.append(f'4H RSI {rsi_4h:.1f} (extreme oversold)')
+        elif rsi_4h < 30:
+            oversold_score += 1.5
+            reasons.append(f'4H RSI {rsi_4h:.1f} (oversold)')
+            
+        if rsi_1h < 25:
+            oversold_score += 2
+            reasons.append(f'1H RSI {rsi_1h:.1f}')
+        elif rsi_1h < 30:
+            oversold_score += 1
+            
+        # 볼린저 밴드 하단 이탈/근접
+        if bb_percent_4h < 5:  # 하단 밴드 아래
+            oversold_score += 2.5
+            reasons.append(f'4H BB {bb_percent_4h:.0f}% (below lower band)')
+        elif bb_percent_4h < 15:
+            oversold_score += 1.5
+            reasons.append(f'4H BB {bb_percent_4h:.0f}%')
+            
+        # 스토캐스틱 과매도
+        if stoch_k_4h < 15 and stoch_d_4h < 20:
+            oversold_score += 2
+            reasons.append(f'4H Stoch K:{stoch_k_4h:.0f}/D:{stoch_d_4h:.0f}')
+        elif stoch_k_1h < 10:
+            oversold_score += 1.5
+            reasons.append(f'1H Stoch K:{stoch_k_1h:.0f}')
+        
+        # CMF 반등 조짐 (매도세 약화 또는 매수세 유입 시작)
+        if cmf_4h < -0.15 and cmf_1h > cmf_4h:  # 4H 강한 매도세지만 1H에서 개선
+            oversold_score += 1.5
+            reasons.append('CMF divergence (selling exhaustion)')
+        
+        # Mean Reversion BUY 조건: 점수 6점 이상
+        if oversold_score >= V74_MEAN_REVERSION_THRESHOLD:
+            result['is_mean_reversion'] = True
+            result['confidence_boost'] = min(30, int(oversold_score * 4))  # 최대 30% 부스트
+            result['reason'] = f"v7.4 MEAN REVERSION BUY: {', '.join(reasons[:3])}"
+    
+    # ========== SELL 신호 + 극단적 과매수 ==========
+    elif signal_action.lower() == 'sell':
+        overbought_score = 0
+        reasons = []
+        
+        # RSI 과매수 체크
+        if rsi_4h > 75:
+            overbought_score += 3
+            reasons.append(f'4H RSI {rsi_4h:.1f} (extreme overbought)')
+        elif rsi_4h > 70:
+            overbought_score += 1.5
+            reasons.append(f'4H RSI {rsi_4h:.1f} (overbought)')
+            
+        if rsi_1h > 75:
+            overbought_score += 2
+            reasons.append(f'1H RSI {rsi_1h:.1f}')
+        elif rsi_1h > 70:
+            overbought_score += 1
+            
+        # 볼린저 밴드 상단 이탈/근접
+        if bb_percent_4h > 95:  # 상단 밴드 위
+            overbought_score += 2.5
+            reasons.append(f'4H BB {bb_percent_4h:.0f}% (above upper band)')
+        elif bb_percent_4h > 85:
+            overbought_score += 1.5
+            reasons.append(f'4H BB {bb_percent_4h:.0f}%')
+            
+        # 스토캐스틱 과매수
+        if stoch_k_4h > 85 and stoch_d_4h > 80:
+            overbought_score += 2
+            reasons.append(f'4H Stoch K:{stoch_k_4h:.0f}/D:{stoch_d_4h:.0f}')
+        elif stoch_k_1h > 90:
+            overbought_score += 1.5
+            reasons.append(f'1H Stoch K:{stoch_k_1h:.0f}')
+        
+        # CMF 반락 조짐
+        if cmf_4h > 0.15 and cmf_1h < cmf_4h:  # 4H 강한 매수세지만 1H에서 약화
+            overbought_score += 1.5
+            reasons.append('CMF divergence (buying exhaustion)')
+        
+        # Mean Reversion SELL 조건: 점수 6점 이상
+        if overbought_score >= V74_MEAN_REVERSION_THRESHOLD:
+            result['is_mean_reversion'] = True
+            result['confidence_boost'] = min(30, int(overbought_score * 4))
+            result['reason'] = f"v7.4 MEAN REVERSION SELL: {', '.join(reasons[:3])}"
+    
+    return result
+
+
+# ============ 🆕 v7.4 Contrarian 진입 조건 강화 함수 ============
+def check_contrarian_entry_v74(signal_action: str, df_15min, df_hourly, df_4h) -> dict:
+    """
+    🆕 v7.4: 반대매매 진입 조건 - 매우 극단적 상황에서만
+    - 신호가 BUY인데 극단적 과매수 → SELL 반대매매
+    - 신호가 SELL인데 극단적 과매도 → BUY 반대매매
+    
+    ⚠️ 기존보다 훨씬 엄격한 조건!
+    - 필수: 3개 타임프레임 모두 극단값
+    - 점수: 8점 이상 (기존 6점에서 상향)
+    
+    Args:
+        signal_action: 웹훅 신호 방향
+        df_15min, df_hourly, df_4h: 각 타임프레임 데이터프레임
+        
+    Returns:
+        dict: {
+            'should_contrarian': bool,
+            'contrarian_action': str or None,
+            'confidence': int,
+            'reason': str
+        }
+    """
+    # 안전한 값 추출 헬퍼
+    def safe_get(df, col, default=50):
+        try:
+            val = df[col].iloc[-1]
+            return float(val) if pd.notna(val) else default
+        except:
+            return default
+    
+    # 지표 추출
+    rsi_4h = safe_get(df_4h, 'rsi', 50)
+    rsi_1h = safe_get(df_hourly, 'rsi', 50)
+    rsi_15m = safe_get(df_15min, 'rsi', 50)
+    
+    adx_4h = safe_get(df_4h, 'adx', 25)
+    
+    macd_diff_4h = safe_get(df_4h, 'macd_diff', 0)
+    macd_diff_1h = safe_get(df_hourly, 'macd_diff', 0)
+    
+    # 볼린저 밴드 위치 계산
+    bb_upper_4h = safe_get(df_4h, 'bb_bbh', 0)
+    bb_lower_4h = safe_get(df_4h, 'bb_bbl', 0)
+    current_price = safe_get(df_15min, 'close', 0)
+    
+    bb_percent_4h = 50
+    if bb_upper_4h > bb_lower_4h:
+        bb_range = bb_upper_4h - bb_lower_4h
+        bb_percent_4h = ((current_price - bb_lower_4h) / bb_range) * 100
+    
+    result = {
+        'should_contrarian': False,
+        'contrarian_action': None,
+        'confidence': 0,
+        'reason': ''
+    }
+    
+    # ========== BUY 신호 → SELL 반대매매 (매우 엄격) ==========
+    if signal_action.lower() == 'buy':
+        contrarian_score = 0
+        reasons = []
+        
+        # 필수 조건 1: 3개 타임프레임 모두 과매수
+        if rsi_4h > 80 and rsi_1h > 75 and rsi_15m > 70:
+            contrarian_score += 4
+            reasons.append(f'All TF overbought (4H:{rsi_4h:.0f}/1H:{rsi_1h:.0f}/15m:{rsi_15m:.0f})')
+        else:
+            # 필수 조건 미충족 → 반대매매 불가
+            return result
+        
+        # 추가 조건: BB 극단적 상단 이탈
+        if bb_percent_4h > 98:
+            contrarian_score += 3
+            reasons.append(f'4H BB {bb_percent_4h:.0f}% (extreme)')
+        elif bb_percent_4h > 92:
+            contrarian_score += 1.5
+        
+        # 추가 조건: MACD 다이버전스 (가격 상승 but 모멘텀 약화)
+        if macd_diff_4h < macd_diff_1h < 0:  # 히스토그램 음수 전환
+            contrarian_score += 2
+            reasons.append('MACD bearish divergence')
+        
+        # 추가 조건: ADX 약화 (추세 소진)
+        if adx_4h < 20:
+            contrarian_score += 1
+            reasons.append(f'ADX weak ({adx_4h:.0f})')
+        
+        # 반대매매 조건: 점수 8점 이상 (매우 엄격)
+        if contrarian_score >= V74_CONTRARIAN_THRESHOLD:
+            result['should_contrarian'] = True
+            result['contrarian_action'] = 'sell'
+            result['confidence'] = min(50, int(contrarian_score * 5))  # 최대 50%
+            result['reason'] = f"v7.4 CONTRARIAN SELL: {', '.join(reasons[:2])}"
+    
+    # ========== SELL 신호 → BUY 반대매매 (매우 엄격) ==========
+    elif signal_action.lower() == 'sell':
+        contrarian_score = 0
+        reasons = []
+        
+        # 필수 조건 1: 3개 타임프레임 모두 과매도
+        if rsi_4h < 20 and rsi_1h < 25 and rsi_15m < 30:
+            contrarian_score += 4
+            reasons.append(f'All TF oversold (4H:{rsi_4h:.0f}/1H:{rsi_1h:.0f}/15m:{rsi_15m:.0f})')
+        else:
+            return result
+        
+        # BB 극단적 하단 이탈
+        if bb_percent_4h < 2:
+            contrarian_score += 3
+            reasons.append(f'4H BB {bb_percent_4h:.0f}% (extreme)')
+        elif bb_percent_4h < 8:
+            contrarian_score += 1.5
+        
+        # MACD 다이버전스 (가격 하락 but 모멘텀 반등)
+        if macd_diff_4h > macd_diff_1h > 0:
+            contrarian_score += 2
+            reasons.append('MACD bullish divergence')
+        
+        # ADX 약화
+        if adx_4h < 20:
+            contrarian_score += 1
+            reasons.append(f'ADX weak ({adx_4h:.0f})')
+        
+        if contrarian_score >= V74_CONTRARIAN_THRESHOLD:
+            result['should_contrarian'] = True
+            result['contrarian_action'] = 'buy'
+            result['confidence'] = min(50, int(contrarian_score * 5))
+            result['reason'] = f"v7.4 CONTRARIAN BUY: {', '.join(reasons[:2])}"
+    
+    return result
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO, 
@@ -3984,9 +4532,14 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     
     🆕 v7.6: Leverage, Position Size는 CONFIG 고정값 사용
     
+    🆕 v7.4 Enhanced:
+    - 동적 심볼 필터 (DB 기반 30일 성과)
+    - Mean Reversion 기회 포착 (신호 방향 Approve)
+    - Contrarian 진입 조건 강화 (8점 이상)
+    
     Returns:
         dict: {
-            'decision': 'approve' | 'reject' | 'modify' | 'reverse',
+            'decision': 'approve' | 'reject' | 'modify' | 'reverse' | 'mean_reversion',
             'modified_action': str,  # reverse일 경우 반전된 액션
             'risk_score': dict,
             'approval_score': dict,
@@ -4006,6 +4559,42 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     base_position_pct = config.get('position_size_percent', 30)
     
     logger.info(f"📌 CONFIG 기반 고정값: Leverage={base_leverage}x, Position={base_position_pct}%")
+    
+    # ========== 🆕 v7.4 STEP 0: 동적 심볼 필터 체크 ==========
+    symbol_filter = get_symbol_performance_filter(symbol, V74_SYMBOL_FILTER_LOOKBACK_DAYS)
+    
+    if symbol_filter['status'] == 'BLACKLIST':
+        logger.warning(f"🚫 v7.4 {symbol} BLACKLISTED by dynamic filter: {symbol_filter['reason']}")
+        
+        # ATR 계산
+        try:
+            atr_4h = df_4h['atr'].iloc[-1] if 'atr' in df_4h.columns else current_price * 0.02
+        except:
+            atr_4h = current_price * 0.02
+            
+        return {
+            'decision': 'reject',
+            'modified_action': action,
+            'risk_score': {'total_score': 10, 'details': [f'v7.4 BLACKLIST: {symbol_filter["reason"]}'], 'is_high_risk': True},
+            'approval_score': {'total_score': 0, 'details': ['Blocked by dynamic symbol filter'], 'is_approved': False},
+            'reverse_score': {'total_score': 0, 'signal_count': 0, 'details': [], 'should_reverse': False, 'should_hold': False},
+            'reason': f"v7.4 BLACKLIST: {symbol_filter['reason']}",
+            'recommended_params': {
+                'leverage': 0,
+                'position_percent': 0,
+                'stop_loss': 0,
+                'take_profit': 0,
+                'current_price': current_price,
+                'atr': atr_4h
+            },
+            'v74_symbol_filter': symbol_filter
+        }
+    
+    # 동적 포지션 사이즈 조정
+    adjusted_position_pct = calculate_position_size_v74(base_position_pct, symbol)
+    if symbol_filter['status'] != 'NORMAL' and symbol_filter['status'] != 'NEUTRAL':
+        logger.info(f"📊 v7.4 Symbol filter: {symbol_filter['status']} - Size multiplier: {symbol_filter['size_multiplier']}")
+    
     
     # 1. Reverse Score 계산 (먼저 체크 - 극단적 신호 감지)
     reverse_result = calculate_reverse_score(df_15min, df_hourly, df_4h, action)
@@ -4030,15 +4619,44 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     except:
         atr_4h = current_price * 0.02
     
+    # ========== 🆕 v7.4 Mean Reversion 체크 (최우선) ==========
+    mean_reversion = check_mean_reversion_opportunity(action, df_15min, df_hourly, df_4h)
+    
+    # ========== 🆕 v7.4 Contrarian 체크 (강화된 조건) ==========
+    contrarian = check_contrarian_entry_v74(action, df_15min, df_hourly, df_4h)
+    
     # ========== 결정 로직 ==========
     modified_action = action  # 기본값: 원래 액션 유지
     
-    # 🔄 STEP 0: 반전 조건 체크 (최우선)
-    # v7.4: 6점 이상 또는 2개 이상 신호
-    if reverse_result['should_reverse']:
+    # 🆕 v7.4 STEP -1: Mean Reversion 기회 포착 (신호 방향 Approve)
+    # 극단적 과매도에서 BUY 신호 또는 극단적 과매수에서 SELL 신호 → Approve
+    if mean_reversion['is_mean_reversion']:
+        decision = 'mean_reversion'
+        modified_action = action  # 원래 신호 방향 유지!
+        
+        # Approval Score에 부스트 적용
+        boosted_approval = approval_score + mean_reversion['confidence_boost']
+        
+        reason = f"🎯 v7.4 {mean_reversion['reason']} | Boosted Approval: {approval_score}+{mean_reversion['confidence_boost']}={boosted_approval}"
+        
+        if action.lower() == 'buy':
+            # 과매도에서 매수: 반등 노림, 좀 더 타이트한 SL
+            default_sl = current_price - (atr_4h * 1.8)
+            default_tp = current_price + (atr_4h * 3.0)
+        else:
+            # 과매수에서 매도: 하락 노림
+            default_sl = current_price + (atr_4h * 1.8)
+            default_tp = current_price - (atr_4h * 3.0)
+        
+        logger.info(f"🎯 v7.4 Mean Reversion APPROVED: {symbol} {action.upper()}")
+        logger.info(f"   {mean_reversion['reason']}")
+    
+    # 🆕 v7.4 STEP 0: Contrarian 체크 (더 엄격한 조건)
+    # 기존 reverse 로직 대체 - 8점 이상 + 3TF 동시 극단에서만 반대매매
+    elif contrarian['should_contrarian']:
         decision = 'reverse'
-        modified_action = reverse_result['reverse_action']
-        reason = f"🔄 REVERSE - Extreme signals detected! Score: {reverse_score}/6, Signals: {reverse_signals}/2. Original {action.upper()} → {modified_action.upper()}"
+        modified_action = contrarian['contrarian_action']
+        reason = f"🔄 v7.4 CONTRARIAN: {contrarian['reason']} | Original {action.upper()} → {modified_action.upper()}"
         
         # 반전된 방향으로 TP/SL 설정 (카운터 트레이드는 더 보수적)
         if modified_action == 'buy':
@@ -4048,7 +4666,24 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
             default_sl = current_price + (atr_4h * 1.5)
             default_tp = current_price - (atr_4h * 2.5)
         
-        # 🆕 v7.6: CONFIG 고정값 유지 (동적 변경 제거)
+        # Contrarian은 사이즈 50% 축소
+        adjusted_position_pct = adjusted_position_pct * 0.5
+        logger.info(f"🔄 v7.4 Contrarian entry: Position size reduced to {adjusted_position_pct:.1f}%")
+    
+    # 🔄 기존 STEP 0: 반전 조건 체크 (v7.4에서는 Contrarian으로 대체, 하지만 fallback으로 유지)
+    # v7.4: Contrarian 조건 미충족 시에도 기존 reverse 로직 활용 가능 (더 느슨한 조건)
+    elif reverse_result['should_reverse'] and not contrarian['should_contrarian']:
+        # 기존 reverse는 이제 "weak contrarian"으로 취급 - HOLD 권장
+        decision = 'reject'
+        modified_action = 'hold'
+        reason = f"⏸️ v7.4 HOLD - Weak contrarian signals (Score: {reverse_score}/8, Signals: {reverse_signals}). v7.4 requires 8+ for contrarian."
+        
+        if action.lower() == 'buy':
+            default_sl = current_price - (atr_4h * 2.0)
+            default_tp = current_price + (atr_4h * 3.5)
+        else:
+            default_sl = current_price + (atr_4h * 2.0)
+            default_tp = current_price - (atr_4h * 3.5)
     
     # 🆕 v7.4 STEP 0.5: HOLD 판단 (애매한 상황)
     elif reverse_result.get('should_hold', False):
@@ -4150,12 +4785,26 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     else:
         logger.info(f"   ⚠️ 4H Trend does NOT strongly support {action.upper()} ({trend_support_count}/4 conditions)")
     
+    # 🆕 v7.4: Mean Reversion 및 Contrarian 로깅
+    if mean_reversion['is_mean_reversion']:
+        logger.info(f"   🎯 v7.4 Mean Reversion: {mean_reversion['reason']}")
+        logger.info(f"      Confidence Boost: +{mean_reversion['confidence_boost']}%")
+    
+    if contrarian['should_contrarian']:
+        logger.info(f"   🔄 v7.4 Contrarian: {contrarian['reason']}")
+        logger.info(f"      Confidence: {contrarian['confidence']}%")
+    
+    # 🆕 v7.4: Symbol Filter 로깅
+    if symbol_filter['status'] != 'NORMAL' and symbol_filter['status'] != 'NEUTRAL':
+        logger.info(f"   📊 v7.4 Symbol Filter: {symbol_filter['status']} ({symbol_filter['reason']})")
+        logger.info(f"      Size Multiplier: {symbol_filter['size_multiplier']}")
+    
     # 반전 점수 로깅
     if reverse_score > 0 or reverse_signals > 0 or not trend_supports:
         reverse_emoji = "🔄" if reverse_result['should_reverse'] else ("⏸️" if reverse_result.get('should_hold', False) else "⚪")
         trend_status = "🛡️BLOCKED" if trend_supports else "⚠️POSSIBLE"
-        logger.info(f"   {reverse_emoji} Reverse Score: {reverse_score}/6, Signals: {reverse_signals}/2 [{trend_status}] {'→ REVERSE!' if reverse_result['should_reverse'] else ('→ HOLD' if reverse_result.get('should_hold', False) else '')}")
-        for detail in reverse_result['details'][:7]:  # 상위 7개
+        logger.info(f"   {reverse_emoji} Reverse Score: {reverse_score}/8 (v7.4), Signals: {reverse_signals}/2 [{trend_status}]")
+        for detail in reverse_result['details'][:5]:  # 상위 5개
             logger.info(f"      - {detail}")
     
     logger.info(f"   Risk Score: {risk_score}/8 {'⚠️ HIGH' if risk_score >= 8 else '✓ OK'}")
@@ -4165,10 +4814,12 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     for detail in approval_result['details'][:5]:
         logger.info(f"      - {detail}")
     
-    decision_emoji = {"approve": "✅", "reject": "❌", "modify": "⚠️", "reverse": "🔄", "hold": "⏸️"}
+    decision_emoji = {"approve": "✅", "reject": "❌", "modify": "⚠️", "reverse": "🔄", "hold": "⏸️", "mean_reversion": "🎯"}
     logger.info(f"   {decision_emoji.get(decision, '❓')} Decision: {decision.upper()} - {reason}")
     if decision == 'reverse':
         logger.info(f"   🔄 Action changed: {action.upper()} → {modified_action.upper()}")
+    elif decision == 'mean_reversion':
+        logger.info(f"   🎯 Mean Reversion entry: {action.upper()} (signal direction maintained)")
     elif modified_action == 'hold':
         logger.info(f"   ⏸️ Recommending HOLD due to ambiguous market conditions")
     
@@ -4181,12 +4832,16 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         'reason': reason,
         'recommended_params': {
             'leverage': base_leverage,
-            'position_percent': base_position_pct,
+            'position_percent': adjusted_position_pct,  # 🆕 v7.4: 동적 조정된 사이즈 사용
             'stop_loss': default_sl,
             'take_profit': default_tp,
             'current_price': current_price,
             'atr': atr_4h
-        }
+        },
+        # 🆕 v7.4 추가 정보
+        'v74_mean_reversion': mean_reversion,
+        'v74_contrarian': contrarian,
+        'v74_symbol_filter': symbol_filter
     }
 
 
@@ -4194,6 +4849,7 @@ def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, m
     """
     🆕 v7.3: AI 파라미터 조정
     🆕 v7.6: Leverage, Position Size는 CONFIG 고정값 사용, AI는 TP/SL만 조정
+    🆕 v7.4: mean_reversion 결정 처리 추가
     
     Returns:
         dict: 최종 트레이딩 파라미터
@@ -4213,6 +4869,9 @@ def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, m
     fixed_leverage = config.get('leverage', 10)
     fixed_position_pct = config.get('position_size_percent', 30)
     
+    # 🆕 v7.4: 동적 조정된 포지션 사이즈 사용
+    adjusted_position_pct = params.get('position_percent', fixed_position_pct)
+    
     # reject인 경우 AI 호출 안함
     if decision == 'reject':
         return {
@@ -4224,6 +4883,11 @@ def ai_parameter_adjustment(symbol: str, action: str, rule_based_result: dict, m
             'pl_ratio': 0,
             'reason': rule_based_result['reason']
         }
+    
+    # 🆕 v7.4: mean_reversion도 approve/modify처럼 처리
+    if decision == 'mean_reversion':
+        decision = 'approve'  # AI 호출을 위해 approve로 변경
+    
     
     current_price = params['current_price']
     atr = params['atr']
@@ -9146,58 +9810,38 @@ def initialize_bot():
             position_info = f"\n\n<b>복구된 포지션:</b>\n{get_position_summary()}"
         
         startup_message = f"""
-🚀 <b>통합 트레이딩 시스템 v7.0 시작 (Multi-User Edition)</b>
+🚀 <b>통합 트레이딩 시스템 v7.4 ENHANCED 시작</b>
 
-<b>🆕 v7.0 Multi-User 핵심 기능:</b>
-👥 <b>다중 유저 동시 거래</b>
-  → 하나의 서버에서 최대 3명의 계정 관리
-  → Primary User: AI 검증 + DB + 텔레그램
-  → Secondary Users: 바이낸스 주문만 실행
-🗑️ <b>TP/SL 자동 삭제</b>
-  → 포지션 종료 시 해당 심볼의 모든 주문 자동 취소
-  → 수동/자동 청산 모두 적용
-  → 모든 유저에 대해 동시 처리
-🔄 <b>동기화된 거래 실행</b>
-  → TradingView 시그널을 모든 유저에게 전파
-  → 각 유저의 잔고에 맞게 수량 자동 조정
-  → 레버리지 독립 관리
+<b>🆕 v7.4 ENHANCED 핵심 기능:</b>
+🎯 <b>Mean Reversion 기회 포착</b>
+  → 극단적 과매도에서 BUY 신호 Approve
+  → 극단적 과매수에서 SELL 신호 Approve
+  → 저점 매수/고점 매도 기회 포착
 
-<b>📊 v6.1 기능 (모두 유지):</b>
+📊 <b>동적 심볼 필터 (DB 기반)</b>
+  → 최근 30일 성과 자동 분석
+  → 0% 승률 심볼 자동 블랙리스트
+  → 저조 심볼 포지션 사이즈 축소
+  → 거래 없는 심볼은 정상 허용
 
-<b>🔥 v6.1 적절한 리스크 관리 개선사항:</b>
-💡 <b>균형잡힌 TP/SL 설정</b>
-  → TP: 최대 7% (권장 3.0-4.0%)
-  → SL: 최대 2% (권장 0.8-2.0%)
-  → 리스크와 수익의 균형
-🚨 <b>스마트한 포지션 종료 기준</b>
-  → 1.5% 이상 수익 시 종료 신호 강화
-  → 최고점 대비 30% 하락 시 수익 보호
-  → 과열 구간 기준 RSI 70/30
-🔧 <b>JSON 파싱 오류 자동 복구</b>
-  → 최소 정보(심볼/액션)로 거래 가능
-  → AI가 TP/SL 및 수량 자동 설정
-  → 긴급 모드에서도 균형잡힌 파라미터 적용
+📈 <b>ATR 기반 적응형 손실 제한</b>
+  → 알트코인 변동성 고려
+  → 노이즈에 덜 민감한 손절
+  → 시간대별 동적 손실 제한
 
-<b>📊 v6.0 핵심 기능 (유지):</b>
-🎯 과매수/과매도 멀티 타임프레임 필터링
-  → 진입 조건 강화: 1시간/4시간봉 과열 구간 자동 차단
-  → 리스크 점수 기반 진입 승인/거부
+🔄 <b>Contrarian 조건 강화</b>
+  → 3개 TF 동시 극단값 필수
+  → 점수 8점 이상에서만 반대매매
+  → 사이즈 50% 자동 축소
+
+<b>📊 기존 기능 (모두 유지):</b>
+👥 다중 유저 동시 거래 (최대 3명)
+🗑️ TP/SL 자동 삭제
+🔄 동기화된 거래 실행
+🎯 멀티 타임프레임 필터링
 💡 매물대 기반 TP/SL 자동 조정
-  → 거래량 프로파일 분석으로 현실적 목표가 설정
-  → 지지/저항선 고려한 손절가 최적화
-  → ATR 기반 최소/최대 거리 보장
-🚨 추세 역전 조기 신호 감지 시스템
-  → Divergence, MACD, ADX, CMF 종합 분석
-  → 역전 점수 기반 긴급도 자동 판단
-  → AI 모니터링에 실시간 통합
-
-<b>📊 기존 v5.1 기능 (모두 유지):</b>
-✨ 수동 포지션 자동 감지 및 AI 모니터링
-✨ 포지션 타입 구분 (자동/수동)
-✨ DB 기록 개선 (position_type)
-✅ 마진 부족 100% 방지
-✅ Free Balance 기반 자동 포지션 크기 조정
-✅ 대시보드 완벽 호환
+🚨 추세 역전 조기 신호 감지
+✨ 수동 포지션 자동 감지
 
 <b>⚙️ 서버 정보:</b>
 <b>서버 포트:</b> {SERVER_PORT} (Multi-User)
@@ -9210,7 +9854,7 @@ def initialize_bot():
   - 🤖 자동: {auto_count}개
   - 🔧 수동: {manual_count}개{position_info}
 
-✅ 시스템이 정상적으로 시작되었습니다.
+✅ v7.4 시스템이 정상적으로 시작되었습니다.
 🎯 과매수/과매도 필터 활성화
 💡 TP/SL 자동 조정 활성화
 🚨 조기 종료 신호 감지 활성화
