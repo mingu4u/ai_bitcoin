@@ -1277,6 +1277,69 @@ SYMBOL_CONFIG = {
         'ai_validation': True,
         'ai_monitoring': True
     },
+    'KAITO/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'AERO/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'APT/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'PIPPIN/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'NEAR/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'MANA/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'ZEC/USDT': {
+        'leverage': 20,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -8624,7 +8687,21 @@ def webhook():
             'HYPEUSDT': 'HYPE/USDT',
             'HYPEUSDT.P': 'HYPE/USDT',
             'API3USDT': 'API3/USDT',
-            'API3USDT.P': 'API3/USDT',                
+            'API3USDT.P': 'API3/USDT',
+            'KAITOUSDT': 'KAITO/USDT',
+            'KAITOUSDT.P': 'KAITO/USDT',
+            'AEROUSDT': 'AERO/USDT',
+            'AEROUSDT.P': 'AERO/USDT',
+            'APTUSDT': 'APT/USDT',
+            'APTUSDT.P': 'APT/USDT',
+            'PIPPINUSDT': 'PIPPIN/USDT',
+            'PIPPINUSDT.P': 'PIPPIN/USDT',
+            'NEARUSDT': 'NEAR/USDT',
+            'NEARUSDT.P': 'NEAR/USDT',
+            'MANAUSDT': 'MANA/USDT',
+            'MANAUSDT.P': 'MANA/USDT',           
+            'ZECUSDT': 'ZEC/USDT',
+            'ZECUSDT.P': 'ZEC/USDT',
         }
         
         original_symbol = symbol
