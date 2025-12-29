@@ -1,11 +1,42 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║              INTEGRATED TRADING SYSTEM v7.4 ENHANCED                         ║
+║              INTEGRATED TRADING SYSTEM v7.5 ENHANCED                         ║
 ║                   Multi-User Crypto Trading Bot                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  Version: 7.4.0                                                              ║
-║  Last Updated: 2025-12-25                                                    ║
-║  Base Version: v7.6 RULE-BASED → v7.4 ENHANCED                               ║
+║  Version: 7.5.0                                                              ║
+║  Last Updated: 2025-12-29                                                    ║
+║  Base Version: v7.4 ENHANCED → v7.5 AGGRESSIVE PROFIT PROTECTION             ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                     v7.5 CHANGELOG (AGGRESSIVE PROFIT PROTECTION)            ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  🆕 핵심 개선 1: Trailing Profit Protection                                  ║
+║  - 문제: Peak +70% → -25% 손실 전환 (PENDLE, DOT 실제 사례)                  ║
+║  - 해결: Peak profit에 비례한 동적 drawdown 임계값                           ║
+║    • Peak >= 50%: 15-20% drawdown에서 강제 종료                              ║
+║    • Peak >= 30%: 20-25% drawdown에서 EXIT_SOON                              ║
+║    • Peak >= 15%: 25-30% drawdown에서 경고                                   ║
+║    • 수익→손실 전환 시 즉시 종료 (95% 신뢰도)                               ║
+║                                                                              ║
+║  🆕 핵심 개선 2: 1H 신호 가중치 증가                                         ║
+║  - 문제: 고수익 구간에서 1H 추세 반전 신호 무시                              ║
+║  - 해결: Peak profit 비례 가중치                                             ║
+║    • Peak >= 30%: 1H 신호 1.5x 가중치                                        ║
+║    • Peak >= 15%: 1H 신호 1.3x 가중치                                        ║
+║                                                                              ║
+║  🆕 핵심 개선 3: 4H Trend Support 차감 제한 강화                             ║
+║  - 문제: 강한 4H 추세에서 점수 50% 차감으로 exit 억제                        ║
+║  - 해결: Peak profit 높을수록 차감 상한 더 낮춤                              ║
+║    • Peak >= 50%: 최대 1점 차감                                              ║
+║    • Peak >= 30%: 최대 2점 차감                                              ║
+║    • Peak >= 15%: 최대 3점 차감                                              ║
+║                                                                              ║
+║  📊 v7.5 예상 효과:                                                          ║
+║  ┌─────────────────────────────────────────────────────────────────────┐     ║
+║  │  PENDLE +70.65% → 20% drawdown에서 경고, 25%에서 강제 종료 준비     │     ║
+║  │  DOT +34.22% → 25% drawdown에서 경고, 30%에서 종료 권고             │     ║
+║  │  손실 전환 전 조기 대응으로 수익 보호                               │     ║
+║  └─────────────────────────────────────────────────────────────────────┘     ║
+║                                                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                     v7.4 CHANGELOG (MEAN REVERSION + DYNAMIC FILTER)         ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
@@ -1459,6 +1490,205 @@ def get_profit_drawdown_absolute(symbol, current_pnl):
     # 절대적 하락폭 (%)
     absolute_drawdown = peak_pnl - current_pnl
     return max(0, absolute_drawdown)
+
+
+def calculate_trailing_profit_threshold(peak_pnl: float, holding_minutes: float) -> dict:
+    """
+    🆕 v7.5: Trailing Profit Protection 임계값 계산
+    
+    Peak profit이 높을수록 더 타이트한 drawdown 임계값 적용
+    - 수익이 클수록 빨리 보호
+    - 보유 시간이 길수록 더 보수적
+    """
+    result = {
+        'drawdown_threshold': 50.0,
+        'absolute_threshold': 5.0,
+        'urgency_level': 'normal',
+        'action': 'hold'
+    }
+    
+    if peak_pnl < 5.0:
+        return result
+    
+    # Tier 1: 초고수익 구간 (Peak >= 50%)
+    if peak_pnl >= 50.0:
+        result['drawdown_threshold'] = 20.0
+        result['absolute_threshold'] = peak_pnl * 0.3
+        if holding_minutes >= 60:
+            result['drawdown_threshold'] = 15.0
+            result['urgency_level'] = 'critical'
+            result['action'] = 'exit_immediately'
+        else:
+            result['urgency_level'] = 'warning'
+            result['action'] = 'prepare_exit'
+    
+    # Tier 2: 고수익 구간 (Peak >= 30%)
+    elif peak_pnl >= 30.0:
+        result['drawdown_threshold'] = 25.0
+        result['absolute_threshold'] = peak_pnl * 0.35
+        if holding_minutes >= 90:
+            result['drawdown_threshold'] = 20.0
+            result['urgency_level'] = 'critical'
+            result['action'] = 'exit_soon'
+        elif holding_minutes >= 45:
+            result['urgency_level'] = 'warning'
+            result['action'] = 'prepare_exit'
+        else:
+            result['urgency_level'] = 'watch'
+            result['action'] = 'monitor_closely'
+    
+    # Tier 3: 중간수익 구간 (Peak >= 15%)
+    elif peak_pnl >= 15.0:
+        result['drawdown_threshold'] = 30.0
+        result['absolute_threshold'] = peak_pnl * 0.40
+        if holding_minutes >= 120:
+            result['drawdown_threshold'] = 25.0
+            result['urgency_level'] = 'warning'
+            result['action'] = 'prepare_exit'
+        else:
+            result['urgency_level'] = 'watch'
+            result['action'] = 'monitor'
+    
+    # Tier 4: 소수익 구간 (Peak >= 5%)
+    elif peak_pnl >= 5.0:
+        result['drawdown_threshold'] = 40.0
+        result['absolute_threshold'] = peak_pnl * 0.50
+        if holding_minutes >= 180:
+            result['drawdown_threshold'] = 35.0
+            result['urgency_level'] = 'watch'
+            result['action'] = 'consider_exit'
+        else:
+            result['urgency_level'] = 'normal'
+            result['action'] = 'hold'
+    
+    return result
+
+
+def should_force_exit_by_trailing_protection(
+    peak_pnl: float, 
+    current_pnl: float, 
+    holding_minutes: float,
+    trend_support_4h: int = 0
+) -> dict:
+    """
+    🆕 v7.5: Trailing Protection에 의한 강제 종료 판단
+    """
+    result = {
+        'should_exit': False,
+        'reason': '',
+        'confidence': 0.0
+    }
+    
+    if peak_pnl < 5.0:
+        return result
+    
+    if peak_pnl > 0:
+        drawdown_percent = ((peak_pnl - current_pnl) / peak_pnl) * 100
+    else:
+        drawdown_percent = 0
+    
+    absolute_loss = peak_pnl - current_pnl
+    thresholds = calculate_trailing_profit_threshold(peak_pnl, holding_minutes)
+    
+    # 조건 1: 수익 → 손실 전환 (가장 심각)
+    if peak_pnl >= 10.0 and current_pnl < 0:
+        result['should_exit'] = True
+        result['reason'] = f"🚨 CRITICAL: Peak {peak_pnl:+.2f}% → Loss {current_pnl:+.2f}% (Profit turned to loss!)"
+        result['confidence'] = 0.95
+        return result
+    
+    # 조건 2: Drawdown이 임계값 초과
+    if drawdown_percent >= thresholds['drawdown_threshold']:
+        if peak_pnl >= 30.0 or trend_support_4h < 5:
+            result['should_exit'] = True
+            result['reason'] = f"⛔ Trailing Protection: {drawdown_percent:.1f}% drawdown (threshold: {thresholds['drawdown_threshold']}%)"
+            result['confidence'] = min(0.7 + (drawdown_percent - thresholds['drawdown_threshold']) / 50, 0.95)
+        elif drawdown_percent >= thresholds['drawdown_threshold'] + 15:
+            result['should_exit'] = True
+            result['reason'] = f"⛔ Override: {drawdown_percent:.1f}% drawdown exceeds safe limit"
+            result['confidence'] = 0.85
+    
+    # 조건 3: 절대적 손실이 임계값 초과
+    if absolute_loss >= thresholds['absolute_threshold']:
+        if not result['should_exit']:
+            result['should_exit'] = True
+            result['reason'] = f"⚠️ Absolute loss {absolute_loss:.2f}% from peak (threshold: {thresholds['absolute_threshold']:.2f}%)"
+            result['confidence'] = 0.75
+    
+    # 조건 4: 시간 + 수익 조합
+    if holding_minutes >= 180 and peak_pnl >= 20.0:
+        if current_pnl < peak_pnl * 0.5:
+            if not result['should_exit']:
+                result['should_exit'] = True
+                result['reason'] = f"⏰ Time-based protection: 3h+ holding, profit dropped to {current_pnl/peak_pnl*100:.0f}% of peak"
+                result['confidence'] = 0.80
+    
+    return result
+
+
+def generate_v75_profit_alerts(
+    peak_pnl: float,
+    current_pnl: float,
+    holding_minutes: float,
+    trend_support_4h: int
+) -> list:
+    """
+    🆕 v7.5: 강화된 수익 보호 경고 생성
+    """
+    alerts = []
+    
+    if peak_pnl < 2.0:
+        if holding_minutes < 60:
+            protection_phase = "STRICT (< 20min)" if holding_minutes < 20 else \
+                             "CAUTION (20-40min)" if holding_minutes < 40 else "WATCH (40-60min)"
+            alerts.append(f"🛡️ EARLY PROTECTION ACTIVE: {protection_phase}")
+        return alerts
+    
+    if peak_pnl > 0:
+        drawdown_percent = ((peak_pnl - current_pnl) / peak_pnl) * 100
+    else:
+        drawdown_percent = 0
+    
+    thresholds = calculate_trailing_profit_threshold(peak_pnl, holding_minutes)
+    
+    # 🚨 CRITICAL: 수익 → 손실 전환
+    if peak_pnl >= 5.0 and current_pnl < 0:
+        alerts.append(f"🚨🚨🚨 CRITICAL: Peak {peak_pnl:+.2f}% → LOSS {current_pnl:+.2f}%! IMMEDIATE EXIT!")
+    
+    # ⛔ Trailing Protection 발동
+    elif drawdown_percent >= thresholds['drawdown_threshold']:
+        alerts.append(f"⛔ TRAILING PROTECTION: {drawdown_percent:.1f}% drawdown (limit: {thresholds['drawdown_threshold']}%)")
+        alerts.append(f"   → Action: {thresholds['action'].upper()}")
+    
+    # 🔴 고수익 대폭 하락
+    elif peak_pnl >= 30.0 and drawdown_percent >= 20.0:
+        alerts.append(f"🔴 HIGH PROFIT EROSION: Peak {peak_pnl:+.2f}% → Current {current_pnl:+.2f}%")
+    
+    # 🟠 중수익 하락
+    elif peak_pnl >= 15.0 and drawdown_percent >= 25.0:
+        alerts.append(f"🟠 PROFIT DRAWDOWN: Peak {peak_pnl:+.2f}% → Current {current_pnl:+.2f}%")
+    
+    # 🟡 기본 하락 경고
+    elif peak_pnl >= 5.0 and drawdown_percent >= 30.0:
+        alerts.append(f"🟡 PROFIT WARNING: {drawdown_percent:.1f}% loss from peak")
+    
+    # 시간 기반 경고
+    if holding_minutes >= 180 and peak_pnl >= 20.0 and current_pnl < peak_pnl * 0.5:
+        alerts.append(f"⏰ TIME-BASED EXIT: 3h+ holding, profit at {current_pnl/peak_pnl*100:.0f}% of peak")
+    
+    if holding_minutes >= 120 and current_pnl < 2.0:
+        alerts.append(f"⚠️ EXTENDED LOW PROFIT: {holding_minutes:.0f}min with only {current_pnl:+.2f}%")
+    
+    if holding_minutes >= 90 and abs(current_pnl) < 1.0:
+        alerts.append(f"⏰ STAGNATION: {holding_minutes:.0f}min holding, only {current_pnl:+.2f}%")
+    
+    if holding_minutes < 60:
+        protection_phase = "STRICT (< 20min)" if holding_minutes < 20 else \
+                         "CAUTION (20-40min)" if holding_minutes < 40 else "WATCH (40-60min)"
+        alerts.append(f"🛡️ EARLY PROTECTION: {protection_phase}")
+    
+    return alerts
+
 
 def clear_peak_profit(symbol):
     """포지션 종료 시 peak profit 기록 삭제 - v7.1"""
@@ -3061,26 +3291,27 @@ def detect_trend_reversal_signals(df_15min, df_hourly, df_4h, side):
     }
 
 # 🆕 v7.5 강화된 detect_early_reversal_signals 함수 (트랩 필터)
-def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, current_price, entry_price, pnl_percent=0, holding_minutes=0):
+def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, current_price, entry_price, pnl_percent=0, holding_minutes=0, peak_pnl=0):
     """
-    🆕 v7.5 중장기 타임프레임 중심 추세 역전 감지
+    🆕 v7.5 ENHANCED: 중장기 타임프레임 중심 추세 역전 감지 + Aggressive Profit Protection
     
-    핵심 변경사항:
-    - 15분봉 단독 신호로 exit 불가
-    - 1시간봉/4시간봉 확인 필수
-    - 연속 캔들 조건으로 노이즈 제거
-    - 4시간봉 추세 지지 시 점수 대폭 차감
-    - 수익 구간에서는 더 보수적으로 판단
+    핵심 변경사항 (v7.5 ENHANCED):
+    - Trailing profit protection 통합 (고수익 구간 보호)
+    - 1H 신호 가중치 증가 (peak profit 비례)
+    - 4H trend support 차감 상한 강화
+    - Peak profit 기반 동적 임계값
     
     Args:
         pnl_percent: 현재 수익률 (레버리지 적용)
         holding_minutes: 보유 시간 (분)
+        peak_pnl: 최고 수익률 (🆕 추가)
     
     Returns:
         dict: 역전 신호 분석 결과
     """
     signals = []
     reversal_score = 0
+    trailing_exit = {'should_exit': False, 'reason': '', 'confidence': 0.0}
     
     # ========================================
     # === 0. 4시간봉 추세 지지 확인 (선행 체크) ===
@@ -3114,6 +3345,25 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
             trend_support_4h += 2
         if df_4h['rsi'].iloc[-1] < 55 and df_4h['rsi'].iloc[-1] > 30:
             trend_support_4h += 1
+    
+    # ========================================
+    # === 🆕 v7.5: Trailing Profit Protection 체크 ===
+    # ========================================
+    if peak_pnl >= 5.0:
+        trailing_exit = should_force_exit_by_trailing_protection(
+            peak_pnl, pnl_percent, holding_minutes, trend_support_4h
+        )
+        if trailing_exit['should_exit']:
+            signals.append(trailing_exit['reason'])
+            reversal_score += 10  # 높은 점수로 exit 유도
+    
+    # 🆕 v7.5: 1H 신호 가중치 계산 (peak profit 비례)
+    hourly_weight_multiplier = 1.0
+    if peak_pnl >= 30.0:
+        hourly_weight_multiplier = 1.5
+        signals.append("📈 High profit mode: 1H signals weighted 1.5x")
+    elif peak_pnl >= 15.0:
+        hourly_weight_multiplier = 1.3
     
     # ===== 1. 지지부진/시간 기반 판단 (60분 보호 이후에만 적용) =====
     profit_risk = {
@@ -3213,23 +3463,25 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
         macd_1h = df_hourly['macd'].iloc[-1]
         macd_signal_1h = df_hourly['macd_signal'].iloc[-1]
         
-        # 1시간봉 MACD 크로스오버
+        # 1시간봉 MACD 크로스오버 (🆕 v7.5: 가중치 적용)
         macd_cross_1h = False
+        base_score_1h_macd = 4
         if position_side == 'buy':
             if macd_1h < macd_signal_1h and df_hourly['macd'].iloc[-2] >= df_hourly['macd_signal'].iloc[-2]:
                 macd_cross_1h = True
                 signals.append("🔴 1h MACD 데드크로스")
-                reversal_score += 4
+                reversal_score += int(base_score_1h_macd * hourly_weight_multiplier)
         else:
             if macd_1h > macd_signal_1h and df_hourly['macd'].iloc[-2] <= df_hourly['macd_signal'].iloc[-2]:
                 macd_cross_1h = True
                 signals.append("🔴 1h MACD 골든크로스")
-                reversal_score += 4
+                reversal_score += int(base_score_1h_macd * hourly_weight_multiplier)
         
-        # 1시간봉 DI 크로스오버 (연속 2캔들 확인)
+        # 1시간봉 DI 크로스오버 (연속 2캔들 확인) (🆕 v7.5: 가중치 적용)
         di_cross_1h = False
         di_plus_1h = df_hourly['di_plus'].iloc[-1]
         di_minus_1h = df_hourly['di_minus'].iloc[-1]
+        base_score_1h_di = 5
         
         if position_side == 'buy':
             if di_minus_1h > di_plus_1h and \
@@ -3237,7 +3489,7 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
                df_hourly['di_minus'].iloc[-3] <= df_hourly['di_plus'].iloc[-3]:
                 di_cross_1h = True
                 signals.append("🔴 1h DI- > DI+ (2캔들 확인)")
-                reversal_score += 5
+                reversal_score += int(base_score_1h_di * hourly_weight_multiplier)
             elif di_minus_1h > di_plus_1h and df_hourly['di_minus'].iloc[-2] <= df_hourly['di_plus'].iloc[-2]:
                 signals.append("⚠️ 1h DI crossover (확인 필요)")
                 reversal_score += 2
@@ -3247,7 +3499,7 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
                df_hourly['di_plus'].iloc[-3] <= df_hourly['di_minus'].iloc[-3]:
                 di_cross_1h = True
                 signals.append("🔴 1h DI+ > DI- (2캔들 확인)")
-                reversal_score += 5
+                reversal_score += int(base_score_1h_di * hourly_weight_multiplier)
             elif di_plus_1h > di_minus_1h and df_hourly['di_plus'].iloc[-2] <= df_hourly['di_minus'].iloc[-2]:
                 signals.append("⚠️ 1h DI crossover (확인 필요)")
                 reversal_score += 2
@@ -3325,46 +3577,60 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
         logger.debug(f"15m 분석 오류: {e}")
     
     # ========================================
-    # === 5. 트랩 필터: 추세 지지 시 점수 차감 ===
+    # === 5. 트랩 필터: 추세 지지 시 점수 차감 (🆕 v7.5 ENHANCED) ===
     # ========================================
     
     trend_support_deduction = 0
     
-    # 🆕 v7.6: 수익 보호 상한선 - 수익이 큰 경우 차감 제한
+    # 🆕 v7.5 ENHANCED: peak_pnl 기반 차감 상한 (더 공격적)
     max_deduction_allowed = 8  # 기본 최대 차감
-    if pnl_percent > 5.0:  # 수익 5% 이상이면 차감 제한
+    
+    if peak_pnl >= 50.0:
+        max_deduction_allowed = 1  # 초고수익: 거의 차감 안함
+        signals.append(f"🛡️ 초고수익 보호(Peak {peak_pnl:.0f}%): 최대 차감 {max_deduction_allowed}점")
+    elif peak_pnl >= 30.0:
+        max_deduction_allowed = 2
+        signals.append(f"🛡️ 고수익 보호(Peak {peak_pnl:.0f}%): 최대 차감 {max_deduction_allowed}점")
+    elif peak_pnl >= 15.0:
+        max_deduction_allowed = 3
+        signals.append(f"🛡️ 중수익 보호(Peak {peak_pnl:.0f}%): 최대 차감 {max_deduction_allowed}점")
+    elif peak_pnl >= 5.0:
         max_deduction_allowed = 4
-        signals.append(f"🛡️ 수익 보호 모드: 최대 차감 {max_deduction_allowed}점 제한")
-    elif pnl_percent > 3.0:  # 수익 3% 이상
+    elif pnl_percent > 5.0:  # 현재 수익도 고려 (기존 로직 유지)
+        max_deduction_allowed = 4
+    elif pnl_percent > 3.0:
         max_deduction_allowed = 6
     
-    # 4시간봉 추세가 강하게 지지하면 점수 대폭 차감
-    if trend_support_4h >= 6:  # 매우 강한 추세 지지
-        trend_support_deduction = min(reversal_score * 0.5, max_deduction_allowed)  # 상한선 적용
+    # 4시간봉 추세가 강하게 지지하면 점수 차감 (상한 적용)
+    if trend_support_4h >= 6:
+        trend_support_deduction = min(reversal_score * 0.5, max_deduction_allowed)
         signals.append(f"🛡️ 4h 추세 매우 강함 (-{trend_support_deduction:.1f}점)")
-    elif trend_support_4h >= 4:  # 강한 추세 지지
+    elif trend_support_4h >= 4:
         trend_support_deduction = min(reversal_score * 0.35, max_deduction_allowed)
         signals.append(f"🛡️ 4h 추세 강함 (-{trend_support_deduction:.1f}점)")
-    elif trend_support_4h >= 3:  # 중간 추세 지지
+    elif trend_support_4h >= 3:
         trend_support_deduction = min(reversal_score * 0.2, max_deduction_allowed)
         signals.append(f"🛡️ 4h 추세 지지 중 (-{trend_support_deduction:.1f}점)")
     
-    # 🆕 v7.6: 시간+수익 조합 - 장기 보유 시 수익 보호 우선
-    # holding_minutes가 길고 수익이 있는 상태에서는 차감을 더 제한
-    if holding_minutes >= 120 and pnl_percent > 2.0:
-        # 2시간 이상 보유 + 수익 2% 이상이면 차감 더 제한
+    # 🆕 v7.5: 고수익 + 장기보유 시 차감 더 제한
+    if holding_minutes >= 90 and peak_pnl >= 20.0:
+        max_time_deduction = 2
+        if trend_support_deduction > max_time_deduction:
+            reduction = trend_support_deduction - max_time_deduction
+            trend_support_deduction = max_time_deduction
+            signals.append(f"⏰ 장기 고수익 보호: 차감 {reduction:.1f}점 추가 감소")
+    elif holding_minutes >= 120 and pnl_percent > 2.0:
         max_deduction_for_time = 3
         if trend_support_deduction > max_deduction_for_time:
             reduction = trend_support_deduction - max_deduction_for_time
             trend_support_deduction = max_deduction_for_time
             signals.append(f"⏰ 장기 보유 수익 보호: 차감 {reduction:.1f}점 감소")
     
-    # 수익 구간에서는 더 보수적 (추가 차감) - v7.6: 조건 강화
-    # 수익이 2% 이상이고 추세가 강할 때만 추가 차감 (기존과 동일)
-    if pnl_percent > 2.0 and trend_support_4h >= 3 and holding_minutes < 90:
+    # 수익 구간 추가 차감은 peak이 낮을 때만
+    if pnl_percent > 2.0 and peak_pnl < 10.0 and trend_support_4h >= 3 and holding_minutes < 90:
         extra_deduction = 2
         trend_support_deduction += extra_deduction
-        signals.append(f"🛡️ 수익 구간 + 추세 지지 (-{extra_deduction}점 추가)")
+        signals.append(f"🛡️ 저수익 구간 + 추세 지지 (-{extra_deduction}점)")
     
     reversal_score = max(0, reversal_score - trend_support_deduction)
     
@@ -3415,10 +3681,15 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
     urgency = 'none'
     confidence = 0.0
     
-    # 🔄 v7.5: 임계값 대폭 상향
-    threshold_immediate = 12  # 8 → 12
-    threshold_soon = 9        # 5 → 9
-    threshold_watch = 6       # 3 → 6
+    # 🔄 v7.5: 임계값
+    threshold_immediate = 12
+    threshold_soon = 9
+    threshold_watch = 6
+    
+    # 🆕 v7.5: Trailing Protection이 강제 종료를 요청하면 점수 강제 상향
+    if trailing_exit['should_exit']:
+        reversal_score = max(reversal_score, 12)  # 최소 12점 보장
+        signals.append(f"🚨 Trailing Protection 강제: 점수 {reversal_score}점으로 상향")
     
     if reversal_score >= threshold_immediate:
         should_exit = True
@@ -3442,7 +3713,8 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
         'threshold_immediate': threshold_immediate,
         'threshold_soon': threshold_soon,
         'threshold_watch': threshold_watch,
-        'trend_support_4h': trend_support_4h
+        'trend_support_4h': trend_support_4h,
+        'trailing_exit': trailing_exit  # 🆕 추가
     }
 
 # ============ AI Response Helper ============
@@ -5826,10 +6098,11 @@ def ai_monitor_position(symbol, position_info):
         # ATR 로깅 (디버깅용)
         logger.debug(f"{symbol} ATR values - 15m: {atr_15min:.4f}, 1h: {atr_hourly:.4f}, 4h: {atr_4h:.4f}")
         
-        # 🆕 v7.1 조기 종료 신호 감지 (pnl_percent, holding_time 추가)
+        # 🆕 v7.5 ENHANCED: 조기 종료 신호 감지 (peak_pnl 추가)
         early_exit_signals = detect_early_reversal_signals(
             df_15min, df_hourly, df_4h, side, current_price, entry_price,
-            pnl_percent=pnl_percent, holding_minutes=holding_time
+            pnl_percent=pnl_percent, holding_minutes=holding_time,
+            peak_pnl=peak_profit_info['peak_pnl']  # 🆕 추가
         )
         
         # 🆕 v7.1 수익 되돌림 경고 로깅
@@ -5895,50 +6168,27 @@ def ai_monitor_position(symbol, position_info):
     "urgency": "none"
 }"""
 
-        # 🆕 v7.1 경고 메시지 생성 (v7.3 수정: 60분 보호 기간 이후에만 stagnation 알림)
-        v71_alerts = []
-        if peak_profit_info['peak_pnl'] > 2.0 and drawdown_from_peak > 25:
-            v71_alerts.append(f"🚨 PROFIT DRAWDOWN ALERT: Peak {peak_profit_info['peak_pnl']:+.2f}% → Current {pnl_percent:+.2f}% (Drawdown: {drawdown_from_peak:.1f}%)")
-        if peak_profit_info['peak_pnl'] > 2.0 and drawdown_from_peak > 40:
-            v71_alerts.append(f"⛔ CRITICAL DRAWDOWN: Lost more than 40% of peak profit! Consider IMMEDIATE EXIT")
+        # 🆕 v7.5 ENHANCED: 강화된 수익 보호 경고 생성
+        v71_alerts = generate_v75_profit_alerts(
+            peak_profit_info['peak_pnl'],
+            pnl_percent,
+            holding_time,
+            early_exit_signals.get('trend_support_4h', 0)
+        )
         
-        # 🆕 v7.6: 시간+수익 조합 경고 (장기 보유 시 수익 보호)
-        # 절대적 drawdown 계산 (peak - current)
+        # 🆕 v7.5: Trailing Exit 정보 추가
+        trailing_exit_info = early_exit_signals.get('trailing_exit', {})
+        if trailing_exit_info.get('should_exit', False):
+            v71_alerts.insert(0, f"🚨🚨 TRAILING PROTECTION TRIGGERED: {trailing_exit_info.get('reason', 'Exit recommended')}")
+        
+        # 절대적 drawdown 계산 (기존 로직 유지)
         absolute_drawdown = get_profit_drawdown_absolute(symbol, pnl_percent)
         
-        # 조건 1: 60분+ 보유 + peak > 5% + 현재 < peak의 40% (60% 이상 손실)
-        if holding_time >= 60 and peak_profit_info['peak_pnl'] > 5.0:
-            if pnl_percent < peak_profit_info['peak_pnl'] * 0.4:
-                v71_alerts.append(f"🚨🚨 v7.6 URGENT: Peak {peak_profit_info['peak_pnl']:+.2f}% → Current {pnl_percent:+.2f}% (60%+ loss from peak, 60min+ holding)")
+        # 추가 경고 (기존 로직 유지 - 중복 방지를 위해 조건 추가)
+        if absolute_drawdown > 3.0 and holding_time >= 30 and not any('ABSOLUTE' in a for a in v71_alerts):
+            v71_alerts.append(f"⚠️ v7.6 ABSOLUTE DROP: Lost {absolute_drawdown:.2f}% from peak")
         
-        # 조건 2: 90분+ 보유 + peak > 3% + drawdown > 50%
-        if holding_time >= 90 and peak_profit_info['peak_pnl'] > 3.0 and drawdown_from_peak > 50:
-            v71_alerts.append(f"⛔ v7.6 PROFIT EVAPORATING: {holding_time:.0f}min holding, 50%+ drawdown from peak!")
-        
-        # 조건 3: 120분+ 보유 + peak > 2% + 수익→손실 전환
-        if holding_time >= 120 and peak_profit_info['peak_pnl'] > 2.0 and pnl_percent < 0:
-            v71_alerts.append(f"🚨🚨🚨 v7.6 CRITICAL: Profit turned to LOSS! Peak {peak_profit_info['peak_pnl']:+.2f}% → Current {pnl_percent:+.2f}%")
-        
-        # 조건 4: 절대적 drawdown 경고 (peak - current > 3%)
-        if absolute_drawdown > 3.0 and holding_time >= 30:
-            v71_alerts.append(f"⚠️ v7.6 ABSOLUTE DROP: Lost {absolute_drawdown:.2f}% from peak (absolute)")
-        
-        # Stagnation 알림은 60분 이후에만 (보호 기간 지난 후)
-        if holding_time >= 60 and abs(pnl_percent) < 1.0:
-            v71_alerts.append(f"⏰ STAGNATION ALERT: {holding_time:.0f}min holding, only {pnl_percent:+.2f}% profit")
-        if holding_time >= 90 and abs(pnl_percent) < 1.5:
-            v71_alerts.append(f"⚠️ TIME INEFFICIENCY: {holding_time:.0f}min for just {pnl_percent:+.2f}% - capital inefficiency!")
-        if holding_time >= 120 and pnl_percent < 2.0:
-            v71_alerts.append(f"🔴 EXTENDED HOLDING LOW PROFIT: 2+ hours with <2% profit - consider exit")
-        if holding_time >= 180 and pnl_percent < 2.0:
-            v71_alerts.append(f"⛔ VERY EXTENDED HOLDING: 3+ hours with <2% profit - strongly consider exit")
-        
-        # 보호 기간 중에는 보호 상태 알림
-        if holding_time < 60:
-            protection_phase = "STRICT (< 20min)" if holding_time < 20 else "CAUTION (20-40min)" if holding_time < 40 else "WATCH (40-60min)"
-            v71_alerts.append(f"🛡️ EARLY PROTECTION ACTIVE: {protection_phase} - Position needs time to develop")
-        
-        v71_alerts_text = chr(10).join(['  ' + alert for alert in v71_alerts]) if v71_alerts else '  ✅ No v7.1 alerts'
+        v71_alerts_text = chr(10).join(['  ' + alert for alert in v71_alerts]) if v71_alerts else '  ✅ No v7.5 alerts'
 
         prompt = f"""
 You are an elite AI position manager monitoring an active {side.upper()} position for {symbol}. Your mission is to protect profits, minimize losses, and identify optimal exit points using multi-timeframe analysis.
