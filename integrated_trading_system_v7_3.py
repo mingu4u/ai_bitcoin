@@ -1,13 +1,29 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║              INTEGRATED TRADING SYSTEM v7.5 ENHANCED                         ║
+║              INTEGRATED TRADING SYSTEM v7.5.1 ENHANCED                       ║
 ║                   Multi-User Crypto Trading Bot                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  Version: 7.5.0                                                              ║
+║  Version: 7.5.1                                                              ║
 ║  Last Updated: 2025-12-29                                                    ║
-║  Base Version: v7.4 ENHANCED → v7.5 AGGRESSIVE PROFIT PROTECTION             ║
+║  Base Version: v7.5 → v7.5.1 EARLY PROTECTION BALANCE                        ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║                     v7.5 CHANGELOG (AGGRESSIVE PROFIT PROTECTION)            ║
+║                     v7.5.1 CHANGELOG (EARLY PROTECTION BALANCE)              ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  🆕 핵심 개선: 초반 보호 기간 인내심 강화                                    ║
+║  - 문제: HOME +1.49% @ 31분에서 너무 성급하게 종료                          ║
+║  - 해결: 초반 보호 기간에 임계값 대폭 상향                                   ║
+║    • < 45분 + 손실 < -10%: 임계값 18/15/10 (기존 12/9/6)                    ║
+║    • 45-60분: 임계값 15/12/8                                                 ║
+║    • 60분+: 기존 임계값 12/9/6 유지                                          ║
+║                                                                              ║
+║  🆕 초반 수익 보호 점수 차감:                                                ║
+║    • < 45분 + 수익 중: -4점 차감 (인내심 강화)                               ║
+║    • 45-60분 + 수익 중: -2점 차감                                            ║
+║                                                                              ║
+║  🆕 Trailing Protection 초반 보류:                                           ║
+║    • < 45분에서는 peak >= 20%일 때만 적용                                    ║
+║    • 초반에 작은 수익에서 성급한 종료 방지                                   ║
+║                                                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║  🆕 핵심 개선 1: Trailing Profit Protection                                  ║
 ║  - 문제: Peak +70% → -25% 손실 전환 (PENDLE, DOT 실제 사례)                  ║
@@ -3681,15 +3697,57 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
     urgency = 'none'
     confidence = 0.0
     
-    # 🔄 v7.5: 임계값
-    threshold_immediate = 12
-    threshold_soon = 9
-    threshold_watch = 6
+    # 🆕 v7.5.1: 초반 보호 기간에는 임계값 대폭 상향
+    # 손실이 심각하지 않으면 초반에는 인내심을 가짐
+    if holding_minutes < 45:
+        # 초반 보호 기간
+        if pnl_percent >= -10.0:  # 손실이 -10% 미만이면 (심각하지 않으면)
+            threshold_immediate = 18  # 12 → 18 (극단적 상황에서만 exit)
+            threshold_soon = 15       # 9 → 15
+            threshold_watch = 10      # 6 → 10
+            signals.append(f"🛡️ 초반 보호 활성 (<45분): 임계값 상향 (즉시:{threshold_immediate}, 곧:{threshold_soon})")
+        else:
+            # 손실이 심각하면 (-10% 이하) 기본 임계값
+            threshold_immediate = 12
+            threshold_soon = 9
+            threshold_watch = 6
+    elif holding_minutes < 60:
+        # 중간 보호 기간
+        if pnl_percent >= -5.0:
+            threshold_immediate = 15  # 약간 상향
+            threshold_soon = 12
+            threshold_watch = 8
+            signals.append(f"🛡️ 중간 보호 활성 (45-60분): 임계값 상향")
+        else:
+            threshold_immediate = 12
+            threshold_soon = 9
+            threshold_watch = 6
+    else:
+        # 정상 모니터링 (60분+)
+        threshold_immediate = 12
+        threshold_soon = 9
+        threshold_watch = 6
+    
+    # 🆕 v7.5.1: 초반에 수익 중이면 추가 점수 차감
+    early_protection_deduction = 0
+    if holding_minutes < 45 and pnl_percent > 0:
+        # 초반 + 수익 중 = 더 많은 인내심
+        early_protection_deduction = 4
+        reversal_score = max(0, reversal_score - early_protection_deduction)
+        signals.append(f"🛡️ 초반 수익 보호: -{early_protection_deduction}점 (인내심 강화)")
+    elif holding_minutes < 60 and pnl_percent > 0:
+        early_protection_deduction = 2
+        reversal_score = max(0, reversal_score - early_protection_deduction)
+        signals.append(f"🛡️ 중간 수익 보호: -{early_protection_deduction}점")
     
     # 🆕 v7.5: Trailing Protection이 강제 종료를 요청하면 점수 강제 상향
+    # 단, 초반 보호 기간에는 peak_pnl이 매우 높을 때만 적용
     if trailing_exit['should_exit']:
-        reversal_score = max(reversal_score, 12)  # 최소 12점 보장
-        signals.append(f"🚨 Trailing Protection 강제: 점수 {reversal_score}점으로 상향")
+        if holding_minutes >= 45 or peak_pnl >= 20.0:  # 45분 이상 또는 peak 20%+
+            reversal_score = max(reversal_score, 12)
+            signals.append(f"🚨 Trailing Protection 강제: 점수 {reversal_score}점으로 상향")
+        else:
+            signals.append(f"🛡️ Trailing Protection 보류: 초반 보호 기간 (<45분)")
     
     if reversal_score >= threshold_immediate:
         should_exit = True
