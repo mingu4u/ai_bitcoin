@@ -263,6 +263,22 @@ V74_BLACKLIST_WIN_RATE = 0            # 블랙리스트 승률 기준
 V74_REDUCED_WIN_RATE = 35             # 축소 사이즈 승률 기준
 V74_REDUCED_MIN_LOSS = -500           # 축소 사이즈 누적손실 기준
 
+# ============ 🆕 v7.5 새로운 상수 ============
+# TP/SL 설정 (고승률 중심 - 좁은 범위)
+V75_SL_ATR_MULTIPLIER = 0.8   # SL: 15분봉 ATR의 0.8배 (더 타이트)
+V75_TP_ATR_MULTIPLIER = 1.2   # TP: 15분봉 ATR의 1.2배 (더 현실적)
+V75_MIN_RR_RATIO = 1.3        # 최소 R:R 비율 (기존 1.8 → 1.3으로 낮춤)
+
+# 수익 보호 설정 (더 적극적)
+V75_PROFIT_PROTECTION_THRESHOLD = 3.0   # 수익 보호 시작 임계값 (3% 이상)
+V75_PROFIT_LOCK_RATIO = 0.5             # 수익의 50% 확보 목표
+V75_EARLY_PROFIT_EXIT = 5.0             # 조기 익절 임계값 (5% 이상이면 적극 청산 고려)
+V75_QUICK_PROFIT_TIME = 30              # 빠른 수익 청산 기준 시간 (30분)
+
+# 양방향 포지션 관리
+V75_HEDGE_PROFIT_THRESHOLD_MULTIPLIER = 2.0  # 수수료 x 2 x 레버리지 = 청산 기준
+V75_BASE_FEE_RATE = 0.05  # 기본 수수료율 0.05%
+
 
 # ============ 🆕 v7.4 적응형 손실 제한 함수 ============
 def get_adaptive_loss_limit(symbol: str, atr_percent: float, leverage: int) -> float:
@@ -340,6 +356,184 @@ def should_emergency_exit_v74(current_pnl: float, holding_minutes: int,
         return True, f"v7.4 CATASTROPHIC: Absolute loss {current_pnl:.1f}% exceeds -30% limit"
     
     return False, None
+
+
+# ============ 🆕 v7.5 양방향 포지션 관리 함수 ============
+def check_hedge_position_conflict(symbol: str, new_side: str) -> dict:
+    """
+    🆕 v7.5: 양방향 포지션 충돌 체크
+    롱/숏 동시 보유 시 수익 포지션 먼저 청산 권장
+    
+    Args:
+        symbol: 심볼명
+        new_side: 새로 진입하려는 방향 ('buy' or 'sell')
+        
+    Returns:
+        dict: {
+            'has_conflict': bool,
+            'existing_side': str,
+            'existing_pnl': float,
+            'should_close_existing': bool,
+            'reason': str
+        }
+    """
+    try:
+        # 현재 포지션 확인
+        positions = exchange.fetch_positions([symbol])
+        
+        for pos in positions:
+            if pos['symbol'] == symbol and pos['contracts'] > 0:
+                existing_side = 'buy' if pos['side'] == 'long' else 'sell'
+                
+                # 같은 방향이면 충돌 없음
+                if existing_side == new_side:
+                    return {'has_conflict': False, 'reason': 'Same direction'}
+                
+                # 반대 방향 포지션 존재
+                pnl_percent = float(pos.get('percentage', 0))
+                leverage = int(pos.get('leverage', 20))
+                
+                # 수수료 기준 계산: 0.05% * 2 * leverage
+                fee_threshold = V75_BASE_FEE_RATE * V75_HEDGE_PROFIT_THRESHOLD_MULTIPLIER * leverage
+                
+                # 수익이 수수료 기준 이상이면 기존 포지션 청산 권장
+                if pnl_percent >= fee_threshold:
+                    return {
+                        'has_conflict': True,
+                        'existing_side': existing_side,
+                        'existing_pnl': pnl_percent,
+                        'should_close_existing': True,
+                        'reason': f"🔄 v7.5 HEDGE CONFLICT: Existing {existing_side.upper()} position has +{pnl_percent:.2f}% profit (>= {fee_threshold:.2f}% threshold). Close existing first!"
+                    }
+                else:
+                    return {
+                        'has_conflict': True,
+                        'existing_side': existing_side,
+                        'existing_pnl': pnl_percent,
+                        'should_close_existing': False,
+                        'reason': f"⚠️ v7.5 HEDGE WARNING: Existing {existing_side.upper()} position at {pnl_percent:+.2f}%. Consider waiting."
+                    }
+        
+        return {'has_conflict': False, 'reason': 'No existing position'}
+        
+    except Exception as e:
+        logger.error(f"Hedge conflict check error: {e}")
+        return {'has_conflict': False, 'reason': f'Error: {e}'}
+
+
+def manage_hedge_positions(symbol: str, leverage: int = 20) -> dict:
+    """
+    🆕 v7.5: 양방향 포지션 자동 관리
+    수익 포지션이 임계값 이상이면 자동 청산
+    
+    Returns:
+        dict: {'closed': bool, 'side': str, 'pnl': float, 'reason': str}
+    """
+    try:
+        positions = exchange.fetch_positions([symbol])
+        
+        profitable_positions = []
+        for pos in positions:
+            if pos['symbol'] == symbol and pos['contracts'] > 0:
+                pnl_percent = float(pos.get('percentage', 0))
+                side = 'buy' if pos['side'] == 'long' else 'sell'
+                
+                fee_threshold = V75_BASE_FEE_RATE * V75_HEDGE_PROFIT_THRESHOLD_MULTIPLIER * leverage
+                
+                if pnl_percent >= fee_threshold:
+                    profitable_positions.append({
+                        'side': side,
+                        'pnl': pnl_percent,
+                        'contracts': pos['contracts'],
+                        'threshold': fee_threshold
+                    })
+        
+        # 수익 포지션이 있으면 청산
+        if profitable_positions:
+            # 가장 수익이 높은 포지션 먼저 청산
+            best = max(profitable_positions, key=lambda x: x['pnl'])
+            
+            logger.info(f"🔄 v7.5 Auto-closing profitable hedge position: {best['side'].upper()} at +{best['pnl']:.2f}%")
+            
+            # 청산 실행
+            close_side = 'sell' if best['side'] == 'buy' else 'buy'
+            try:
+                order = exchange.create_market_order(
+                    symbol=symbol,
+                    side=close_side,
+                    amount=best['contracts'],
+                    params={'reduceOnly': True}
+                )
+                return {
+                    'closed': True,
+                    'side': best['side'],
+                    'pnl': best['pnl'],
+                    'reason': f"v7.5 Hedge auto-close: {best['side'].upper()} at +{best['pnl']:.2f}%"
+                }
+            except Exception as e:
+                logger.error(f"Failed to close hedge position: {e}")
+                return {'closed': False, 'reason': f'Close failed: {e}'}
+        
+        return {'closed': False, 'reason': 'No profitable hedge positions'}
+        
+    except Exception as e:
+        logger.error(f"Hedge management error: {e}")
+        return {'closed': False, 'reason': f'Error: {e}'}
+
+
+def calculate_tight_tp_sl(current_price: float, action: str, atr_15m: float, atr_1h: float, symbol: str) -> dict:
+    """
+    🆕 v7.5: 타이트한 TP/SL 계산 (15분봉 ATR 기반)
+    고승률을 위해 좁은 범위 + 현실적인 목표
+    
+    Args:
+        current_price: 현재 가격
+        action: 'buy' or 'sell'
+        atr_15m: 15분봉 ATR
+        atr_1h: 1시간봉 ATR (백업용)
+        symbol: 심볼명
+        
+    Returns:
+        dict: {'stop_loss': float, 'take_profit': float, 'sl_percent': float, 'tp_percent': float}
+    """
+    # 15분봉 ATR 사용 (없으면 1시간봉의 1/4)
+    base_atr = atr_15m if atr_15m > 0 else (atr_1h / 4 if atr_1h > 0 else current_price * 0.005)
+    
+    # BTC/ETH는 더 타이트하게
+    if 'BTC' in symbol or 'ETH' in symbol:
+        sl_multiplier = V75_SL_ATR_MULTIPLIER * 0.9  # 0.72x
+        tp_multiplier = V75_TP_ATR_MULTIPLIER * 0.9  # 1.08x
+    else:
+        sl_multiplier = V75_SL_ATR_MULTIPLIER  # 0.8x
+        tp_multiplier = V75_TP_ATR_MULTIPLIER  # 1.2x
+    
+    sl_distance = base_atr * sl_multiplier
+    tp_distance = base_atr * tp_multiplier
+    
+    # 최소 R:R 보장
+    if tp_distance / sl_distance < V75_MIN_RR_RATIO:
+        tp_distance = sl_distance * V75_MIN_RR_RATIO
+    
+    if action.lower() == 'buy':
+        stop_loss = current_price - sl_distance
+        take_profit = current_price + tp_distance
+    else:
+        stop_loss = current_price + sl_distance
+        take_profit = current_price - tp_distance
+    
+    # 퍼센트 계산
+    sl_percent = (sl_distance / current_price) * 100
+    tp_percent = (tp_distance / current_price) * 100
+    
+    return {
+        'stop_loss': stop_loss,
+        'take_profit': take_profit,
+        'sl_percent': sl_percent,
+        'tp_percent': tp_percent,
+        'sl_distance': sl_distance,
+        'tp_distance': tp_distance,
+        'rr_ratio': tp_distance / sl_distance if sl_distance > 0 else 0
+    }
 
 
 # ============ 🆕 v7.4 DB 기반 동적 심볼 필터 함수 ============
@@ -5012,6 +5206,25 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
     except:
         atr_4h = current_price * 0.02
     
+    # 🆕 v7.5: 15분봉 및 1시간봉 ATR도 가져오기 (타이트한 TP/SL용)
+    try:
+        atr_15m = df_15min['atr'].iloc[-1] if 'atr' in df_15min.columns else current_price * 0.005
+        if pd.isna(atr_15m) or atr_15m <= 0:
+            atr_15m = current_price * 0.005
+    except:
+        atr_15m = current_price * 0.005
+    
+    try:
+        atr_1h = df_hourly['atr'].iloc[-1] if 'atr' in df_hourly.columns else current_price * 0.01
+        if pd.isna(atr_1h) or atr_1h <= 0:
+            atr_1h = current_price * 0.01
+    except:
+        atr_1h = current_price * 0.01
+    
+    # 🆕 v7.5: 타이트한 TP/SL 계산 (15분봉 ATR 기반)
+    tight_tp_sl = calculate_tight_tp_sl(current_price, action, atr_15m, atr_1h, symbol)
+    logger.info(f"📊 v7.5 Tight TP/SL: SL={tight_tp_sl['sl_percent']:.2f}%, TP={tight_tp_sl['tp_percent']:.2f}%, R:R={tight_tp_sl['rr_ratio']:.2f}")
+    
     # ========== 🆕 v7.4 Mean Reversion 체크 (최우선) ==========
     mean_reversion = check_mean_reversion_opportunity(action, df_15min, df_hourly, df_4h)
     
@@ -5032,14 +5245,9 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         
         reason = f"🎯 v7.4 {mean_reversion['reason']} | Boosted Approval: {approval_score}+{mean_reversion['confidence_boost']}={boosted_approval}"
         
-        if action.lower() == 'buy':
-            # 과매도에서 매수: 반등 노림, 좀 더 타이트한 SL
-            default_sl = current_price - (atr_4h * 1.8)
-            default_tp = current_price + (atr_4h * 3.0)
-        else:
-            # 과매수에서 매도: 하락 노림
-            default_sl = current_price + (atr_4h * 1.8)
-            default_tp = current_price - (atr_4h * 3.0)
+        # 🆕 v7.5: 타이트한 TP/SL 사용
+        default_sl = tight_tp_sl['stop_loss']
+        default_tp = tight_tp_sl['take_profit']
         
         logger.info(f"🎯 v7.4 Mean Reversion APPROVED: {symbol} {action.upper()}")
         logger.info(f"   {mean_reversion['reason']}")
@@ -5051,13 +5259,10 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         modified_action = contrarian['contrarian_action']
         reason = f"🔄 v7.4 CONTRARIAN: {contrarian['reason']} | Original {action.upper()} → {modified_action.upper()}"
         
-        # 반전된 방향으로 TP/SL 설정 (카운터 트레이드는 더 보수적)
-        if modified_action == 'buy':
-            default_sl = current_price - (atr_4h * 1.5)  # 더 타이트한 SL
-            default_tp = current_price + (atr_4h * 2.5)
-        else:
-            default_sl = current_price + (atr_4h * 1.5)
-            default_tp = current_price - (atr_4h * 2.5)
+        # 🆕 v7.5: 반전된 방향으로 타이트한 TP/SL 재계산
+        contrarian_tp_sl = calculate_tight_tp_sl(current_price, modified_action, atr_15m, atr_1h, symbol)
+        default_sl = contrarian_tp_sl['stop_loss']
+        default_tp = contrarian_tp_sl['take_profit']
         
         # Contrarian은 사이즈 50% 축소
         adjusted_position_pct = adjusted_position_pct * 0.5
@@ -5071,12 +5276,9 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         modified_action = 'hold'
         reason = f"⏸️ v7.4 HOLD - Weak contrarian signals (Score: {reverse_score}/8, Signals: {reverse_signals}). v7.4 requires 8+ for contrarian."
         
-        if action.lower() == 'buy':
-            default_sl = current_price - (atr_4h * 2.0)
-            default_tp = current_price + (atr_4h * 3.5)
-        else:
-            default_sl = current_price + (atr_4h * 2.0)
-            default_tp = current_price - (atr_4h * 3.5)
+        # 🆕 v7.5: 타이트한 TP/SL 사용
+        default_sl = tight_tp_sl['stop_loss']
+        default_tp = tight_tp_sl['take_profit']
     
     # 🆕 v7.4 STEP 0.5: HOLD 판단 (애매한 상황)
     elif reverse_result.get('should_hold', False):
@@ -5084,12 +5286,9 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         modified_action = 'hold'
         reason = f"⏸️ HOLD - Ambiguous signals (Score: {reverse_score}, Signals: {reverse_signals}). Better to wait."
         
-        if action.lower() == 'buy':
-            default_sl = current_price - (atr_4h * 2.0)
-            default_tp = current_price + (atr_4h * 3.5)
-        else:
-            default_sl = current_price + (atr_4h * 2.0)
-            default_tp = current_price - (atr_4h * 3.5)
+        # 🆕 v7.5: 타이트한 TP/SL 사용
+        default_sl = tight_tp_sl['stop_loss']
+        default_tp = tight_tp_sl['take_profit']
         
         # 🆕 v7.6: CONFIG 고정값 유지
         
@@ -5098,12 +5297,9 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         decision = 'reject'
         reason = f"HIGH RISK - Risk Score {risk_score}/8 exceeds threshold"
         
-        if action.lower() == 'buy':
-            default_sl = current_price - (atr_4h * 2.0)
-            default_tp = current_price + (atr_4h * 3.5)
-        else:
-            default_sl = current_price + (atr_4h * 2.0)
-            default_tp = current_price - (atr_4h * 3.5)
+        # 🆕 v7.5: 타이트한 TP/SL 사용
+        default_sl = tight_tp_sl['stop_loss']
+        default_tp = tight_tp_sl['take_profit']
         
         # 🆕 v7.6: CONFIG 고정값 유지
         
@@ -5112,12 +5308,9 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         decision = 'modify'
         reason = f"MODIFY - Risk Score {risk_score}, Approval Score {approval_score} (marginal)"
         
-        if action.lower() == 'buy':
-            default_sl = current_price - (atr_4h * 2.0)
-            default_tp = current_price + (atr_4h * 3.5)
-        else:
-            default_sl = current_price + (atr_4h * 2.0)
-            default_tp = current_price - (atr_4h * 3.5)
+        # 🆕 v7.5: 타이트한 TP/SL 사용
+        default_sl = tight_tp_sl['stop_loss']
+        default_tp = tight_tp_sl['take_profit']
         
         # 🆕 v7.6: CONFIG 고정값 유지
         
@@ -5130,12 +5323,9 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
             decision = 'modify'
             reason = f"MODIFY - Risk ({risk_score}), Approval ({approval_score})"
         
-        if action.lower() == 'buy':
-            default_sl = current_price - (atr_4h * 2.0)
-            default_tp = current_price + (atr_4h * 3.5)
-        else:
-            default_sl = current_price + (atr_4h * 2.0)
-            default_tp = current_price - (atr_4h * 3.5)
+        # 🆕 v7.5: 타이트한 TP/SL 사용
+        default_sl = tight_tp_sl['stop_loss']
+        default_tp = tight_tp_sl['take_profit']
         
         # 🆕 v7.6: CONFIG 고정값 유지
     
@@ -5144,12 +5334,9 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         decision = 'modify'
         reason = f"MODIFY (Conservative) - Approval Score {approval_score} in marginal zone (50-60)"
         
-        if action.lower() == 'buy':
-            default_sl = current_price - (atr_4h * 1.5)  # 더 타이트한 SL
-            default_tp = current_price + (atr_4h * 2.5)  # 더 낮은 TP
-        else:
-            default_sl = current_price + (atr_4h * 1.5)
-            default_tp = current_price - (atr_4h * 2.5)
+        # 🆕 v7.5: 타이트한 TP/SL 사용
+        default_sl = tight_tp_sl['stop_loss']
+        default_tp = tight_tp_sl['take_profit']
         
         # 🆕 v7.6: CONFIG 고정값 유지
             
@@ -5158,12 +5345,9 @@ def rule_based_validation(symbol: str, action: str, market_data: dict) -> dict:
         decision = 'reject'
         reason = f"REJECTED - Approval Score {approval_score} below threshold (50)"
         
-        if action.lower() == 'buy':
-            default_sl = current_price - (atr_4h * 2.0)
-            default_tp = current_price + (atr_4h * 3.5)
-        else:
-            default_sl = current_price + (atr_4h * 2.0)
-            default_tp = current_price - (atr_4h * 3.5)
+        # 🆕 v7.5: 타이트한 TP/SL 사용
+        default_sl = tight_tp_sl['stop_loss']
+        default_tp = tight_tp_sl['take_profit']
         
         # 🆕 v7.6: CONFIG 고정값 유지
     
@@ -6422,38 +6606,38 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
 - Long-term (>8 hours): Question opportunity cost if minimal progress
 - Very long (>24 hours): Seriously reconsider unless strong structural trend
 
-🛡️ **EARLY POSITION PROTECTION (CRITICAL!):**
+🛡️ **EARLY POSITION PROTECTION (v7.5 - 수익 보호 중심!):**
 {'═' * 43}
 → Current Holding Time: {holding_time:.0f} minutes
-→ Protection Phase: {'🔒 STRICT PROTECTION (< 30 min)' if holding_time < 30 else '⚠️ CAUTION ZONE (30-60 min)' if holding_time < 60 else '👀 WATCH ZONE (60-90 min)' if holding_time < 90 else '✅ NORMAL MONITORING'}
+→ Protection Phase: {'🔒 STRICT PROTECTION (< 20 min)' if holding_time < 20 else '⚠️ CAUTION ZONE (20-40 min)' if holding_time < 40 else '👀 WATCH ZONE (40-60 min)' if holding_time < 60 else '✅ NORMAL MONITORING'}
+
+**🆕 v7.5 핵심 원칙: 수익 보호 > 인내심!**
+- 수익 3% 이상: 적극적으로 50% 확보 고려
+- 수익 5% 이상: 전량 청산 적극 고려 (특히 30분 이상 보유 시)
+- 손실 -5% 이상 + 4H 추세 약화: 빠른 손절
 
 **MANDATORY RULES FOR EARLY POSITIONS:**
-{'🔒 STRICT PROTECTION MODE (0-30 minutes):' if holding_time < 30 else '⚠️ CAUTION MODE (30-60 minutes):' if holding_time < 60 else '👀 WATCH MODE (60-90 minutes):' if holding_time < 90 else '✅ NORMAL MODE (90+ minutes):'}
-{'''  • ONLY EXIT FOR: Severe loss (< -15%), catastrophic reversal (Score ≥ 15)
-  • DO NOT EXIT FOR: Small/medium profits, minor-moderate reversal signals
-  • REASON: Position needs significant time to develop. Early noise is NORMAL.
-  • PATIENCE: Crypto is volatile - initial fluctuations don't indicate trend failure.
-  • EXCEPTION: Only catastrophic scenarios warrant early exit.
-  • 4H Trend Support ≥ 6: Give extra patience even with drawdown''' if holding_time < 30 else '''  • BE VERY CAUTIOUS about exit decisions
-  • REQUIRE: Loss < -12% OR (Profit > +15% with exhaustion) OR Reversal Score ≥ 12
-  • PREFER: Hold and let the trade thesis play out
-  • Still early - most winning trades need 60+ minutes to develop
-  • 4H Trend Support ≥ 6: Continue holding unless severe breakdown''' if holding_time < 60 else '''  • MODERATE CAUTION still applies
-  • REQUIRE: Loss < -10% OR strong reversal signals (Score ≥ 10)
-  • Allow profit-taking only if Profit > +10% with clear exhaustion
-  • Approaching normal monitoring phase but still be patient
-  • 4H Trend Support ≥ 6: Prefer holding over premature exit''' if holding_time < 90 else '''  • Normal monitoring rules apply
-  • Technical signals guide decisions
-  • Time-based stagnation rules now active
-  • But still respect 4H Trend Support - strong trends deserve patience'''}
+{'🔒 STRICT PROTECTION MODE (0-20 minutes):' if holding_time < 20 else '⚠️ CAUTION MODE (20-40 minutes):' if holding_time < 40 else '👀 WATCH MODE (40-60 minutes):' if holding_time < 60 else '✅ NORMAL MODE (60+ minutes):'}
+{'''  • ONLY EXIT FOR: Severe loss (< -10%), catastrophic reversal (Score ≥ 12)
+  • BUT 수익 5%+ 달성 시: 적극 청산 고려 (빠른 수익 확보!)
+  • REASON: Position needs some time to develop, but don't miss quick profits.
+  • v7.5 UPDATE: 고승률 > 고수익, 작은 수익도 챙기기!''' if holding_time < 20 else '''  • EXIT FOR: Loss < -8% OR Profit > +5% with any exhaustion OR Reversal Score ≥ 10
+  • 수익 3%+: 50% 청산으로 수익 확보 고려
+  • 수익 5%+: 전량 청산 적극 고려
+  • v7.5 원칙: 수익이 손실로 전환되지 않도록!''' if holding_time < 40 else '''  • EXIT FOR: Loss < -5% OR Profit > +3% with exhaustion OR Score ≥ 8
+  • 수익 권: 더 적극적인 청산 고려
+  • 4H 추세가 약해지면 빠른 청산
+  • v7.5 원칙: 60분 보유했으면 결과를 챙겨라!''' if holding_time < 60 else '''  • Normal monitoring + 적극적 수익 보호
+  • 수익 2%+ 이면서 모멘텀 약화: 청산
+  • 손실 -3% + 4H 추세 반전: 즉시 청산
+  • v7.5 원칙: 기회비용 고려, 빠른 판단!'''}
 
-💡 **WHY EXTENDED PROTECTION (90 MINUTES - v7.4 Update):**
-  • Crypto markets are extremely noisy in short timeframes
-  • AI validated this entry after thorough analysis - trust it
-  • Most successful trades take 60-120+ minutes to reach targets
-  • Premature exits are the #1 cause of missed profits
-  • Let the trade thesis fully develop before abandoning it
-  • Historical data shows winning trades average 2-4 hours holding
+💡 **v7.5 고승률 전략:**
+  • 수익 5% 달성 = 목표 달성! (TP 도달 기다리지 마라)
+  • 30분 이상 보유 + 수익 3%+ = 청산 고려
+  • 손실 포지션은 4H 확인 후 빠른 손절
+  • "더 벌 수 있을텐데"보다 "이만큼 벌었다" 우선!
+{'═' * 43}
   • Short-term drawdowns during strong 4H trends often recover
 {'═' * 43}
 
@@ -6527,88 +6711,52 @@ This is a LEVERAGED position ({leverage}x) - small price movements have AMPLIFIE
    • 15m RSI 극단 + 1H RSI도 극단 → 주의 (부분 청산 고려)
    • 15m + 1H + 4H 모두 극단 → EXIT (확정 반전)
 
-⚠️ **핵심 원칙:**
-   • 수익 중이면 4H/1H가 극단값에 도달할 때까지 기다려라!
-   • 15분봉 하나로 수익 포지션을 절대 종료하지 마라!
-   • "조금 더 기다렸으면 더 벌었을텐데"를 최소화하라!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━''' if pnl_percent > 0 else '''• 손실 포지션은 모든 TF 고려하여 빠른 손절'''}
+⚠️ **핵심 원칙 (v7.5 고승률 중심):**
+   • 수익 3%+ 달성하면 수익 확보 우선 고려!
+   • 수익 5%+ 이면 "더 벌까" 보다 "확보하자" 우선!
+   • 작은 수익이라도 손실보다 낫다!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━''' if pnl_percent > 0 else '''• 손실 포지션은 모든 TF 고려하여 빠른 손절
+• 손실 -5% + 4H 약화: 즉시 손절'''}
 
-**EXIT DECISION HIERARCHY (When in Profit):**
-  1. 🥇 4H Trend Reversal → EXIT (highest priority)
-  2. 🥈 1H Trend Reversal + 4H Weakening → EXIT
-  3. 🥉 1H + 4H Both Showing Exhaustion → Partial Exit
-  4. ❌ 15m Signals Alone → DO NOT EXIT (wait for confirmation)
+**🆕 v7.5 EXIT DECISION HIERARCHY (고승률 중심):**
+  1. 🥇 수익 5%+ 달성 + 30분+ 보유 → EXIT 적극 고려!
+  2. 🥈 수익 3%+ + 모멘텀 약화 → EXIT 50% 이상
+  3. 🥉 4H Trend Reversal → EXIT (기존 규칙)
+  4. ⚠️ 손실 -5% + 4H 약화 → 즉시 EXIT
 {'═' * 43}
 
-🆕 **v7.1 TIME-BASED STAGNATION RULES (applies after 90 min protection):**
-- **90+ min holding with <1% profit:** Start considering exit - but not mandatory
-- **120+ min holding with <1.5% profit:** Evaluate opportunity cost carefully
-- **180+ min holding with <2% profit:** Strong exit consideration - capital inefficiency
-- **240+ min holding with <2% profit:** Exit recommended - better opportunities elsewhere
+🆕 **v7.5 TIME-BASED RULES (60분 이후):**
+- **60+ min holding with <1% profit:** 시장 기회비용 고려, 청산 우선
+- **90+ min holding with any profit:** 적극 청산 권장
+- **60+ min holding with loss:** 4H 확인 후 빠른 손절
 
-⚠️ **NOTE:** These stagnation rules ONLY apply AFTER the 90-minute protection period.
-During the first 90 minutes, focus on letting the trade develop, not on time-based exits.
+⚠️ **NOTE:** v7.5는 60분 보호 기간 적용. 고승률을 위해 작은 수익도 확보!
 
-🆕 **v7.1 PROFIT PROTECTION RULES (ONLY when still in profit!):**
-⚠️ **IMPORTANT:** These rules ONLY apply when CURRENT P&L is POSITIVE!
-If position has converted to LOSS, use normal loss management, NOT profit protection!
-
-- **Peak Profit > 5% and Current < 2%:** EXIT 100% (significant profit evaporating)
-- **Peak Profit > 8% and Current < 4%:** EXIT at least 50% (protect gains)
-- **Drawdown from Peak > 50% (while still in profit):** Strong exit consideration
-- **Drawdown from Peak > 30% (while still in profit):** Watch closely
-
-❌ **DO NOT USE PROFIT PROTECTION WHEN:**
-- Current P&L is NEGATIVE (this is loss management, not profit protection!)
-- Peak was < 5% (too small to meaningfully protect)
-- 4H Trend Support is ≥ 6/8 (strong trend may recover)
-
-🆕🆕 **v7.6 TIME + PROFIT PROTECTION (RELAXED for v7.4):**
+🆕 **v7.5 PROFIT PROTECTION RULES (적극적 수익 보호!):**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-**These rules apply ONLY when currently in profit AND peak was significant:**
+**v7.5 핵심: 수익이 있을 때 지켜라!**
 
-1. **90min+ holding + Peak >8% + Current < 40% of Peak (still in profit):**
-   → Consider EXIT if 4H trend weakening
-   → Example: Peak 10%, Current 4% → Check 4H trend first!
+- **Current Profit ≥ 5%:** 전량 청산 적극 고려 (특히 30분+ 보유 시)
+- **Current Profit ≥ 3%:** 50% 부분 청산 고려 (수익 확보)
+- **Peak > 3% and Current < 1%:** EXIT 100% (수익 증발!)
+- **Peak > 5% and Current < 2%:** EXIT 100% (큰 수익 손실!)
+- **Drawdown from Peak > 40%:** EXIT 즉시 (아직 수익 중이라도)
 
-2. **120min+ holding + Peak >5% + Drawdown >60% (still in profit):**
-   → STRONG EXIT signal if 1H confirms reversal
-   → But HOLD if 4H Trend Support ≥ 6
+✅ **v7.5 적극 청산 조건:**
+- 수익 5%+ 달성 (목표 달성!)
+- 30분+ 보유 + 수익 3%+ (충분히 벌었다!)
+- 모멘텀 약화 시작 + 수익 권 (지금 나가라!)
 
-3. **Profit → Loss conversion (Peak was >3%, now negative):**
-   → This is NOT profit protection - use normal loss management!
-   → Check 4H trend: if strong (≥6/8), allow recovery time
-   → Only exit if 4H shows clear breakdown
-
-4. **4H Trend Support Override:**
-   → If 4H Trend Support ≥ 6/8, IGNORE time-based profit protection
-   → Strong trends deserve patience even with drawdown
-   → Only exit on technical breakdown, not arbitrary time rules
-
-💡 **KEY INSIGHT (v7.4 UPDATED):** 
-- Profit protection ≠ Loss management (don't confuse them!)
-- Peak < 5% is noise, not meaningful profit to protect
-- 4H Trend Support ≥ 6 deserves extra patience
-- Winning trades often take 2-4 hours to fully develop
-- Don't exit a strong trend just because of time elapsed
+❌ **청산 보류 조건:**
+- 20분 미만 + 수익 <5% (아직 초반)
+- 4H Trend Support ≥ 7 + 강한 모멘텀 (추세 진행 중)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🛡️ **v7.6 EARLY PROTECTION (< 90 min) - EXTENDED:**
-During first 90 minutes, be very patient:
-- Peak < 3% → Ignore ALL drawdown warnings (too early, noise)
-- Peak 3-5% → Use absolute drawdown only (peak - current > 5% to worry)
-- Peak > 5% → Monitor but still prioritize 4H trend
-- Loss conversion from small peak → Normal loss mgmt, NOT profit protection
-
-**Key Principle:** 
-Don't exit profitable positions just because of arbitrary profit levels. 
-Exit when TECHNICAL SIGNALS indicate momentum exhaustion or reversal,
-not when hitting a percentage target. Let winners run until they show
-weakness. Cut losers when technical breakdown is confirmed.
-**BUT** also protect gains - if you had significant profit and it's evaporating, 
-don't let a winner turn into a loser!
-**ESPECIALLY** after extended holding (60min+), prioritize profit protection
-over 4H trend support if drawdown becomes significant.
+💡 **v7.5 KEY INSIGHT:** 
+- 고승률 = 작은 수익 자주 챙기기!
+- "더 벌 수 있을텐데" 생각하다 손실로 전환되면 최악!
+- 수익 5% = 성공적인 트레이드! TP 기다리지 마라!
+- 승률 42%를 60%로 올리려면 빠른 익절이 핵심!
 
 ═══════════════════════════════════════════
 📋 **RESPONSE REQUIREMENTS**
@@ -6774,102 +6922,93 @@ Your response must be a single JSON object."""
             trend_support_4h = early_exit_signals.get('trend_support_4h', 0)
             
             if result['decision'] in ['close', 'partial_close']:
-                # 🆕 v7.4: 30분 이내: 엄격한 보호 (심각한 손실/극단적 역전만 허용)
-                if holding_time < 30:
-                    # 허용 조건: 심각한 손절(-15% 이상 손실) 또는 극단적 역전(점수 15 이상)
-                    # 4H Trend Support ≥ 6이면 임계값 더 높임
-                    loss_threshold = -15.0 if trend_support_4h < 6 else -20.0
-                    reversal_threshold = 15 if trend_support_4h < 6 else 18
+                # 🆕 v7.5: 수익 보호 최우선! 수익 5%+ 이면 청산 허용
+                is_quick_profit = pnl_percent >= V75_EARLY_PROFIT_EXIT  # 5%+
+                is_good_profit_quick = pnl_percent >= V75_PROFIT_PROTECTION_THRESHOLD and holding_time >= V75_QUICK_PROFIT_TIME  # 3%+ and 30분+
+                
+                if is_quick_profit or is_good_profit_quick:
+                    logger.info(f"💰 v7.5 수익 보호: {pnl_percent:+.2f}% 수익 확보 허용!")
+                    # 청산 결정 유지 (보호 무시)
+                    result['exit_type'] = 'profit_protection'
+                
+                # 🆕 v7.5: 20분 이내: 엄격한 보호 (수익 5%+ 제외)
+                elif holding_time < 20:
+                    # 허용 조건: 심각한 손절(-10% 이상 손실) 또는 극단적 역전(점수 12 이상) 또는 수익 5%+
+                    loss_threshold = -10.0 if trend_support_4h < 6 else -15.0
+                    reversal_threshold = 12 if trend_support_4h < 6 else 15
                     
                     is_severe_loss = pnl_percent <= loss_threshold
                     is_catastrophic_reversal = early_exit_signals['reversal_score'] >= reversal_threshold
                     
                     if not (is_severe_loss or is_catastrophic_reversal):
-                        logger.warning(f"🛡️ 진입 초반 보호 발동 (< 30분): {result['decision']} → HOLD")
-                        logger.warning(f"   보유 시간: {holding_time:.1f}분, PnL: {pnl_percent:+.2f}%, Reversal Score: {early_exit_signals['reversal_score']}, 4H Support: {trend_support_4h}/8")
-                        logger.warning(f"   원래 이유: {result['reason'][:100]}...")
+                        logger.warning(f"🛡️ v7.5 초반 보호 (< 20분): {result['decision']} → HOLD")
+                        logger.warning(f"   보유: {holding_time:.1f}분, PnL: {pnl_percent:+.2f}%, Reversal: {early_exit_signals['reversal_score']}")
                         result['decision'] = 'hold'
                         result['percentage'] = 0
-                        result['reason'] = f"🛡️ STRICT PROTECTION (< 30min): Original decision was {original_decision}, but position needs time to develop. 4H Trend Support: {trend_support_4h}/8. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
+                        result['reason'] = f"🛡️ v7.5 STRICT (< 20min): {original_decision} blocked. PnL: {pnl_percent:+.2f}%"
                         result['exit_type'] = 'none'
                         result['urgency'] = 'none'
-                        
-                        if ENABLE_TELEGRAM:
-                            send_telegram_notification(
-                                f"🛡️ <b>진입 초반 보호 발동</b>\n\n"
-                                f"<b>심볼:</b> {symbol}\n"
-                                f"<b>보유 시간:</b> {holding_time:.1f}분\n"
-                                f"<b>현재 PnL:</b> {pnl_percent:+.2f}%\n"
-                                f"<b>4H Trend Support:</b> {trend_support_4h}/8\n"
-                                f"<b>원래 결정:</b> {original_decision.upper()}\n"
-                                f"<b>변경 결정:</b> HOLD\n\n"
-                                f"💡 포지션이 발전할 시간이 필요합니다.\n"
-                                f"90분 이후 정상 모니터링 재개됩니다.",
-                                'info'
-                            )
                 
-                # 🆕 v7.4: 30-60분: 주의 구간 (여전히 관대하게)
-                elif holding_time < 60:
-                    # 허용 조건: 손실 -12% 이상, 수익 +15% 이상 + 피로 신호(≥9), 또는 역전 점수 12 이상
-                    # 4H Trend Support ≥ 6이면 임계값 더 높임
-                    loss_threshold = -12.0 if trend_support_4h < 6 else -15.0
-                    reversal_threshold = 12 if trend_support_4h < 6 else 15
-                    
-                    is_significant_loss = pnl_percent <= loss_threshold
-                    is_great_profit_with_exhaustion = pnl_percent >= 15.0 and early_exit_signals['reversal_score'] >= 9
-                    is_strong_reversal = early_exit_signals['reversal_score'] >= reversal_threshold
-                    
-                    if not (is_significant_loss or is_great_profit_with_exhaustion or is_strong_reversal):
-                        logger.warning(f"🛡️ 진입 주의 구간 (30-60분): {result['decision']} → HOLD")
-                        logger.warning(f"   보유 시간: {holding_time:.1f}분, PnL: {pnl_percent:+.2f}%, Reversal Score: {early_exit_signals['reversal_score']}, 4H Support: {trend_support_4h}/8")
-                        result['decision'] = 'hold'
-                        result['percentage'] = 0
-                        result['reason'] = f"🛡️ CAUTION ZONE (30-60min): Original decision was {original_decision}. 4H Trend Support: {trend_support_4h}/8. Conditions not met for early exit. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
-                        result['exit_type'] = 'none'
-                        result['urgency'] = 'watch'
-                
-                # 🆕 v7.4: 60-90분: 가벼운 주의 (좀 더 유연하게)
-                elif holding_time < 90:
-                    # 허용 조건: 손실 -10% 이상, 수익 +10% 이상 + 피로 신호(≥8), 또는 역전 점수 10 이상
-                    # 4H Trend Support ≥ 6이면 임계값 더 높임
-                    loss_threshold = -10.0 if trend_support_4h < 6 else -12.0
+                # 🆕 v7.5: 20-40분: 주의 구간 (수익 3%+ or 손실 -8% 허용)
+                elif holding_time < 40:
+                    loss_threshold = -8.0 if trend_support_4h < 6 else -10.0
                     reversal_threshold = 10 if trend_support_4h < 6 else 12
                     
-                    is_moderate_loss = pnl_percent <= loss_threshold
-                    is_good_profit_with_exhaustion = pnl_percent >= 10.0 and early_exit_signals['reversal_score'] >= 8
-                    is_moderate_reversal = early_exit_signals['reversal_score'] >= reversal_threshold
+                    is_significant_loss = pnl_percent <= loss_threshold
+                    is_good_profit = pnl_percent >= 3.0  # v7.5: 3%+ 수익 허용
+                    is_strong_reversal = early_exit_signals['reversal_score'] >= reversal_threshold
                     
-                    if not (is_moderate_loss or is_good_profit_with_exhaustion or is_moderate_reversal):
-                        logger.warning(f"🛡️ 진입 관찰 구간 (60-90분): {result['decision']} → HOLD")
-                        logger.warning(f"   보유 시간: {holding_time:.1f}분, PnL: {pnl_percent:+.2f}%, Reversal Score: {early_exit_signals['reversal_score']}, 4H Support: {trend_support_4h}/8")
+                    if not (is_significant_loss or is_good_profit or is_strong_reversal):
+                        logger.warning(f"🛡️ v7.5 주의 구간 (20-40분): {result['decision']} → HOLD")
                         result['decision'] = 'hold'
                         result['percentage'] = 0
-                        result['reason'] = f"👀 WATCH ZONE (60-90min): Original decision was {original_decision}. 4H Trend Support: {trend_support_4h}/8. Approaching normal monitoring. Holding time: {holding_time:.1f}min. Original reason: {result['reason'][:150]}"
+                        result['reason'] = f"🛡️ v7.5 CAUTION (20-40min): {original_decision} blocked. PnL: {pnl_percent:+.2f}%"
                         result['exit_type'] = 'none'
                         result['urgency'] = 'watch'
                 
-                # 🆕 v7.4: 90분 이후 수익 포지션 인내심 로직 (장기 추세 여력 확인)
-                # 🆕 v7.6: 수익 보호 조건 추가 - peak drawdown이 심각하면 인내심 무시
-                # ⚠️ 중요: 현재 수익(pnl_percent > 0)일 때만 profit protection 적용!
-                elif holding_time >= 90 and pnl_percent > 0 and result['decision'] in ['close', 'partial_close']:
+                # 🆕 v7.5: 40-60분: 가벼운 주의 (수익 2%+ or 손실 -5% 허용)
+                elif holding_time < 60:
+                    loss_threshold = -5.0 if trend_support_4h < 6 else -8.0
+                    reversal_threshold = 8 if trend_support_4h < 6 else 10
+                    
+                    is_moderate_loss = pnl_percent <= loss_threshold
+                    is_any_profit = pnl_percent >= 2.0  # v7.5: 2%+ 수익 허용
+                    is_moderate_reversal = early_exit_signals['reversal_score'] >= reversal_threshold
+                    
+                    if not (is_moderate_loss or is_any_profit or is_moderate_reversal):
+                        logger.warning(f"🛡️ v7.5 관찰 구간 (40-60분): {result['decision']} → HOLD")
+                        result['decision'] = 'hold'
+                        result['percentage'] = 0
+                        result['reason'] = f"👀 v7.5 WATCH (40-60min): {original_decision} blocked. PnL: {pnl_percent:+.2f}%"
+                        result['exit_type'] = 'none'
+                        result['urgency'] = 'watch'
+                
+                # 🆕 v7.5: 60분 이후 - 정상 모니터링 (적극적 수익 보호)
+                elif holding_time >= 60 and pnl_percent > 0 and result['decision'] in ['close', 'partial_close']:
                     try:
-                        # 🆕 v7.6: 수익 보호 우선 조건 체크
-                        # peak drawdown이 심각하면 인내심 로직 무시
-                        # ⚠️ 단, 4H Trend Support ≥ 6이면 더 관대하게
+                        # v7.5: 더 적극적인 수익 보호
                         skip_patience = False
                         skip_reason = ""
                         
-                        # 조건 1: peak > 8% + 현재 < peak의 40% (기존 5% → 8%로 상향)
-                        if peak_profit_info['peak_pnl'] > 8.0 and pnl_percent < peak_profit_info['peak_pnl'] * 0.4:
-                            if trend_support_4h < 6:  # 4H 추세 약할 때만
-                                skip_patience = True
-                                skip_reason = f"v7.6 수익 보호: Peak {peak_profit_info['peak_pnl']:+.2f}%에서 60%+ 하락"
+                        # 조건 1: 수익 2%+ 이면서 모멘텀 약화
+                        if pnl_percent >= 2.0 and early_exit_signals['reversal_score'] >= 6:
+                            skip_patience = True
+                            skip_reason = f"v7.5 수익 보호: {pnl_percent:+.2f}% + 모멘텀 약화"
                         
-                        # 조건 2: peak > 5% + drawdown > 60% (기존 3%/50% → 5%/60%로 상향)
-                        elif peak_profit_info['peak_pnl'] > 5.0 and drawdown_from_peak > 60:
-                            if trend_support_4h < 6:  # 4H 추세 약할 때만
-                                skip_patience = True
-                                skip_reason = f"v7.6 수익 보호: Peak {peak_profit_info['peak_pnl']:+.2f}%에서 60%+ drawdown"
+                        # 조건 2: peak > 3% + 현재 < 1% (기존 5%/2% → 3%/1%로 낮춤)
+                        elif peak_profit_info['peak_pnl'] > 3.0 and pnl_percent < 1.0:
+                            skip_patience = True
+                            skip_reason = f"v7.5 수익 보호: Peak {peak_profit_info['peak_pnl']:+.2f}% → 현재 {pnl_percent:+.2f}%"
+                        
+                        # 조건 3: drawdown > 40% (기존 60% → 40%로 낮춤)
+                        elif drawdown_from_peak > 40 and peak_profit_info['peak_pnl'] > 2.0:
+                            skip_patience = True
+                            skip_reason = f"v7.5 수익 보호: Peak에서 {drawdown_from_peak:.1f}% drawdown"
+                        
+                        if skip_patience:
+                            logger.info(f"💰 v7.5 수익 보호 발동: {skip_reason}")
+                            result['reason'] = f"💰 {skip_reason}. " + result['reason'][:150]
+                            result['exit_type'] = 'profit_protection'
                         
                         # 조건 3: holding 120분+ + peak > 5% + drawdown > 50% (기존 90분/3%/40% → 완화)
                         elif holding_time >= 120 and peak_profit_info['peak_pnl'] > 5.0 and drawdown_from_peak > 50:
@@ -8257,6 +8396,34 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
         
         try:
             logger.info(f"[{user_name}] 거래 실행 시작: {symbol} {action}")
+            
+            # 🆕 v7.5: 양방향 포지션 충돌 체크
+            try:
+                hedge_check = check_hedge_position_conflict(symbol, action)
+                if hedge_check['has_conflict']:
+                    if hedge_check['should_close_existing']:
+                        logger.warning(f"🔄 v7.5 HEDGE CONFLICT: {hedge_check['reason']}")
+                        
+                        # 수익 포지션 자동 청산
+                        leverage = get_symbol_config(symbol).get('leverage', 20)
+                        hedge_result = manage_hedge_positions(symbol, leverage)
+                        
+                        if hedge_result['closed']:
+                            logger.info(f"✅ v7.5 Hedge position closed: {hedge_result['side']} at +{hedge_result['pnl']:.2f}%")
+                            if ENABLE_TELEGRAM:
+                                send_telegram_notification(
+                                    f"🔄 <b>v7.5 양방향 포지션 정리</b>\n\n"
+                                    f"<b>심볼:</b> {symbol}\n"
+                                    f"<b>청산 방향:</b> {hedge_result['side'].upper()}\n"
+                                    f"<b>수익:</b> +{hedge_result['pnl']:.2f}%\n"
+                                    f"<b>새 진입:</b> {action.upper()}\n\n"
+                                    f"💡 수익 포지션 청산 후 새 방향 진입",
+                                    'info'
+                                )
+                    else:
+                        logger.warning(f"⚠️ v7.5 HEDGE WARNING: {hedge_check['reason']}")
+            except Exception as e:
+                logger.warning(f"Hedge check failed: {e}")
             
             # 레버리지 설정 (🆕 v7.3: 정규화된 심볼 사용)
             try:
@@ -10235,38 +10402,35 @@ def initialize_bot():
             position_info = f"\n\n<b>복구된 포지션:</b>\n{get_position_summary()}"
         
         startup_message = f"""
-🚀 <b>통합 트레이딩 시스템 v7.4 ENHANCED 시작</b>
+🚀 <b>통합 트레이딩 시스템 v7.5 고승률</b>
 
-<b>🆕 v7.4 ENHANCED 핵심 기능:</b>
-🎯 <b>Mean Reversion 기회 포착</b>
-  → 극단적 과매도에서 BUY 신호 Approve
-  → 극단적 과매수에서 SELL 신호 Approve
-  → 저점 매수/고점 매도 기회 포착
+<b>🆕 v7.5 핵심 개선:</b>
+💰 <b>고승률 수익 보호</b>
+  → 수익 5%+ 적극 청산 권장
+  → 수익 3%+ (30분+) 청산 허용
+  → 작은 수익도 확실히 챙기기!
 
-📊 <b>동적 심볼 필터 (DB 기반)</b>
-  → 최근 30일 성과 자동 분석
-  → 0% 승률 심볼 자동 블랙리스트
-  → 저조 심볼 포지션 사이즈 축소
-  → 거래 없는 심볼은 정상 허용
+📊 <b>타이트한 TP/SL (15분봉 ATR 기반)</b>
+  → SL: 0.8x ATR (기존 2.0x)
+  → TP: 1.2x ATR (기존 3.5x)
+  → 현실적인 목표, 높은 도달률
 
-📈 <b>ATR 기반 적응형 손실 제한</b>
-  → 알트코인 변동성 고려
-  → 노이즈에 덜 민감한 손절
-  → 시간대별 동적 손실 제한
+🔄 <b>양방향 포지션 관리</b>
+  → 롱/숏 동시 보유 감지
+  → 수익 포지션 자동 청산
+  → 양쪽 손실 방지
 
-🔄 <b>Contrarian 조건 강화</b>
-  → 3개 TF 동시 극단값 필수
-  → 점수 8점 이상에서만 반대매매
-  → 사이즈 50% 자동 축소
+⏰ <b>단축된 보호 기간</b>
+  → 20분: 엄격 보호 (수익 5%+ 제외)
+  → 40분: 수익 3%+ 허용
+  → 60분: 정상 모니터링
 
 <b>📊 기존 기능 (모두 유지):</b>
 👥 다중 유저 동시 거래 (최대 3명)
 🗑️ TP/SL 자동 삭제
 🔄 동기화된 거래 실행
 🎯 멀티 타임프레임 필터링
-💡 매물대 기반 TP/SL 자동 조정
 🚨 추세 역전 조기 신호 감지
-✨ 수동 포지션 자동 감지
 
 <b>⚙️ 서버 정보:</b>
 <b>서버 포트:</b> {SERVER_PORT} (Multi-User)
@@ -10279,15 +10443,12 @@ def initialize_bot():
   - 🤖 자동: {auto_count}개
   - 🔧 수동: {manual_count}개{position_info}
 
-✅ v7.4 시스템이 정상적으로 시작되었습니다.
-🎯 과매수/과매도 필터 활성화
-💡 TP/SL 자동 조정 활성화
-🚨 조기 종료 신호 감지 활성화
+✅ v7.5 고승률 시스템 정상 시작!
+💰 수익 보호 최우선 모드 활성화
+📊 타이트한 TP/SL 적용
+🔄 양방향 포지션 관리 활성화
 🤖 AI 포지션 모니터링 활성화
-🔧 수동 포지션 자동 감지 활성화
-🔄 거래소 포지션 자동 동기화 활성화
-📊 서버 재시작 시 포지션 자동 복구
-💾 주기적 데이터 기록 활성화 (5분)
+📈 목표: 승률 60%+ 달성!
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """.strip()
