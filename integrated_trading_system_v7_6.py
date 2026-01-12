@@ -1,49 +1,60 @@
 """
 ╔═══════════════════════════════════════════════════════════════════════════════╗
-║              INTEGRATED TRADING SYSTEM v7.7 LOSS DISCIPLINE                  ║
+║              INTEGRATED TRADING SYSTEM v7.8 CONSERVATIVE EXIT                ║
 ║                   Multi-User Crypto Trading Bot                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
-║  Version: 7.7                                                                ║
-║  Last Updated: 2026-01-09                                                    ║
-║  Base Version: v7.6 → v7.7 LOSS DISCIPLINE                                   ║
+║  Version: 7.8                                                                ║
+║  Last Updated: 2026-01-12                                                    ║
+║  Base Version: v7.7 → v7.8 CONSERVATIVE EXIT                                 ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║                     v7.8 CHANGELOG (CONSERVATIVE EXIT)                       ║
+╠═══════════════════════════════════════════════════════════════════════════════╣
+║  🔴 핵심 문제: 포지션 너무 성급히 종료하여 수익 기회 상실                     ║
+║  - PYTH -1.52% @ 0분, COTI -1.80% @ 18분, LTC -3.54% @ 27분                  ║
+║  - 경미한 손실에서 trend_reversal로 조기 청산                                 ║
+║                                                                              ║
+║  🆕 핵심 개선 1: TP/SL 간격 더 타이트하게                                    ║
+║  - SL: 0.4x → 0.3x ATR (리스크 감소)                                        ║
+║  - TP: 0.6x → 0.5x ATR (수익 보존 확률 증가)                                ║
+║  - 손익비 1.5 유지                                                           ║
+║                                                                              ║
+║  🆕 핵심 개선 2: 초반 보호 기간 대폭 확대                                    ║
+║  - 초반 보호: 45분 → 60분                                                   ║
+║  - 중간 보호: 60분 → 90분                                                   ║
+║  - 경미 손실(-5% 이상)에서도 강한 보호                                       ║
+║                                                                              ║
+║  🆕 핵심 개선 3: 임계값 대폭 상향 (보수적 종료)                              ║
+║  - 초반 수익: 즉시=20, 곧=16, 관찰=12                                        ║
+║  - 초반 경미손실: 즉시=18, 곧=14, 관찰=10                                    ║
+║  - 중간 손실: 즉시=15, 곧=12, 관찰=8                                         ║
+║                                                                              ║
+║  🆕 핵심 개선 4: 점수 차감 강화                                              ║
+║  - 초반 수익: -6점 (기존 -4점)                                               ║
+║  - 초반 경미손실: -4점 (신규)                                                ║
+║  - 중간 수익: -3점, 경미손실: -2점                                           ║
+║                                                                              ║
+║  🆕 핵심 개선 5: 손실 가속 조건 완화                                         ║
+║  - 60분 미만: 손실 가속 미적용 (인내심 유지)                                 ║
+║  - 60분 이상 & -8% 이하: 손실 가속 적용                                      ║
+║  - -15% 이하: 시간 무관 강제 청산                                            ║
+║                                                                              ║
+║  🆕 핵심 개선 6: RSI 인내심 경미손실 적용                                    ║
+║  - 수익 중: 100% 인내심 적용                                                 ║
+║  - 경미손실(-5% 이상): 50% 인내심 적용 (반등 기대)                           ║
+║  - 심각손실(-5% 미만): 인내심 미적용                                         ║
+║                                                                              ║
+║  📊 v7.8 예상 효과:                                                          ║
+║  ┌─────────────────────────────────────────────────────────────────────┐     ║
+║  │  PYTH @ 0분 -1.52% → 보호 기간으로 청산 방지, 반등 대기             │     ║
+║  │  LTC @ 27분 -3.54% → 경미손실 보호로 추가 기회 부여                 │     ║
+║  │  TP/SL 타이트 → 손실 리스크 감소, 수익 확정 빈도 증가               │     ║
+║  └─────────────────────────────────────────────────────────────────────┘     ║
+║                                                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                     v7.7 CHANGELOG (LOSS DISCIPLINE)                         ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║  🔴 핵심 문제: UMA -47%, PENDLE -52%, ACH -42% 대형 손실                     ║
 ║  - 추세 역전 감지 후에도 너무 오래 버팀 → 손익비 파괴                        ║
-║  - 작은 수익(+2~5%)은 빨리 챙기면서 손실은 -40~50%까지 방치                  ║
-║                                                                              ║
-║  🆕 핵심 개선 1: 손실 가속 청산 시스템                                       ║
-║  - -8% 이하: 손실 가속 모드 (exit 점수 +3~8점)                               ║
-║  - -15% 이하: 심각 손실 모드 (최소 점수 15점, 임계값 10)                     ║
-║  - -25% 이하: 재앙적 손실 (점수 20점, 무조건 청산)                           ║
-║                                                                              ║
-║  🆕 핵심 개선 2: 적응형 손실 제한 강화                                       ║
-║  - 최소 손실 제한: -15% → -10%                                               ║
-║  - 최대 손실 제한: -25% → -18%                                               ║
-║  - 절대 손실 한도: -30% → -25%                                               ║
-║                                                                              ║
-║  🆕 핵심 개선 3: 시간 기반 손실 제한 강화                                    ║
-║  - 10분: 40% 제한 (기존 15분 50%)                                            ║
-║  - 20분: 50% 제한                                                            ║
-║  - 30분: 60% 제한 (기존 65%)                                                 ║
-║  - 60분: 75% 제한 (기존 80%)                                                 ║
-║                                                                              ║
-║  🆕 핵심 개선 4: RSI 인내심 조건부 적용                                      ║
-║  - 수익 중일 때만 RSI 과열 인내심 적용                                       ║
-║  - 손실 중일 때는 인내심 미적용 → 빠른 청산 유도                             ║
-║                                                                              ║
-║  🆕 핵심 개선 5: 초반 보호 손실 시 약화                                      ║
-║  - 수익 중: 강한 보호 (임계값 18/15/10)                                      ║
-║  - 경미 손실(-10% 미만): 약한 보호 (임계값 14/11/8)                          ║
-║  - 심각 손실(-10% 이상): 보호 해제 (임계값 10/8/5)                           ║
-║                                                                              ║
-║  📊 v7.7 예상 효과:                                                          ║
-║  ┌─────────────────────────────────────────────────────────────────────┐     ║
-║  │  UMA: -8% 도달 시 가속 청산 → -15% 전에 종료                        │     ║
-║  │  PENDLE: -15% 도달 시 강제 청산 모드 → -25% 전에 종료               │     ║
-║  │  손익비 개선: 0.76 → 1.5+ 목표                                      │     ║
-║  └─────────────────────────────────────────────────────────────────────┘     ║
 ║                                                                              ║
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                     v7.5.1 CHANGELOG (EARLY PROTECTION BALANCE)              ║
@@ -311,16 +322,24 @@ V74_REDUCED_WIN_RATE = 35             # 축소 사이즈 승률 기준
 V74_REDUCED_MIN_LOSS = -500           # 축소 사이즈 누적손실 기준
 
 # ============ 🆕 v7.5 새로운 상수 ============
-# TP/SL 설정 (v7.6: 더 단기적, 현실적 목표 - 기존의 절반, 손익비 1.5 유지)
-V75_SL_ATR_MULTIPLIER = 0.4   # SL: 15분봉 ATR의 0.4배 (기존 0.8 → 0.4)
-V75_TP_ATR_MULTIPLIER = 0.6   # TP: 15분봉 ATR의 0.6배 (기존 1.2 → 0.6)
-V75_MIN_RR_RATIO = 1.5        # 최소 R:R 비율 (1.3 → 1.5 상향)
+# TP/SL 설정 (v7.8: 더 타이트한 간격으로 리스크 감소)
+V75_SL_ATR_MULTIPLIER = 0.3   # SL: 15분봉 ATR의 0.3배 (기존 0.4 → 0.3)
+V75_TP_ATR_MULTIPLIER = 0.5   # TP: 15분봉 ATR의 0.5배 (기존 0.6 → 0.5)
+V75_MIN_RR_RATIO = 1.5        # 최소 R:R 비율 유지
 
-# 수익 보호 설정 (더 적극적)
-V75_PROFIT_PROTECTION_THRESHOLD = 3.0   # 수익 보호 시작 임계값 (3% 이상)
+# 수익 보호 설정 (v7.8: 더 보수적으로)
+V75_PROFIT_PROTECTION_THRESHOLD = 2.0   # 수익 보호 시작 임계값 (3% → 2%)
 V75_PROFIT_LOCK_RATIO = 0.5             # 수익의 50% 확보 목표
-V75_EARLY_PROFIT_EXIT = 5.0             # 조기 익절 임계값 (5% 이상이면 적극 청산 고려)
-V75_QUICK_PROFIT_TIME = 30              # 빠른 수익 청산 기준 시간 (30분)
+V75_EARLY_PROFIT_EXIT = 4.0             # 조기 익절 임계값 (5% → 4%)
+V75_QUICK_PROFIT_TIME = 40              # 빠른 수익 청산 기준 시간 (30분 → 40분)
+
+# ============ 🆕 v7.8 보수적 종료 상수 ============
+V78_EARLY_PROTECTION_MINUTES = 60       # 초반 보호 기간 확대 (45분 → 60분)
+V78_MID_PROTECTION_MINUTES = 90         # 중간 보호 기간 확대 (60분 → 90분)
+V78_MIN_LOSS_FOR_EXIT = -5.0            # 이 손실 이상이어야 exit 고려 시작
+V78_STRICT_THRESHOLD_IMMEDIATE = 20     # 초반 즉시 exit 임계값 (매우 높음)
+V78_STRICT_THRESHOLD_SOON = 16          # 초반 곧 exit 임계값
+V78_STRICT_THRESHOLD_WATCH = 12         # 초반 관찰 임계값
 
 # 양방향 포지션 관리
 V75_HEDGE_PROFIT_THRESHOLD_MULTIPLIER = 2.0  # 수수료 x 2 x 레버리지 = 청산 기준
@@ -541,8 +560,8 @@ def manage_hedge_positions(symbol: str, leverage: int = 20) -> dict:
 
 def calculate_tight_tp_sl(current_price: float, action: str, atr_15m: float, atr_1h: float, symbol: str) -> dict:
     """
-    🆕 v7.5: 타이트한 TP/SL 계산 (15분봉 ATR 기반)
-    고승률을 위해 좁은 범위 + 현실적인 목표
+    🆕 v7.8: 타이트한 TP/SL 계산 (15분봉 ATR 기반)
+    리스크 감소 + 수익 보존 확률 증가
     
     Args:
         current_price: 현재 가격
@@ -557,18 +576,18 @@ def calculate_tight_tp_sl(current_price: float, action: str, atr_15m: float, atr
     # 15분봉 ATR 사용 (없으면 1시간봉의 1/4)
     base_atr = atr_15m if atr_15m > 0 else (atr_1h / 4 if atr_1h > 0 else current_price * 0.005)
     
-    # BTC/ETH는 더 타이트하게
+    # BTC/ETH는 더 타이트하게 (v7.8: 0.3 * 0.9 = 0.27x, 0.5 * 0.9 = 0.45x)
     if 'BTC' in symbol or 'ETH' in symbol:
-        sl_multiplier = V75_SL_ATR_MULTIPLIER * 0.9  # 0.72x
-        tp_multiplier = V75_TP_ATR_MULTIPLIER * 0.9  # 1.08x
+        sl_multiplier = V75_SL_ATR_MULTIPLIER * 0.9  # 0.27x ATR
+        tp_multiplier = V75_TP_ATR_MULTIPLIER * 0.9  # 0.45x ATR
     else:
-        sl_multiplier = V75_SL_ATR_MULTIPLIER  # 0.8x
-        tp_multiplier = V75_TP_ATR_MULTIPLIER  # 1.2x
+        sl_multiplier = V75_SL_ATR_MULTIPLIER  # 0.3x ATR
+        tp_multiplier = V75_TP_ATR_MULTIPLIER  # 0.5x ATR
     
     sl_distance = base_atr * sl_multiplier
     tp_distance = base_atr * tp_multiplier
     
-    # 최소 R:R 보장
+    # 최소 R:R 보장 (1.5)
     if tp_distance / sl_distance < V75_MIN_RR_RATIO:
         tp_distance = sl_distance * V75_MIN_RR_RATIO
     
@@ -4005,58 +4024,74 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
     urgency = 'none'
     confidence = 0.0
     
-    # 🆕 v7.5.1 + v7.7: 초반 보호 기간 로직 (손실 시 보호 약화)
-    # v7.7: 손실 진행 중이면 초반 보호를 크게 약화시킴
-    if holding_minutes < 45:
-        # 초반 보호 기간
-        if pnl_percent >= 0:  # 수익 중이면 강한 보호
+    # 🆕 v7.8: 보수적 초반 보호 - 성급한 종료 방지
+    # 경미한 손실(-5% 이상)에서는 강한 보호 유지
+    if holding_minutes < V78_EARLY_PROTECTION_MINUTES:  # 60분 미만
+        # 초반 보호 기간 - 매우 보수적
+        if pnl_percent >= 0:  # 수익 중이면 최강 보호
+            threshold_immediate = V78_STRICT_THRESHOLD_IMMEDIATE  # 20
+            threshold_soon = V78_STRICT_THRESHOLD_SOON            # 16
+            threshold_watch = V78_STRICT_THRESHOLD_WATCH          # 12
+            signals.append(f"🛡️ v7.8 초반 수익 보호 (<60분): 임계값 최대 상향")
+        elif pnl_percent >= V78_MIN_LOSS_FOR_EXIT:  # -5% 이상이면 강한 보호
             threshold_immediate = 18
-            threshold_soon = 15
+            threshold_soon = 14
             threshold_watch = 10
-            signals.append(f"🛡️ 초반 수익 보호 (<45분): 임계값 상향")
-        elif pnl_percent >= -10.0:  # 경미한 손실이면 약한 보호
-            threshold_immediate = 14  # 기존 18 → 14
-            threshold_soon = 11       # 기존 15 → 11
-            threshold_watch = 8       # 기존 10 → 8
-            signals.append(f"⚠️ 초반 경미손실 (<45분, {pnl_percent:.1f}%): 보호 약화")
-        else:  # 심각한 손실이면 보호 없음
-            threshold_immediate = 10
-            threshold_soon = 8
-            threshold_watch = 5
-            signals.append(f"🚨 초반 심각손실 (<45분, {pnl_percent:.1f}%): 보호 해제")
-    elif holding_minutes < 60:
-        # 중간 보호 기간
-        if pnl_percent >= 0:
+            signals.append(f"🛡️ v7.8 초반 경미손실 보호 (<60분, {pnl_percent:.1f}%): 강한 보호")
+        elif pnl_percent >= -10.0:  # -5% ~ -10% 중간 보호
             threshold_immediate = 15
             threshold_soon = 12
             threshold_watch = 8
-            signals.append(f"🛡️ 중간 수익 보호 (45-60분)")
-        elif pnl_percent >= -5.0:
+            signals.append(f"⚠️ v7.8 초반 중간손실 (<60분, {pnl_percent:.1f}%): 중간 보호")
+        else:  # -10% 이하 심각 손실
             threshold_immediate = 12
             threshold_soon = 9
             threshold_watch = 6
+            signals.append(f"🚨 초반 심각손실 (<60분, {pnl_percent:.1f}%): 보호 해제")
+    elif holding_minutes < V78_MID_PROTECTION_MINUTES:  # 60-90분
+        # 중간 보호 기간
+        if pnl_percent >= 0:
+            threshold_immediate = 16
+            threshold_soon = 13
+            threshold_watch = 9
+            signals.append(f"🛡️ v7.8 중간 수익 보호 (60-90분)")
+        elif pnl_percent >= V78_MIN_LOSS_FOR_EXIT:  # -5% 이상
+            threshold_immediate = 14
+            threshold_soon = 11
+            threshold_watch = 8
+            signals.append(f"🛡️ v7.8 중간 경미손실 보호 (60-90분, {pnl_percent:.1f}%)")
         else:
-            threshold_immediate = 10
-            threshold_soon = 8
-            threshold_watch = 5
-            signals.append(f"🚨 중간 손실 (45-60분, {pnl_percent:.1f}%): 보호 해제")
+            threshold_immediate = 12
+            threshold_soon = 9
+            threshold_watch = 6
     else:
-        # 정상 모니터링 (60분+)
+        # 정상 모니터링 (90분+)
         threshold_immediate = 12
         threshold_soon = 9
         threshold_watch = 6
     
-    # 🆕 v7.5.1: 초반에 수익 중이면 추가 점수 차감
+    # 🆕 v7.8: 초반에 수익/경미손실이면 추가 점수 차감 (더 보수적)
     early_protection_deduction = 0
-    if holding_minutes < 45 and pnl_percent > 0:
-        # 초반 + 수익 중 = 더 많은 인내심
-        early_protection_deduction = 4
-        reversal_score = max(0, reversal_score - early_protection_deduction)
-        signals.append(f"🛡️ 초반 수익 보호: -{early_protection_deduction}점 (인내심 강화)")
-    elif holding_minutes < 60 and pnl_percent > 0:
-        early_protection_deduction = 2
-        reversal_score = max(0, reversal_score - early_protection_deduction)
-        signals.append(f"🛡️ 중간 수익 보호: -{early_protection_deduction}점")
+    if holding_minutes < V78_EARLY_PROTECTION_MINUTES:  # 60분 미만
+        if pnl_percent > 0:
+            # 초반 + 수익 중 = 최대 인내심
+            early_protection_deduction = 6  # 기존 4 → 6
+            reversal_score = max(0, reversal_score - early_protection_deduction)
+            signals.append(f"🛡️ v7.8 초반 수익 보호: -{early_protection_deduction}점 (강한 인내심)")
+        elif pnl_percent >= V78_MIN_LOSS_FOR_EXIT:  # -5% 이상
+            # 경미한 손실도 인내심 부여
+            early_protection_deduction = 4
+            reversal_score = max(0, reversal_score - early_protection_deduction)
+            signals.append(f"🛡️ v7.8 초반 경미손실 인내: -{early_protection_deduction}점")
+    elif holding_minutes < V78_MID_PROTECTION_MINUTES:  # 60-90분
+        if pnl_percent > 0:
+            early_protection_deduction = 3
+            reversal_score = max(0, reversal_score - early_protection_deduction)
+            signals.append(f"🛡️ v7.8 중간 수익 보호: -{early_protection_deduction}점")
+        elif pnl_percent >= V78_MIN_LOSS_FOR_EXIT:
+            early_protection_deduction = 2
+            reversal_score = max(0, reversal_score - early_protection_deduction)
+            signals.append(f"🛡️ v7.8 중간 경미손실 인내: -{early_protection_deduction}점")
     
     # ========================================
     # === 🆕 v7.6: RSI 과열 상태 인내심 로직 ===
@@ -4121,35 +4156,48 @@ def detect_early_reversal_signals(df_15min, df_hourly, df_4h, position_side, cur
                 rsi_patience_reasons.append(f"4H Stoch={stoch_k_4h:.1f} 극단적 과매수")
         
         # RSI 과열 인내심 적용 (최대 10점 차감으로 제한)
-        # 🆕 v7.7: 단, 손실 중일 때는 RSI 인내심 적용하지 않음!
-        if rsi_patience_deduction > 0 and pnl_percent > 0:  # 수익 중일 때만 적용
-            rsi_patience_deduction = min(rsi_patience_deduction, 10)
-            reversal_score = max(0, reversal_score - rsi_patience_deduction)
-            signals.append(f"🧘 v7.6 RSI 과열 인내심: -{rsi_patience_deduction}점 ({', '.join(rsi_patience_reasons[:2])})")
-        elif rsi_patience_deduction > 0 and pnl_percent <= 0:
-            signals.append(f"⚠️ RSI 과열 but 손실 중 → 인내심 미적용")
+        # 🆕 v7.8: 경미한 손실(-5% 이상)에서도 인내심 적용
+        if rsi_patience_deduction > 0:
+            if pnl_percent > 0:  # 수익 중
+                rsi_patience_deduction = min(rsi_patience_deduction, 10)
+                reversal_score = max(0, reversal_score - rsi_patience_deduction)
+                signals.append(f"🧘 v7.6 RSI 과열 인내심: -{rsi_patience_deduction}점 ({', '.join(rsi_patience_reasons[:2])})")
+            elif pnl_percent >= V78_MIN_LOSS_FOR_EXIT:  # -5% 이상 경미한 손실
+                # v7.8: 경미한 손실에서도 50% 인내심 적용
+                reduced_deduction = rsi_patience_deduction // 2
+                if reduced_deduction > 0:
+                    reversal_score = max(0, reversal_score - reduced_deduction)
+                    signals.append(f"🧘 v7.8 경미손실 RSI 인내심: -{reduced_deduction}점 (반등 기대)")
+            else:
+                signals.append(f"⚠️ RSI 과열 but 심각 손실 → 인내심 미적용")
             
     except Exception as e:
         logger.debug(f"RSI 과열 인내심 계산 오류: {e}")
     
     # ========================================
-    # === 🆕 v7.7: 손실 가속 청산 로직 ===
+    # === 🆕 v7.7 → v7.8: 손실 가속 청산 로직 (보수적 조정) ===
     # ========================================
-    # 추세 역전 확인 + 손실 진행 중이면 빠르게 청산
+    # v7.8: 초반 보호 기간에는 손실 가속 미적용
     loss_acceleration_bonus = 0
     
-    if pnl_percent <= V77_LOSS_ACCELERATION_THRESHOLD:  # -8% 이하
-        # 손실 가속 모드 진입
-        loss_severity = abs(pnl_percent) / abs(V77_LOSS_ACCELERATION_THRESHOLD)  # 1.0 ~ 3.0+
-        loss_acceleration_bonus = int(min(loss_severity * 3, 8))  # 최대 +8점
-        reversal_score += loss_acceleration_bonus
-        signals.append(f"🚨 v7.7 손실 가속: +{loss_acceleration_bonus}점 (PnL: {pnl_percent:.1f}%)")
-        
-        # 임계값도 낮춤 (더 쉽게 exit)
-        threshold_immediate = max(8, threshold_immediate - 4)
-        threshold_soon = max(6, threshold_soon - 3)
-        signals.append(f"⚡ 임계값 하향: 즉시={threshold_immediate}, 곧={threshold_soon}")
+    # 초반 보호 기간이면 손실 가속 미적용
+    if holding_minutes >= V78_EARLY_PROTECTION_MINUTES:  # 60분 이상일 때만
+        if pnl_percent <= V77_LOSS_ACCELERATION_THRESHOLD:  # -8% 이하
+            # 손실 가속 모드 진입
+            loss_severity = abs(pnl_percent) / abs(V77_LOSS_ACCELERATION_THRESHOLD)  # 1.0 ~ 3.0+
+            loss_acceleration_bonus = int(min(loss_severity * 3, 8))  # 최대 +8점
+            reversal_score += loss_acceleration_bonus
+            signals.append(f"🚨 v7.7 손실 가속: +{loss_acceleration_bonus}점 (PnL: {pnl_percent:.1f}%)")
+            
+            # 임계값도 낮춤 (더 쉽게 exit)
+            threshold_immediate = max(8, threshold_immediate - 4)
+            threshold_soon = max(6, threshold_soon - 3)
+            signals.append(f"⚡ 임계값 하향: 즉시={threshold_immediate}, 곧={threshold_soon}")
+    else:
+        if pnl_percent <= V77_LOSS_ACCELERATION_THRESHOLD:
+            signals.append(f"🛡️ v7.8 초반 보호: 손실 가속 미적용 ({holding_minutes:.0f}분, {pnl_percent:.1f}%)")
     
+    # 심각/재앙적 손실은 시간과 무관하게 적용
     if pnl_percent <= V77_LOSS_CRITICAL_THRESHOLD:  # -15% 이하
         # 심각한 손실 - 강제 청산 모드
         reversal_score = max(reversal_score, 15)  # 최소 15점으로 상향
