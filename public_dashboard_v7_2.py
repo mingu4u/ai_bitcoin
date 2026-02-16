@@ -2378,14 +2378,105 @@ def main():
         st.info(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         # 봇 상태 확인
+        bot_online = False
         try:
             response = requests.get(f"{TRADING_BOT_URL}/status", timeout=2)
             if response.status_code == 200:
                 st.success("🤖 Trading Bot: Online")
+                bot_online = True
             else:
                 st.warning("🤖 Trading Bot: Error")
         except:
             st.error("🤖 Trading Bot: Offline")
+        
+        st.markdown("---")
+        
+        # ============ 🆕 텔레그램 테스트 ============
+        st.header("📨 Telegram")
+        
+        if bot_online:
+            if st.button("📨 텔레그램 테스트 메시지 전송", use_container_width=True):
+                try:
+                    resp = requests.post(f"{TRADING_BOT_URL}/test-telegram", timeout=5)
+                    if resp.status_code == 200:
+                        st.success("✅ 텔레그램 테스트 메시지 전송 완료!")
+                    else:
+                        error_msg = resp.json().get('error', 'Unknown error')
+                        st.error(f"❌ 전송 실패: {error_msg}")
+                except Exception as e:
+                    st.error(f"❌ 요청 실패: {e}")
+        else:
+            st.warning("봇이 오프라인입니다")
+        
+        st.markdown("---")
+        
+        # ============ 🆕 AI 모니터링 ON/OFF ============
+        st.header("🤖 AI Monitoring")
+        
+        if bot_online:
+            # 현재 AI 모니터링 상태 조회
+            ai_status = None
+            try:
+                resp = requests.get(f"{TRADING_BOT_URL}/ai-monitor/status", timeout=3)
+                if resp.status_code == 200:
+                    ai_status = resp.json()
+            except:
+                pass
+            
+            if ai_status:
+                is_active = ai_status.get('monitoring_active', False)
+                monitored_count = ai_status.get('total_positions', 0)
+                interval = ai_status.get('interval_minutes', 5)
+                
+                if is_active:
+                    st.success(f"🟢 AI 모니터링 활성 ({interval}분 간격)")
+                    st.caption(f"모니터링 중인 포지션: {monitored_count}개")
+                else:
+                    st.warning("🔴 AI 모니터링 비활성")
+                
+                # ON/OFF 토글 버튼
+                col_on, col_off = st.columns(2)
+                
+                with col_on:
+                    if st.button("▶️ ON", use_container_width=True, disabled=is_active):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/ai-monitor/start", timeout=5)
+                            if resp.status_code == 200:
+                                st.success("✅ AI 모니터링 시작!")
+                                time_module.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 시작 실패: {e}")
+                
+                with col_off:
+                    if st.button("⏹️ OFF", use_container_width=True, disabled=not is_active):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/ai-monitor/stop", timeout=5)
+                            if resp.status_code == 200:
+                                st.warning("⏹️ AI 모니터링 중지됨")
+                                time_module.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 중지 실패: {e}")
+                
+                # 강제 실행 버튼
+                if st.button("⚡ 즉시 모니터링 실행", use_container_width=True):
+                    try:
+                        with st.spinner("AI 모니터링 실행 중..."):
+                            resp = requests.post(f"{TRADING_BOT_URL}/ai-monitor/force", timeout=60)
+                        if resp.status_code == 200:
+                            result = resp.json()
+                            monitored = result.get('positions_monitored', 0)
+                            exits = result.get('exit_decisions', 0)
+                            st.success(f"✅ 완료! 모니터링: {monitored}개, Exit 결정: {exits}개")
+                        else:
+                            st.info(resp.json().get('message', 'No positions'))
+                    except Exception as e:
+                        st.error(f"❌ 실행 실패: {e}")
+            else:
+                st.error("AI 모니터링 상태를 가져올 수 없습니다")
+        else:
+            st.warning("봇이 오프라인입니다")
         
         st.markdown("---")
         
