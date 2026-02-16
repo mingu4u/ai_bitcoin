@@ -296,6 +296,11 @@ SERVER_PORT = 5000  # 하나의 서버에서 모든 유저 관리
 ENABLE_TELEGRAM = True  # Primary User가 텔레그램 관리
 AI_MONITOR_INTERVAL = 5  # AI 포지션 모니터링 간격 (분)
 
+# 🆕 TP/SL 자동생성 옵션
+# True: 웹훅 TP/SL이 null이면 봇이 자동 생성 (기존 동작)
+# False: 웹훅 TP/SL이 null이면 TP/SL 없이 진입 (TradingView 종료 신호에 의존)
+AUTO_TP_SL_GENERATION = True
+
 # ============ 🆕 v7.4 새로운 상수 ============
 # 적응형 손실 제한 설정 (v7.7: 더 타이트하게 조정)
 V74_ADAPTIVE_LOSS_MIN = -10  # 최소 손실 제한 (기존 -15 → -10)
@@ -1119,7 +1124,7 @@ class EmergencyTradingDecision(BaseModel):
 # ============ 다중 종목 설정 ============
 SYMBOL_CONFIG = {
     'BTC/USDT': {
-        'leverage': 20,
+        'leverage': 10,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1128,7 +1133,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SAHARA/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1137,7 +1142,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ETH/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1146,7 +1151,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RESOLV/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1155,7 +1160,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'BIO/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1164,7 +1169,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'UNI/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1173,7 +1178,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PENGU/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1182,7 +1187,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'UMA/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1191,7 +1196,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'COMP/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1200,7 +1205,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'XLM/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1209,7 +1214,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DOT/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1218,7 +1223,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ENA/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1227,7 +1232,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RLC/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1236,7 +1241,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ETHFI/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1245,7 +1250,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SOL/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1254,7 +1259,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PYTH/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1263,7 +1268,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'LINK/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1272,7 +1277,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ADA/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1281,7 +1286,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'XRP/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1290,7 +1295,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'BNB/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1299,7 +1304,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DOGE/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1308,7 +1313,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ACH/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1317,7 +1322,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'CRV/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1326,7 +1331,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RONIN/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1335,7 +1340,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'BCH/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1344,7 +1349,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'LSK/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1353,7 +1358,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'HBAR/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1362,7 +1367,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'AGLD/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1371,7 +1376,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ONDO/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1380,7 +1385,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'HOME/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1389,7 +1394,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'TRX/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1398,7 +1403,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ASTER/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1407,7 +1412,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DASH/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1416,7 +1421,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'TRUMP/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1425,7 +1430,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SUI/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1434,7 +1439,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'WLD/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1443,7 +1448,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'GIGGLE/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1452,7 +1457,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'LTC/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1461,7 +1466,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DUSK/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1470,7 +1475,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'FET/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1479,7 +1484,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PENDLE/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1488,7 +1493,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'FIL/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1497,7 +1502,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'AR/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1506,7 +1511,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'OG/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1515,7 +1520,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'F/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1524,7 +1529,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'TAO/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1533,7 +1538,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RAYSOL/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1542,7 +1547,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'COTI/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1551,7 +1556,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SOON/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1560,7 +1565,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'KERNEL/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1569,7 +1574,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SYN/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1578,7 +1583,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'HYPE/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1587,7 +1592,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'API3/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1596,7 +1601,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'KAITO/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1605,7 +1610,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'AERO/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1614,7 +1619,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'APT/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1623,7 +1628,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PIPPIN/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1632,7 +1637,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'NEAR/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1641,7 +1646,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'MANA/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1650,7 +1655,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ZEC/USDT': {
-        'leverage': 20,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -8761,13 +8766,14 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
             actual_entry = float(main_order['average']) if main_order.get('average') else current_price
             logger.info(f"[{user_name}] ✅ 메인 주문 체결: {symbol} {order_side} {amount:.6f} @ ${actual_entry:.4f}")
 
-            # 🆕 v7.6: 가격 검증 및 조정
-            price_check = validate_and_adjust_prices(
-                user_exchange, symbol, action, current_price, 
-                stop_loss_price, take_profit_price
-            )
-            adjusted_sl = price_check['sl']
-            adjusted_tp = price_check['tp']
+            # 🆕 v7.6: 가격 검증 및 조정 (TP/SL이 있을 때만)
+            if stop_loss_price is not None and take_profit_price is not None:
+                price_check = validate_and_adjust_prices(
+                    user_exchange, symbol, action, current_price, 
+                    stop_loss_price, take_profit_price
+                )
+                adjusted_sl = price_check['sl']
+                adjusted_tp = price_check['tp']
             
             # 🔄 현재 포지션의 전체 크기 조회 (여러 번 진입한 경우 대비)
             try:
@@ -8788,21 +8794,27 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                 total_position_amount = amount
             
             # 🆕 v7.4: 새로운 Algo Order API 사용 (2025-12-09 바이낸스 API 변경 대응)
-            sl_order, tp_order = place_sl_tp_with_algo_api(
-                user_exchange=user_exchange,
-                symbol=symbol,
-                action=action,
-                sl_price=adjusted_sl,
-                tp_price=adjusted_tp,
-                quantity=total_position_amount,
-                user_name=user_name
-            )
-            
-            # 결과 로깅
-            if not sl_order:
-                logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
-            if not tp_order:
-                logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+            # TP/SL이 모두 있을 때만 Algo Order 설정
+            sl_order = None
+            tp_order = None
+            if stop_loss_price is not None and take_profit_price is not None:
+                sl_order, tp_order = place_sl_tp_with_algo_api(
+                    user_exchange=user_exchange,
+                    symbol=symbol,
+                    action=action,
+                    sl_price=adjusted_sl,
+                    tp_price=adjusted_tp,
+                    quantity=total_position_amount,
+                    user_name=user_name
+                )
+                
+                # 결과 로깅
+                if not sl_order:
+                    logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+                if not tp_order:
+                    logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+            else:
+                logger.info(f"[{user_name}] TP/SL 미설정 (자동생성 OFF) - TradingView 종료 신호에 의존")
             
             success_count += 1
             
@@ -9739,22 +9751,28 @@ def webhook():
             ticker = exchange.fetch_ticker(symbol)
             current_price = ticker['last']
             
-            # 웹훅 데이터 우선 사용, null이면 기본값 적용
-            if action == 'buy':
-                stop_loss_price = stop_loss if stop_loss is not None else (current_price * 0.98)  # -2%
-                take_profit_price = take_profit if take_profit is not None else (current_price * 1.04)  # +4%
+            # 🆕 AUTO_TP_SL_GENERATION 옵션에 따라 분기
+            if AUTO_TP_SL_GENERATION:
+                # 웹훅 데이터 우선 사용, null이면 기본값 적용
+                if action == 'buy':
+                    stop_loss_price = stop_loss if stop_loss is not None else (current_price * 0.98)  # -2%
+                    take_profit_price = take_profit if take_profit is not None else (current_price * 1.04)  # +4%
+                else:
+                    stop_loss_price = stop_loss if stop_loss is not None else (current_price * 1.02)  # +2%
+                    take_profit_price = take_profit if take_profit is not None else (current_price * 0.96)  # -4%
+                logger.info(f"기본값 사용 (자동생성 ON) - SL: {stop_loss_price:.4f}, TP: {take_profit_price:.4f}")
             else:
-                stop_loss_price = stop_loss if stop_loss is not None else (current_price * 1.02)  # +2%
-                take_profit_price = take_profit if take_profit is not None else (current_price * 0.96)  # -4%
+                # 웹훅 TP/SL이 있으면 사용, null이면 None 유지 (TP/SL 주문 안 걸림)
+                stop_loss_price = stop_loss  # None일 수 있음
+                take_profit_price = take_profit  # None일 수 있음
+                logger.info(f"TP/SL 자동생성 OFF - SL: {stop_loss_price}, TP: {take_profit_price} (None이면 TP/SL 미설정)")
             
             pl_ratio = 2.0
             position_percent = get_symbol_config(symbol).get('position_size_percent', 10)  # 🆕 v7.3: 정규화된 심볼 사용
-            
-            logger.info(f"기본값 사용 - SL: {stop_loss_price:.4f}, TP: {take_profit_price:.4f}")
         
         # 🆕 TP/SL 현실적 조정 (매물대 및 지지/저항선 기반)
-        # AI 검증 여부와 관계없이 항상 실행
-        if action in ['buy', 'sell']:
+        # AI 검증 여부와 관계없이 항상 실행 — 단, TP/SL이 None이면 스킵
+        if action in ['buy', 'sell'] and stop_loss_price is not None and take_profit_price is not None:
             try:
                 # 현재가 가져오기
                 ticker = exchange.fetch_ticker(symbol)
@@ -10306,6 +10324,105 @@ def config():
         except Exception as e:
             logger.error(f"설정 업데이트 실패: {str(e)}")
             return jsonify({'error': str(e)}), 500
+
+@app.route('/ai-validation/toggle', methods=['POST'])
+def toggle_ai_validation():
+    """🆕 AI Validation 일괄 ON/OFF"""
+    global SYMBOL_CONFIG
+    try:
+        data = request.get_json()
+        if not data or 'enabled' not in data:
+            return jsonify({'error': 'Missing "enabled" field (true/false)'}), 400
+        
+        enabled = bool(data['enabled'])
+        updated_count = 0
+        
+        for symbol in SYMBOL_CONFIG:
+            SYMBOL_CONFIG[symbol]['ai_validation'] = enabled
+            updated_count += 1
+        
+        status_text = "활성화" if enabled else "비활성화"
+        logger.info(f"🤖 AI Validation 일괄 {status_text}: {updated_count}개 심볼")
+        
+        if ENABLE_TELEGRAM:
+            emoji = "✅" if enabled else "⛔"
+            send_telegram_notification(
+                f"{emoji} <b>AI Validation 일괄 {status_text}</b>\n\n"
+                f"<b>적용 심볼:</b> {updated_count}개\n"
+                f"<b>상태:</b> {'ON' if enabled else 'OFF'}\n\n"
+                f"{'⚠️ AI 검증 없이 웹훅 신호가 직접 실행됩니다!' if not enabled else '🤖 모든 신호가 AI 검증을 거칩니다.'}\n\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                'success' if enabled else 'warning'
+            )
+        
+        return jsonify({
+            'status': 'success',
+            'ai_validation_enabled': enabled,
+            'updated_symbols': updated_count
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"AI Validation 토글 오류: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/ai-validation/status', methods=['GET'])
+def ai_validation_status():
+    """🆕 AI Validation 상태 조회"""
+    try:
+        enabled_count = sum(1 for c in SYMBOL_CONFIG.values() if c.get('ai_validation', True))
+        disabled_count = sum(1 for c in SYMBOL_CONFIG.values() if not c.get('ai_validation', True))
+        total = len(SYMBOL_CONFIG)
+        
+        return jsonify({
+            'total_symbols': total,
+            'ai_validation_enabled': enabled_count,
+            'ai_validation_disabled': disabled_count,
+            'all_enabled': enabled_count == total,
+            'all_disabled': disabled_count == total
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"AI Validation 상태 조회 오류: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/auto-tp-sl/toggle', methods=['POST'])
+def toggle_auto_tp_sl():
+    """🆕 TP/SL 자동생성 ON/OFF"""
+    global AUTO_TP_SL_GENERATION
+    try:
+        data = request.get_json()
+        if not data or 'enabled' not in data:
+            return jsonify({'error': 'Missing "enabled" field (true/false)'}), 400
+        
+        AUTO_TP_SL_GENERATION = bool(data['enabled'])
+        status_text = "활성화" if AUTO_TP_SL_GENERATION else "비활성화"
+        logger.info(f"🎯 TP/SL 자동생성 {status_text}")
+        
+        if ENABLE_TELEGRAM:
+            emoji = "🎯" if AUTO_TP_SL_GENERATION else "📡"
+            send_telegram_notification(
+                f"{emoji} <b>TP/SL 자동생성 {status_text}</b>\n\n"
+                f"<b>상태:</b> {'ON' if AUTO_TP_SL_GENERATION else 'OFF'}\n\n"
+                f"{'🎯 웹훅 TP/SL이 null이면 봇이 자동 생성합니다.' if AUTO_TP_SL_GENERATION else '📡 웹훅 TP/SL이 null이면 TP/SL 없이 진입합니다. (TradingView close_position 신호에 의존)'}\n\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                'success' if AUTO_TP_SL_GENERATION else 'warning'
+            )
+        
+        return jsonify({
+            'status': 'success',
+            'auto_tp_sl_enabled': AUTO_TP_SL_GENERATION
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"TP/SL 자동생성 토글 오류: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/auto-tp-sl/status', methods=['GET'])
+def auto_tp_sl_status():
+    """🆕 TP/SL 자동생성 상태 조회"""
+    return jsonify({
+        'auto_tp_sl_enabled': AUTO_TP_SL_GENERATION
+    }), 200
 
 @app.route('/ai-performance', methods=['GET'])
 def ai_performance():

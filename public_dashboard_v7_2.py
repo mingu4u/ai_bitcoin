@@ -2480,6 +2480,112 @@ def main():
         
         st.markdown("---")
         
+        # ============ 🆕 AI Validation ON/OFF ============
+        st.header("🧠 AI Validation")
+        
+        if bot_online:
+            av_status = None
+            try:
+                resp = requests.get(f"{TRADING_BOT_URL}/ai-validation/status", timeout=3)
+                if resp.status_code == 200:
+                    av_status = resp.json()
+            except:
+                pass
+            
+            if av_status:
+                total = av_status.get('total_symbols', 0)
+                enabled = av_status.get('ai_validation_enabled', 0)
+                all_enabled = av_status.get('all_enabled', False)
+                all_disabled = av_status.get('all_disabled', False)
+                
+                if all_enabled:
+                    st.success(f"🟢 AI 검증 활성 ({enabled}/{total})")
+                elif all_disabled:
+                    st.error(f"🔴 AI 검증 비활성 (전체 {total}개)")
+                else:
+                    st.warning(f"🟡 혼합 ({enabled}/{total} 활성)")
+                
+                st.caption("ON: 진입 신호를 AI가 검증/거부/수정")
+                st.caption("OFF: 웹훅 신호가 바로 거래 실행")
+                
+                col_av_on, col_av_off = st.columns(2)
+                with col_av_on:
+                    if st.button("🧠 ON", key="av_on", use_container_width=True, disabled=all_enabled):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/ai-validation/toggle", json={'enabled': True}, timeout=5)
+                            if resp.status_code == 200:
+                                st.success("✅ AI 검증 활성화!")
+                                time_module.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 실패: {e}")
+                with col_av_off:
+                    if st.button("⛔ OFF", key="av_off", use_container_width=True, disabled=all_disabled):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/ai-validation/toggle", json={'enabled': False}, timeout=5)
+                            if resp.status_code == 200:
+                                st.warning("⛔ AI 검증 비활성화!")
+                                time_module.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 실패: {e}")
+            else:
+                st.error("상태를 가져올 수 없습니다")
+        else:
+            st.warning("봇이 오프라인입니다")
+        
+        st.markdown("---")
+        
+        # ============ 🆕 TP/SL 자동생성 ON/OFF ============
+        st.header("🎯 TP/SL 자동생성")
+        
+        if bot_online:
+            tpsl_status = None
+            try:
+                resp = requests.get(f"{TRADING_BOT_URL}/auto-tp-sl/status", timeout=3)
+                if resp.status_code == 200:
+                    tpsl_status = resp.json()
+            except:
+                pass
+            
+            if tpsl_status is not None:
+                tpsl_enabled = tpsl_status.get('auto_tp_sl_enabled', True)
+                
+                if tpsl_enabled:
+                    st.success("🟢 TP/SL 자동생성 ON")
+                    st.caption("웹훅 TP/SL이 null이면 봇이 자동 생성")
+                else:
+                    st.warning("📡 TP/SL 자동생성 OFF")
+                    st.caption("TradingView close_position 신호에 의존")
+                
+                col_tp_on, col_tp_off = st.columns(2)
+                with col_tp_on:
+                    if st.button("🎯 ON", key="tpsl_on", use_container_width=True, disabled=tpsl_enabled):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/auto-tp-sl/toggle", json={'enabled': True}, timeout=5)
+                            if resp.status_code == 200:
+                                st.success("✅ TP/SL 자동생성 ON!")
+                                time_module.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 실패: {e}")
+                with col_tp_off:
+                    if st.button("📡 OFF", key="tpsl_off", use_container_width=True, disabled=not tpsl_enabled):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/auto-tp-sl/toggle", json={'enabled': False}, timeout=5)
+                            if resp.status_code == 200:
+                                st.warning("📡 TP/SL 자동생성 OFF!")
+                                time_module.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 실패: {e}")
+            else:
+                st.error("상태를 가져올 수 없습니다")
+        else:
+            st.warning("봇이 오프라인입니다")
+        
+        st.markdown("---")
+        
         # 정보
         st.caption("Trading Dashboard v7.6 Complete")
         st.caption("© 2025 Automated Trading System")
