@@ -8338,9 +8338,10 @@ def format_price(price, precision):
         return f"{rounded:.{precision}f}"
 
 
-def place_conditional_order(user_exchange, symbol, side, order_type, stop_price, limit_price=None,
+def place_conditional_order(user_exchange, symbol, side, order_type, stop_price=None, limit_price=None,
                            quantity=None, close_position=False, reduce_only=False, 
-                           working_type='MARK_PRICE'):
+                           working_type='MARK_PRICE',
+                           activate_price=None, callback_rate=None):
     """
     🆕 v7.6: 바이낸스 Algo Order API (2025-12-09 이후)
     
@@ -8350,48 +8351,56 @@ def place_conditional_order(user_exchange, symbol, side, order_type, stop_price,
     - stopPrice → triggerPrice
     - 응답: orderId → algoId
     
-    Args:
-        user_exchange: CCXT exchange 인스턴스
-        symbol: 거래 심볼 (예: 'BTC/USDT')
-        side: 'BUY' 또는 'SELL'
-        order_type: 'STOP_MARKET', 'TAKE_PROFIT_MARKET', 'STOP', 'TAKE_PROFIT', 'TRAILING_STOP_MARKET'
-        stop_price: 트리거 가격
-        limit_price: 지정가 (STOP, TAKE_PROFIT에만 필요)
-        quantity: 수량
-        close_position: 전체 포지션 청산 여부
-        reduce_only: 감소 전용 여부
-        working_type: 'MARK_PRICE' 또는 'CONTRACT_PRICE'
-    
-    Returns:
-        dict: 주문 결과 또는 None
+    TRAILING_STOP_MARKET 지원:
+    - activatePrice: 트레일링 활성화 가격 (선택)
+    - callbackRate: 콜백 비율 (필수, 0.1~5.0 범위, 1.0 = 1%)
+    - BUY: activatePrice < 현재가, 최저가에서 callbackRate만큼 반등 시 체결
+    - SELL: activatePrice > 현재가, 최고가에서 callbackRate만큼 하락 시 체결
     """
     try:
         binance_symbol = symbol.replace('/', '')
         api_key = user_exchange.apiKey
         api_secret = user_exchange.secret
         
-        # 🆕 v7.6: 가격 정밀도 가져와서 포맷팅 (부동소수점 오류 방지)
-        price_precision = get_price_precision(user_exchange, symbol)
-        formatted_stop_price = format_price(stop_price, price_precision)
-        formatted_limit_price = format_price(limit_price, price_precision) if limit_price else None
-        
-        logger.info(f"📐 가격 정밀도 적용: {symbol} precision={price_precision}, {stop_price} → {formatted_stop_price}")
-        
         timestamp = int(time.time() * 1000)
         
         # 🆕 v7.6: 새로운 Algo Order API 파라미터
         params = {
-            'algoType': 'CONDITIONAL',  # 필수!
+            'algoType': 'CONDITIONAL',
             'symbol': binance_symbol,
             'side': side.upper(),
             'type': order_type.upper(),
-            'triggerPrice': formatted_stop_price,  # 포맷팅된 가격 사용
             'workingType': working_type,
             'timestamp': str(timestamp),
         }
         
+        # TRAILING_STOP_MARKET: callbackRate 필수, triggerPrice 불필요
+        if order_type.upper() == 'TRAILING_STOP_MARKET':
+            if callback_rate is None:
+                logger.error("❌ TRAILING_STOP_MARKET에는 callbackRate가 필수입니다")
+                return None
+            # callbackRate 범위 검증 (0.1 ~ 5.0)
+            callback_rate = max(0.1, min(5.0, float(callback_rate)))
+            params['callbackRate'] = str(callback_rate)
+            
+            if activate_price is not None:
+                price_precision = get_price_precision(user_exchange, symbol)
+                params['activatePrice'] = format_price(activate_price, price_precision)
+                logger.info(f"📐 Trailing Stop activatePrice: {params['activatePrice']}")
+        else:
+            # 일반 조건부 주문: triggerPrice 필수
+            if stop_price is None:
+                logger.error(f"❌ {order_type}에는 triggerPrice(stop_price)가 필수입니다")
+                return None
+            price_precision = get_price_precision(user_exchange, symbol)
+            formatted_stop_price = format_price(stop_price, price_precision)
+            params['triggerPrice'] = formatted_stop_price
+            logger.info(f"📐 가격 정밀도 적용: {symbol} precision={price_precision}, {stop_price} → {formatted_stop_price}")
+        
         # STOP, TAKE_PROFIT (지정가)인 경우 price 추가
-        if order_type.upper() in ['STOP', 'TAKE_PROFIT'] and formatted_limit_price:
+        if order_type.upper() in ['STOP', 'TAKE_PROFIT'] and limit_price:
+            price_precision = get_price_precision(user_exchange, symbol)
+            formatted_limit_price = format_price(limit_price, price_precision)
             params['price'] = formatted_limit_price
             params['timeInForce'] = 'GTC'
         
@@ -8417,10 +8426,9 @@ def place_conditional_order(user_exchange, symbol, side, order_type, stop_price,
             'Content-Type': 'application/x-www-form-urlencoded'
         }
         
-        # 🆕 v7.6: 올바른 엔드포인트
         url = 'https://fapi.binance.com/fapi/v1/algoOrder'
         
-        logger.info(f"🆕 Algo Order API 호출: {order_type} {side} {binance_symbol} @ triggerPrice={formatted_stop_price}")
+        logger.info(f"🆕 Algo Order API 호출: {order_type} {side} {binance_symbol} | params={params}")
         
         response = requests.post(url, headers=headers, data=params, timeout=10)
         
@@ -8445,9 +8453,10 @@ def place_conditional_order(user_exchange, symbol, side, order_type, stop_price,
 
 
 def place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price, 
-                       quantity, user_name="Unknown"):
+                       quantity, user_name="Unknown",
+                       trailing_callback_rate=None, trailing_activate_price=None):
     """
-    🆕 v7.6: TP/SL 주문 설정 (2025-12-09 이후 Algo Order API)
+    🆕 v7.6: TP/SL + Trailing Stop 주문 설정 (2025-12-09 이후 Algo Order API)
     
     Args:
         user_exchange: CCXT exchange 인스턴스
@@ -8457,12 +8466,15 @@ def place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price,
         tp_price: Take Profit 트리거 가격
         quantity: 포지션 수량
         user_name: 사용자 이름 (로깅용)
+        trailing_callback_rate: 트레일링 스탑 콜백 비율 (%, 예: 2.0 = 2%)
+        trailing_activate_price: 트레일링 스탑 활성화 가격 (선택)
     
     Returns:
-        tuple: (sl_order, tp_order)
+        tuple: (sl_order, tp_order, trailing_order)
     """
     sl_order = None
     tp_order = None
+    trailing_order = None
     
     # SL/TP 방향 결정 (포지션 반대 방향)
     sl_tp_side = 'SELL' if action.lower() == 'buy' else 'BUY'
@@ -8471,7 +8483,6 @@ def place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price,
     try:
         logger.info(f"[{user_name}] 🛡️ SL 주문 시도: STOP_MARKET {sl_tp_side} @ triggerPrice={sl_price:.5f}")
         
-        # 방법 1: closePosition 방식 (전체 포지션 청산)
         sl_order = place_conditional_order(
             user_exchange=user_exchange,
             symbol=symbol,
@@ -8485,7 +8496,6 @@ def place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price,
         if sl_order:
             logger.info(f"[{user_name}] ✅ Stop Loss 설정 완료: ${sl_price:.5f} (algoId={sl_order.get('algoId', 'N/A')})")
         else:
-            # 방법 2: reduceOnly + quantity 방식
             logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
             sl_order = place_conditional_order(
                 user_exchange=user_exchange,
@@ -8507,7 +8517,6 @@ def place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price,
     try:
         logger.info(f"[{user_name}] 🎯 TP 주문 시도: TAKE_PROFIT_MARKET {sl_tp_side} @ triggerPrice={tp_price:.5f}")
         
-        # 방법 1: closePosition 방식
         tp_order = place_conditional_order(
             user_exchange=user_exchange,
             symbol=symbol,
@@ -8521,7 +8530,6 @@ def place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price,
         if tp_order:
             logger.info(f"[{user_name}] ✅ Take Profit 설정 완료: ${tp_price:.5f} (algoId={tp_order.get('algoId', 'N/A')})")
         else:
-            # 방법 2: reduceOnly + quantity 방식
             logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
             tp_order = place_conditional_order(
                 user_exchange=user_exchange,
@@ -8539,17 +8547,59 @@ def place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price,
     except Exception as e:
         logger.error(f"[{user_name}] ❌ Take Profit 설정 실패: {str(e)}")
     
-    # 결과 요약
-    if sl_order and tp_order:
-        logger.info(f"[{user_name}] ✅✅ SL/TP 모두 설정 완료")
-    elif sl_order:
-        logger.warning(f"[{user_name}] ⚠️ SL만 설정됨, TP 실패")
-    elif tp_order:
-        logger.warning(f"[{user_name}] ⚠️ TP만 설정됨, SL 실패")
-    else:
-        logger.error(f"[{user_name}] ❌❌ SL/TP 모두 실패")
+    # ============ 🆕 Trailing Stop 주문 ============
+    if trailing_callback_rate is not None and trailing_callback_rate > 0:
+        try:
+            logger.info(f"[{user_name}] 🔄 Trailing Stop 주문 시도: TRAILING_STOP_MARKET {sl_tp_side} callbackRate={trailing_callback_rate}%")
+            
+            trailing_order = place_conditional_order(
+                user_exchange=user_exchange,
+                symbol=symbol,
+                side=sl_tp_side,
+                order_type='TRAILING_STOP_MARKET',
+                close_position=True,
+                working_type='CONTRACT_PRICE',
+                callback_rate=trailing_callback_rate,
+                activate_price=trailing_activate_price
+            )
+            
+            if trailing_order:
+                logger.info(f"[{user_name}] ✅ Trailing Stop 설정 완료: callbackRate={trailing_callback_rate}% "
+                           f"(algoId={trailing_order.get('algoId', 'N/A')})")
+                if trailing_activate_price:
+                    logger.info(f"[{user_name}]    activatePrice=${trailing_activate_price:.5f}")
+            else:
+                # closePosition 실패 시 reduceOnly 재시도
+                logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
+                trailing_order = place_conditional_order(
+                    user_exchange=user_exchange,
+                    symbol=symbol,
+                    side=sl_tp_side,
+                    order_type='TRAILING_STOP_MARKET',
+                    quantity=quantity,
+                    reduce_only=True,
+                    working_type='CONTRACT_PRICE',
+                    callback_rate=trailing_callback_rate,
+                    activate_price=trailing_activate_price
+                )
+                if trailing_order:
+                    logger.info(f"[{user_name}] ✅ Trailing Stop 설정 완료 (reduceOnly): callbackRate={trailing_callback_rate}%")
+                    
+        except Exception as e:
+            logger.error(f"[{user_name}] ❌ Trailing Stop 설정 실패: {str(e)}")
     
-    return sl_order, tp_order
+    # 결과 요약
+    results = []
+    if sl_order: results.append("SL✅")
+    else: results.append("SL❌")
+    if tp_order: results.append("TP✅")
+    else: results.append("TP❌")
+    if trailing_callback_rate and trailing_order: results.append("TS✅")
+    elif trailing_callback_rate: results.append("TS❌")
+    
+    logger.info(f"[{user_name}] 주문 결과: {' '.join(results)}")
+    
+    return sl_order, tp_order, trailing_order
 
 
 # 기존 함수를 새 함수로 연결 (호환성 유지)
@@ -8593,12 +8643,14 @@ def place_stop_order_fallback(user_exchange, symbol, side, order_type, trigger_p
 
 
 def place_sl_tp_with_algo_api(user_exchange, symbol, action, sl_price, tp_price, 
-                              quantity, user_name="Unknown"):
+                              quantity, user_name="Unknown",
+                              trailing_callback_rate=None, trailing_activate_price=None):
     """
     🆕 v7.6: 호환성 래퍼 - 새로운 place_sl_tp_orders로 연결
     """
     return place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price, 
-                              quantity, user_name)
+                              quantity, user_name,
+                              trailing_callback_rate, trailing_activate_price)
 
 
 def validate_and_adjust_prices(user_exchange, symbol, action, current_price, stop_loss_price, take_profit_price):
@@ -8797,15 +8849,34 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
             # TP/SL이 모두 있을 때만 Algo Order 설정
             sl_order = None
             tp_order = None
+            trailing_order = None
+            
+            # 🆕 Trailing Stop: activatePrice 계산
+            # SELL(롱청산): activatePrice > 현재가 (수익 구간 진입 후 활성화)
+            # BUY(숏청산): activatePrice < 현재가 (수익 구간 진입 후 활성화)
+            ts_activate_price = None
+            ts_callback_rate = None
+            if trailing_stop and trailing_activation:
+                ts_callback_rate = trailing_stop  # trailing_stop_percent → callbackRate
+                if action.lower() == 'buy':
+                    # 롱: 진입가 대비 activation% 상승 시 활성화
+                    ts_activate_price = actual_entry * (1 + trailing_activation / 100)
+                else:
+                    # 숏: 진입가 대비 activation% 하락 시 활성화
+                    ts_activate_price = actual_entry * (1 - trailing_activation / 100)
+                logger.info(f"[{user_name}] 🔄 Trailing Stop 설정: callbackRate={ts_callback_rate}%, activatePrice=${ts_activate_price:.5f}")
+            
             if stop_loss_price is not None and take_profit_price is not None:
-                sl_order, tp_order = place_sl_tp_with_algo_api(
+                sl_order, tp_order, trailing_order = place_sl_tp_with_algo_api(
                     user_exchange=user_exchange,
                     symbol=symbol,
                     action=action,
                     sl_price=adjusted_sl,
                     tp_price=adjusted_tp,
                     quantity=total_position_amount,
-                    user_name=user_name
+                    user_name=user_name,
+                    trailing_callback_rate=ts_callback_rate,
+                    trailing_activate_price=ts_activate_price
                 )
                 
                 # 결과 로깅
@@ -8813,6 +8884,23 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                     logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
                 if not tp_order:
                     logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+            elif ts_callback_rate:
+                # TP/SL 없어도 Trailing Stop만 단독 설정 가능
+                sl_tp_side = 'SELL' if action.lower() == 'buy' else 'BUY'
+                trailing_order = place_conditional_order(
+                    user_exchange=user_exchange,
+                    symbol=symbol,
+                    side=sl_tp_side,
+                    order_type='TRAILING_STOP_MARKET',
+                    close_position=True,
+                    working_type='CONTRACT_PRICE',
+                    callback_rate=ts_callback_rate,
+                    activate_price=ts_activate_price
+                )
+                if trailing_order:
+                    logger.info(f"[{user_name}] ✅ Trailing Stop 단독 설정 완료 (TP/SL 미설정)")
+                else:
+                    logger.error(f"[{user_name}] ❌ Trailing Stop 단독 설정 실패")
             else:
                 logger.info(f"[{user_name}] TP/SL 미설정 (자동생성 OFF) - TradingView 종료 신호에 의존")
             
@@ -8824,8 +8912,9 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                     'main': main_order,
                     'actual_entry': actual_entry,
                     'adjusted_amount': amount,
-                    'sl': sl_order if 'sl_order' in locals() else None,
-                    'tp': tp_order if 'tp_order' in locals() else None
+                    'sl': sl_order,
+                    'tp': tp_order,
+                    'trailing': trailing_order
                 }
             
         except Exception as e:
@@ -8989,7 +9078,7 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         adjusted_tp = price_check['tp']
         
         # 🆕 v7.4: 새로운 Algo Order API 사용 (2025-12-09 바이낸스 API 변경 대응)
-        sl_order, tp_order = place_sl_tp_with_algo_api(
+        sl_order, tp_order, _trailing = place_sl_tp_with_algo_api(
             user_exchange=exchange,
             symbol=symbol,
             action=action,
@@ -9005,11 +9094,20 @@ def place_orders_with_sl_tp(symbol, action, amount, stop_loss_price, take_profit
         if not tp_order:
             logger.error(f"실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {amount:.6f}")
         
-        # 트레일링 스탑 설정 (지원하는 경우)
+        # 🆕 트레일링 스탑: 바이낸스 TRAILING_STOP_MARKET으로 대체 (구 모니터 스레드 제거)
+        # 이 구 함수(place_orders_with_sl_tp)는 현재 사용되지 않으나, 호출될 경우 대비
+        trailing_order_result = None
         if trailing_stop_percent and trailing_activation_percent:
-            # 트레일링 스탑 모니터링 스레드 시작
-            start_trailing_stop_monitor(symbol, action, entry_price, amount, 
-                                      trailing_stop_percent, trailing_activation_percent)
+            sl_tp_side = 'SELL' if action == 'buy' else 'BUY'
+            ts_activate = entry_price * (1 + trailing_activation_percent/100) if action == 'buy' else entry_price * (1 - trailing_activation_percent/100)
+            trailing_order_result = place_conditional_order(
+                user_exchange=exchange, symbol=symbol, side=sl_tp_side,
+                order_type='TRAILING_STOP_MARKET', close_position=True,
+                working_type='CONTRACT_PRICE',
+                callback_rate=trailing_stop_percent, activate_price=ts_activate
+            )
+            if trailing_order_result:
+                logger.info(f"✅ Trailing Stop 설정: callbackRate={trailing_stop_percent}%, activatePrice=${ts_activate:.5f}")
         
         return {
             'entry': order,
@@ -9123,31 +9221,37 @@ def format_position_entry_message(symbol, action, amount, entry_price, sl, tp, p
     """포지션 진입 메시지 포맷팅"""
     direction = "🟢 롱" if action == 'buy' else "🔴 숏"
     
-    # P&L 계산
-    if action == 'buy':
-        potential_loss = (entry_price - sl) * amount
-        potential_profit = (tp - entry_price) * amount
+    # P&L 계산 (TP/SL이 None일 수 있음)
+    if sl is not None and tp is not None:
+        if action == 'buy':
+            potential_loss = (entry_price - sl) * amount
+            potential_profit = (tp - entry_price) * amount
+        else:
+            potential_loss = (sl - entry_price) * amount
+            potential_profit = (entry_price - tp) * amount
+        
+        risk_info = f"""<b>리스크 관리:</b>
+• 스탑로스: ${sl:,.4f} (예상 손실: ${potential_loss:,.2f})
+• 테이크프로핏: ${tp:,.4f} (예상 이익: ${potential_profit:,.2f})
+• P/L 비율: {pl_ratio:.2f}"""
     else:
-        potential_loss = (sl - entry_price) * amount
-        potential_profit = (entry_price - tp) * amount
+        risk_info = """<b>리스크 관리:</b>
+• TP/SL: 미설정 (TradingView 종료 신호에 의존)"""
     
     message = f"""
 <b>📈 포지션 진입 알림</b>
 
 <b>심볼:</b> {symbol}
 <b>방향:</b> {direction}
-<b>진입가:</b> ${entry_price:,.2f}
+<b>진입가:</b> ${entry_price:,.4f}
 <b>수량:</b> {amount:.4f}
 <b>포지션 크기:</b> ${position_size:,.2f}
 
-<b>리스크 관리:</b>
-• 스탑로스: ${sl:,.2f} (예상 손실: ${potential_loss:,.2f})
-• 테이크프로핏: ${tp:,.2f} (예상 이익: ${potential_profit:,.2f})
-• P/L 비율: {pl_ratio:.2f}
+{risk_info}
 """
     
     if trailing_stop and trailing_activation:
-        message += f"""• 트레일링 스탑: {trailing_stop}%
+        message += f"""• 🔄 트레일링 스탑: {trailing_stop}% (바이낸스 TRAILING_STOP_MARKET)
 • 활성화 기준: +{trailing_activation}%
 """
     
@@ -9867,9 +9971,10 @@ def webhook():
             current_price = ticker['last']
             amount = (position_size * leverage) / current_price
             
-            # 트레일링 스탑 설정 (null 안전 처리)
-            trailing_stop = trailing_stop_percent if trailing_stop_percent is not None else DEFAULT_TRAILING_STOP_PERCENT
-            trailing_activation = trailing_activation_percent if trailing_activation_percent is not None else DEFAULT_TRAILING_ACTIVATION_PERCENT
+            # 트레일링 스탑 설정
+            # 웹훅에서 값이 있으면 사용, null이면 None (trailing stop 주문 안 걸림)
+            trailing_stop = trailing_stop_percent  # None일 수 있음
+            trailing_activation = trailing_activation_percent  # None일 수 있음
             
             # 주문 실행
             # 🆕 모든 유저에 대해 거래 실행
@@ -9909,7 +10014,7 @@ def webhook():
                                orders['actual_entry'], orders['actual_entry'],
                                0, 0,  # 진입 시점 PnL은 0
                                position_size, position_size / symbol_config.get('leverage', 10),
-                               stop_loss_price))  # 청산가 대신 스탑로스 사용
+                               stop_loss_price if stop_loss_price is not None else 0))  # 청산가 대신 스탑로스 사용 (None이면 0)
                     
                     conn.commit()
                     conn.close()
