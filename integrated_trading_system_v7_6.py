@@ -8856,15 +8856,19 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
             # BUY(숏청산): activatePrice < 현재가 (수익 구간 진입 후 활성화)
             ts_activate_price = None
             ts_callback_rate = None
-            if trailing_stop and trailing_activation:
+            if trailing_stop is not None and trailing_stop > 0:
                 ts_callback_rate = trailing_stop  # trailing_stop_percent → callbackRate
-                if action.lower() == 'buy':
-                    # 롱: 진입가 대비 activation% 상승 시 활성화
-                    ts_activate_price = actual_entry * (1 + trailing_activation / 100)
+                if trailing_activation and trailing_activation > 0:
+                    # activation > 0: 수익 구간 진입 후 활성화
+                    if action.lower() == 'buy':
+                        ts_activate_price = actual_entry * (1 + trailing_activation / 100)
+                    else:
+                        ts_activate_price = actual_entry * (1 - trailing_activation / 100)
+                    logger.info(f"[{user_name}] 🔄 Trailing Stop: callbackRate={ts_callback_rate}%, activatePrice=${ts_activate_price:.5f}")
                 else:
-                    # 숏: 진입가 대비 activation% 하락 시 활성화
-                    ts_activate_price = actual_entry * (1 - trailing_activation / 100)
-                logger.info(f"[{user_name}] 🔄 Trailing Stop 설정: callbackRate={ts_callback_rate}%, activatePrice=${ts_activate_price:.5f}")
+                    # activation = 0 또는 None: activatePrice 미설정 → 바이낸스가 즉시 추적 시작
+                    ts_activate_price = None
+                    logger.info(f"[{user_name}] 🔄 Trailing Stop: callbackRate={ts_callback_rate}%, activatePrice=즉시(미설정)")
             
             if stop_loss_price is not None and take_profit_price is not None:
                 sl_order, tp_order, trailing_order = place_sl_tp_with_algo_api(
@@ -9972,9 +9976,10 @@ def webhook():
             amount = (position_size * leverage) / current_price
             
             # 트레일링 스탑 설정
-            # 웹훅에서 값이 있으면 사용, null이면 None (trailing stop 주문 안 걸림)
+            # trailing_stop_percent가 유효하면 trailing 주문 발생
+            # trailing_activation_percent가 null이면 0 (즉시 활성화 = activatePrice 미설정)
             trailing_stop = trailing_stop_percent  # None일 수 있음
-            trailing_activation = trailing_activation_percent  # None일 수 있음
+            trailing_activation = trailing_activation_percent if trailing_activation_percent is not None else (0 if trailing_stop is not None else None)
             
             # 주문 실행
             # 🆕 모든 유저에 대해 거래 실행
