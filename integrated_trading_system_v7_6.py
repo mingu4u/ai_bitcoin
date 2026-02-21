@@ -2234,8 +2234,21 @@ def cleanup_orphan_orders():
             user_name = USER_CONFIGS[user_id]['name']
             
             try:
-                # 1. 모든 열린 주문 조회
-                all_open_orders = user_exchange.fetch_open_orders()
+                # 1. 추적 중인 심볼 + 설정된 심볼에서만 주문 조회 (rate limit 회피)
+                symbols_to_check = set()
+                for sym in current_positions:
+                    symbols_to_check.add(sym)
+                for sym_key in SYMBOL_CONFIG:
+                    normalized = normalize_symbol(sym_key)
+                    symbols_to_check.add(normalized)
+                
+                all_open_orders = []
+                for sym in symbols_to_check:
+                    try:
+                        orders = user_exchange.fetch_open_orders(sym)
+                        all_open_orders.extend(orders)
+                    except Exception:
+                        pass  # 심볼별 조회 실패는 무시
                 
                 if not all_open_orders:
                     continue
@@ -9855,7 +9868,64 @@ def webhook():
             position_percent = ai_decision['percentage']
             
         else:
-            # AI 검증 없이 기본값 사용
+            # AI 검증 없이 처리
+            
+            # 🆕 v7.7: close_position 처리 (AI 비활성 시에도 동작)
+            if action in ['close', 'close_position']:
+                try:
+                    success_count = close_position_for_all_users(symbol)
+                    
+                    if success_count > 0:
+                        try:
+                            ticker = exchange.fetch_ticker(symbol)
+                            current_price = ticker['last']
+                            
+                            message = f"""
+✅ <b>포지션 청산 완료 (Multi-User)</b>
+
+<b>심볼:</b> {symbol}
+<b>청산 성공:</b> {success_count}/{len(exchanges)}명
+<b>청산가:</b> ${current_price:,.2f}
+<b>청산 사유:</b> {data.get('exit_reason', 'TradingView signal')}
+
+<b>AI 검증:</b> OFF
+
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                            """.strip()
+                            send_telegram_notification(message, 'success')
+                        except Exception as msg_error:
+                            logger.error(f"메시지 전송 오류: {msg_error}")
+                        
+                        # current_positions 업데이트
+                        if symbol in current_positions:
+                            del current_positions[symbol]
+                        
+                        return jsonify({
+                            'status': 'success',
+                            'action': 'close_position',
+                            'symbol': symbol,
+                            'closed_users': success_count
+                        }), 200
+                    else:
+                        logger.warning(f"⚠️ {symbol} 청산할 포지션 없음")
+                        return jsonify({
+                            'status': 'no_position',
+                            'symbol': symbol
+                        }), 200
+                        
+                except Exception as e:
+                    logger.error(f"포지션 청산 오류: {str(e)}", exc_info=True)
+                    error_message = f"""
+❌ <b>포지션 청산 오류</b>
+
+<b>심볼:</b> {symbol}
+<b>오류:</b> {str(e)}
+⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    """.strip()
+                    send_telegram_notification(error_message, 'error')
+                    return jsonify({'error': str(e)}), 500
+            
+            # buy/sell 처리를 위한 기본값 설정
             ticker = exchange.fetch_ticker(symbol)
             current_price = ticker['last']
             
