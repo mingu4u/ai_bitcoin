@@ -7732,19 +7732,15 @@ emergency_drawdown_thread = None
 emergency_drawdown_warned = set()  # 경고 발송된 심볼 추적
 
 
-def emergency_drawdown_check():
+def emergency_drawdown_check_force_exit():
     """
-    🆕 v7.8: 긴급 낙폭 보호 - 모든 포지션 ROI 실시간 체크
-    
-    1단계: ROI <= WARNING → 텔레그램 경고 + AI 집중 모니터링
-    2단계: ROI <= FORCE_EXIT → 즉시 강제 청산
+    🆕 v7.8: 2단계 강제 청산 전용 - 고빈도 체크 (1분 간격)
+    ROI <= FORCE_EXIT 시 즉시 강제 청산
     """
     global current_positions, emergency_drawdown_warned
     
     if not EMERGENCY_DRAWDOWN_ENABLED or not current_positions:
         return
-    
-    logger.info(f"🛡️ EDP 체크: {len(current_positions)}개 포지션 스캔")
     
     for symbol, position in current_positions.copy().items():
         try:
@@ -7756,13 +7752,12 @@ def emergency_drawdown_check():
             if not entry_price or entry_price <= 0:
                 continue
             
-            # ROI 계산
             if side == 'long':
                 roi = (current_price - entry_price) / entry_price * 100
             else:
                 roi = (entry_price - current_price) / entry_price * 100
             
-            # ═══════ 2단계: 강제 청산 (최우선) ═══════
+            # 🚨 강제 청산 임계값 체크
             if roi <= EMERGENCY_DRAWDOWN_FORCE_EXIT:
                 logger.critical(f"🚨 FORCE EXIT: {symbol} ROI={roi:.2f}% <= {EMERGENCY_DRAWDOWN_FORCE_EXIT}%")
                 
@@ -7802,10 +7797,42 @@ def emergency_drawdown_check():
                             f"❌ <b>{symbol} 강제 청산 실패!</b>\n오류: {str(e)}\n⚠️ 수동 확인 필요!",
                             'error'
                         )
+            
+            time.sleep(0.5)
+            
+        except Exception as e:
+            logger.error(f"EDP force-exit 체크 오류 ({symbol}): {e}")
+
+
+def emergency_drawdown_check_warning():
+    """
+    🆕 v7.8: 1단계 경고 + AI 집중 모니터링 (설정 간격)
+    ROI <= WARNING 시 텔레그램 경고 + AI 모니터링
+    """
+    global current_positions, emergency_drawdown_warned
+    
+    if not EMERGENCY_DRAWDOWN_ENABLED or not current_positions:
+        return
+    
+    logger.info(f"🛡️ EDP 경고 체크: {len(current_positions)}개 포지션 스캔")
+    
+    for symbol, position in current_positions.copy().items():
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+            current_price = ticker['last']
+            entry_price = position.get('entry_price', 0)
+            side = position.get('side', 'long')
+            
+            if not entry_price or entry_price <= 0:
                 continue
             
-            # ═══════ 1단계: 경고 + AI 집중 모니터링 ═══════
-            if roi <= EMERGENCY_DRAWDOWN_WARNING:
+            if side == 'long':
+                roi = (current_price - entry_price) / entry_price * 100
+            else:
+                roi = (entry_price - current_price) / entry_price * 100
+            
+            # ⚠️ 경고 구간 (강제청산 구간은 force_exit 스레드가 처리)
+            if roi <= EMERGENCY_DRAWDOWN_WARNING and roi > EMERGENCY_DRAWDOWN_FORCE_EXIT:
                 # 최초 경고 시 텔레그램 알림
                 if symbol not in emergency_drawdown_warned:
                     emergency_drawdown_warned.add(symbol)
@@ -7820,7 +7847,7 @@ def emergency_drawdown_check():
                             f"<b>현재가:</b> ${current_price:,.4f}\n"
                             f"<b>ROI:</b> <b>{roi:+.2f}%</b>\n\n"
                             f"🔍 AI 집중 모니터링 활성화 ({EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분 간격)\n"
-                            f"🚨 {EMERGENCY_DRAWDOWN_FORCE_EXIT}% 도달 시 강제 청산\n\n"
+                            f"🚨 {EMERGENCY_DRAWDOWN_FORCE_EXIT}% 도달 시 강제 청산 (1분 이내)\n\n"
                             f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                             'warning'
                         )
@@ -7847,7 +7874,7 @@ def emergency_drawdown_check():
                 except Exception as e:
                     logger.error(f"EDP AI 모니터링 오류 ({symbol}): {e}")
             
-            else:
+            elif roi > EMERGENCY_DRAWDOWN_WARNING:
                 # 경고 구간에서 회복
                 if symbol in emergency_drawdown_warned:
                     emergency_drawdown_warned.discard(symbol)
@@ -7862,31 +7889,52 @@ def emergency_drawdown_check():
             time.sleep(1)
             
         except Exception as e:
-            logger.error(f"EDP 체크 오류 ({symbol}): {e}")
+            logger.error(f"EDP 경고 체크 오류 ({symbol}): {e}")
 
 
 def start_emergency_drawdown_protection():
-    """EDP 스레드 시작"""
+    """EDP 스레드 시작 - 2단계(강제청산)는 1분, 1단계(경고)는 설정 간격"""
     global emergency_drawdown_thread, emergency_drawdown_running
     
-    def edp_loop():
-        global emergency_drawdown_running
-        emergency_drawdown_running = True
-        logger.info(f"🛡️ Emergency Drawdown Protection 시작")
-        logger.info(f"   ⚠️ 경고: {EMERGENCY_DRAWDOWN_WARNING}% | 🚨 강제청산: {EMERGENCY_DRAWDOWN_FORCE_EXIT}% | ⏱️ 간격: {EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분")
-        
+    def edp_force_exit_loop():
+        """2단계: 강제 청산 감시 (1분 간격)"""
+        logger.info(f"🚨 EDP 강제청산 감시 시작 (1분 간격, 임계값: {EMERGENCY_DRAWDOWN_FORCE_EXIT}%)")
         while emergency_drawdown_running:
             try:
                 if EMERGENCY_DRAWDOWN_ENABLED and current_positions:
-                    emergency_drawdown_check()
+                    emergency_drawdown_check_force_exit()
+                time.sleep(60)  # 1분 간격
+            except Exception as e:
+                logger.error(f"EDP force-exit 루프 오류: {e}", exc_info=True)
+                time.sleep(30)
+    
+    def edp_warning_loop():
+        """1단계: 경고 + AI 모니터링 (설정 간격)"""
+        logger.info(f"⚠️ EDP 경고 모니터링 시작 ({EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분 간격, 임계값: {EMERGENCY_DRAWDOWN_WARNING}%)")
+        while emergency_drawdown_running:
+            try:
+                if EMERGENCY_DRAWDOWN_ENABLED and current_positions:
+                    emergency_drawdown_check_warning()
                 time.sleep(EMERGENCY_DRAWDOWN_MONITOR_INTERVAL * 60)
             except Exception as e:
-                logger.error(f"EDP 루프 오류: {e}", exc_info=True)
+                logger.error(f"EDP warning 루프 오류: {e}", exc_info=True)
                 time.sleep(60)
     
     if not emergency_drawdown_running:
-        emergency_drawdown_thread = threading.Thread(target=edp_loop, daemon=True)
-        emergency_drawdown_thread.start()
+        emergency_drawdown_running = True
+        
+        # 2단계: 강제 청산 전용 스레드 (1분 간격)
+        force_thread = threading.Thread(target=edp_force_exit_loop, daemon=True)
+        force_thread.start()
+        
+        # 1단계: 경고 + AI 모니터링 스레드 (설정 간격)
+        warning_thread = threading.Thread(target=edp_warning_loop, daemon=True)
+        warning_thread.start()
+        
+        emergency_drawdown_thread = (force_thread, warning_thread)
+        logger.info(f"🛡️ Emergency Drawdown Protection 시작")
+        logger.info(f"   🚨 강제청산: {EMERGENCY_DRAWDOWN_FORCE_EXIT}% (1분 간격 감시)")
+        logger.info(f"   ⚠️ 경고: {EMERGENCY_DRAWDOWN_WARNING}% ({EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분 간격)")
 
 
 def stop_emergency_drawdown_protection():
