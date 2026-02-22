@@ -301,6 +301,13 @@ AI_MONITOR_INTERVAL = 5  # AI 포지션 모니터링 간격 (분)
 # False: 웹훅 TP/SL이 null이면 TP/SL 없이 진입 (TradingView 종료 신호에 의존)
 AUTO_TP_SL_GENERATION = True
 
+# ============ 🆕 v7.8: Emergency Drawdown Protection (긴급 낙폭 보호) ============
+# TradingView 전략에서 손절가를 끈 경우의 안전장치
+EMERGENCY_DRAWDOWN_ENABLED = True        # ON/OFF (대시보드에서 변경 가능)
+EMERGENCY_DRAWDOWN_WARNING = -25.0       # 경고 임계값 (%) - AI 집중 모니터링 시작
+EMERGENCY_DRAWDOWN_FORCE_EXIT = -50.0    # 강제 청산 임계값 (%) - 즉시 종료
+EMERGENCY_DRAWDOWN_MONITOR_INTERVAL = 15 # 경고 구간 모니터링 간격 (분)
+
 # ============ 🆕 v7.4 새로운 상수 ============
 # 적응형 손실 제한 설정 (v7.7: 더 타이트하게 조정)
 V74_ADAPTIVE_LOSS_MIN = -10  # 최소 손실 제한 (기존 -15 → -10)
@@ -7718,6 +7725,176 @@ def stop_ai_monitoring():
     ai_monitor_running = False
     logger.info("AI position monitoring stopped")
 
+
+# ============ 🆕 v7.8: Emergency Drawdown Protection ============
+emergency_drawdown_running = False
+emergency_drawdown_thread = None
+emergency_drawdown_warned = set()  # 경고 발송된 심볼 추적
+
+
+def emergency_drawdown_check():
+    """
+    🆕 v7.8: 긴급 낙폭 보호 - 모든 포지션 ROI 실시간 체크
+    
+    1단계: ROI <= WARNING → 텔레그램 경고 + AI 집중 모니터링
+    2단계: ROI <= FORCE_EXIT → 즉시 강제 청산
+    """
+    global current_positions, emergency_drawdown_warned
+    
+    if not EMERGENCY_DRAWDOWN_ENABLED or not current_positions:
+        return
+    
+    logger.info(f"🛡️ EDP 체크: {len(current_positions)}개 포지션 스캔")
+    
+    for symbol, position in current_positions.copy().items():
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+            current_price = ticker['last']
+            entry_price = position.get('entry_price', 0)
+            side = position.get('side', 'long')
+            
+            if not entry_price or entry_price <= 0:
+                continue
+            
+            # ROI 계산
+            if side == 'long':
+                roi = (current_price - entry_price) / entry_price * 100
+            else:
+                roi = (entry_price - current_price) / entry_price * 100
+            
+            # ═══════ 2단계: 강제 청산 (최우선) ═══════
+            if roi <= EMERGENCY_DRAWDOWN_FORCE_EXIT:
+                logger.critical(f"🚨 FORCE EXIT: {symbol} ROI={roi:.2f}% <= {EMERGENCY_DRAWDOWN_FORCE_EXIT}%")
+                
+                if ENABLE_TELEGRAM:
+                    send_telegram_notification(
+                        f"🚨🚨🚨 <b>긴급 강제 청산</b> 🚨🚨🚨\n\n"
+                        f"<b>심볼:</b> {symbol}\n"
+                        f"<b>방향:</b> {side.upper()}\n"
+                        f"<b>진입가:</b> ${entry_price:,.4f}\n"
+                        f"<b>현재가:</b> ${current_price:,.4f}\n"
+                        f"<b>ROI:</b> <b>{roi:+.2f}%</b>\n"
+                        f"<b>임계값:</b> {EMERGENCY_DRAWDOWN_FORCE_EXIT}%\n\n"
+                        f"⚠️ 긴급 낙폭 보호에 의해 즉시 청산!\n\n"
+                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        'error'
+                    )
+                
+                try:
+                    success_count = close_position_for_all_users(symbol)
+                    if success_count > 0:
+                        logger.info(f"🚨 {symbol} 강제 청산 완료: {success_count}명")
+                        if symbol in current_positions:
+                            del current_positions[symbol]
+                        emergency_drawdown_warned.discard(symbol)
+                        
+                        if ENABLE_TELEGRAM:
+                            send_telegram_notification(
+                                f"✅ <b>{symbol} 강제 청산 완료</b>\n"
+                                f"청산: {success_count}/{len(exchanges)}명\n"
+                                f"최종 ROI: {roi:+.2f}%",
+                                'success'
+                            )
+                except Exception as e:
+                    logger.error(f"🚨 {symbol} 강제 청산 실패: {e}")
+                    if ENABLE_TELEGRAM:
+                        send_telegram_notification(
+                            f"❌ <b>{symbol} 강제 청산 실패!</b>\n오류: {str(e)}\n⚠️ 수동 확인 필요!",
+                            'error'
+                        )
+                continue
+            
+            # ═══════ 1단계: 경고 + AI 집중 모니터링 ═══════
+            if roi <= EMERGENCY_DRAWDOWN_WARNING:
+                # 최초 경고 시 텔레그램 알림
+                if symbol not in emergency_drawdown_warned:
+                    emergency_drawdown_warned.add(symbol)
+                    logger.warning(f"⚠️ EDP WARNING: {symbol} ROI={roi:.2f}%")
+                    
+                    if ENABLE_TELEGRAM:
+                        send_telegram_notification(
+                            f"⚠️ <b>낙폭 경고 - 긴급 모니터링 돌입</b>\n\n"
+                            f"<b>심볼:</b> {symbol}\n"
+                            f"<b>방향:</b> {side.upper()}\n"
+                            f"<b>진입가:</b> ${entry_price:,.4f}\n"
+                            f"<b>현재가:</b> ${current_price:,.4f}\n"
+                            f"<b>ROI:</b> <b>{roi:+.2f}%</b>\n\n"
+                            f"🔍 AI 집중 모니터링 활성화 ({EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분 간격)\n"
+                            f"🚨 {EMERGENCY_DRAWDOWN_FORCE_EXIT}% 도달 시 강제 청산\n\n"
+                            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                            'warning'
+                        )
+                
+                # AI 모니터링 실행
+                logger.info(f"🔍 {symbol} AI 집중 모니터링 (ROI: {roi:+.2f}%)")
+                try:
+                    decision = ai_monitor_position(symbol, position)
+                    if decision and decision.get('decision') in ['close', 'partial_close']:
+                        if decision.get('confidence', 0) >= 0.5 or decision.get('urgency') == 'immediate':
+                            logger.warning(f"🤖 AI 청산 권장: {symbol} (신뢰도: {decision['confidence']:.1%})")
+                            success = execute_position_exit(symbol, decision)
+                            if success:
+                                if symbol in current_positions:
+                                    del current_positions[symbol]
+                                emergency_drawdown_warned.discard(symbol)
+                                if ENABLE_TELEGRAM:
+                                    send_telegram_notification(
+                                        f"🤖 <b>AI 판단 청산: {symbol}</b>\n"
+                                        f"ROI: {roi:+.2f}% | 신뢰도: {decision['confidence']:.1%}\n"
+                                        f"사유: {decision.get('reason', 'AI decision')}",
+                                        'info'
+                                    )
+                except Exception as e:
+                    logger.error(f"EDP AI 모니터링 오류 ({symbol}): {e}")
+            
+            else:
+                # 경고 구간에서 회복
+                if symbol in emergency_drawdown_warned:
+                    emergency_drawdown_warned.discard(symbol)
+                    logger.info(f"✅ {symbol} 낙폭 경고 해제 (ROI: {roi:+.2f}%)")
+                    if ENABLE_TELEGRAM:
+                        send_telegram_notification(
+                            f"✅ <b>{symbol} 낙폭 경고 해제</b>\n"
+                            f"현재 ROI: {roi:+.2f}% (임계값: {EMERGENCY_DRAWDOWN_WARNING}% 초과)",
+                            'success'
+                        )
+            
+            time.sleep(1)
+            
+        except Exception as e:
+            logger.error(f"EDP 체크 오류 ({symbol}): {e}")
+
+
+def start_emergency_drawdown_protection():
+    """EDP 스레드 시작"""
+    global emergency_drawdown_thread, emergency_drawdown_running
+    
+    def edp_loop():
+        global emergency_drawdown_running
+        emergency_drawdown_running = True
+        logger.info(f"🛡️ Emergency Drawdown Protection 시작")
+        logger.info(f"   ⚠️ 경고: {EMERGENCY_DRAWDOWN_WARNING}% | 🚨 강제청산: {EMERGENCY_DRAWDOWN_FORCE_EXIT}% | ⏱️ 간격: {EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분")
+        
+        while emergency_drawdown_running:
+            try:
+                if EMERGENCY_DRAWDOWN_ENABLED and current_positions:
+                    emergency_drawdown_check()
+                time.sleep(EMERGENCY_DRAWDOWN_MONITOR_INTERVAL * 60)
+            except Exception as e:
+                logger.error(f"EDP 루프 오류: {e}", exc_info=True)
+                time.sleep(60)
+    
+    if not emergency_drawdown_running:
+        emergency_drawdown_thread = threading.Thread(target=edp_loop, daemon=True)
+        emergency_drawdown_thread.start()
+
+
+def stop_emergency_drawdown_protection():
+    """EDP 중지"""
+    global emergency_drawdown_running
+    emergency_drawdown_running = False
+    logger.info("🛡️ Emergency Drawdown Protection 중지")
+
 # ============ AI Decision Making (개선 버전) ============
 def ai_validate_signal(symbol, action, market_data, recent_trades_df, message_data=None):
     """
@@ -10233,6 +10410,8 @@ def status():
         'ai_monitored_symbols': len(ai_monitored_symbols),
         'ai_monitoring_active': ai_monitor_running,
         'ai_monitor_interval': AI_MONITOR_INTERVAL,
+        'emergency_drawdown_enabled': EMERGENCY_DRAWDOWN_ENABLED,
+        'emergency_drawdown_running': emergency_drawdown_running,
         'symbols': enabled_symbols,
         'timestamp': datetime.now().isoformat()
     }), 200
@@ -10604,6 +10783,83 @@ def auto_tp_sl_status():
         'auto_tp_sl_enabled': AUTO_TP_SL_GENERATION
     }), 200
 
+
+# ============ 🆕 v7.8: Emergency Drawdown Protection API ============
+@app.route('/emergency-drawdown/toggle', methods=['POST'])
+def toggle_emergency_drawdown():
+    """EDP ON/OFF 토글"""
+    global EMERGENCY_DRAWDOWN_ENABLED
+    try:
+        data = request.get_json()
+        if not data or 'enabled' not in data:
+            return jsonify({'error': 'Missing "enabled" field'}), 400
+        
+        EMERGENCY_DRAWDOWN_ENABLED = bool(data['enabled'])
+        status_text = "활성화" if EMERGENCY_DRAWDOWN_ENABLED else "비활성화"
+        logger.info(f"🛡️ EDP {status_text}")
+        
+        if EMERGENCY_DRAWDOWN_ENABLED and not emergency_drawdown_running:
+            start_emergency_drawdown_protection()
+        elif not EMERGENCY_DRAWDOWN_ENABLED and emergency_drawdown_running:
+            stop_emergency_drawdown_protection()
+        
+        if ENABLE_TELEGRAM:
+            emoji = "🛡️" if EMERGENCY_DRAWDOWN_ENABLED else "⛔"
+            send_telegram_notification(
+                f"{emoji} <b>긴급 낙폭 보호 {status_text}</b>\n\n"
+                f"경고: {EMERGENCY_DRAWDOWN_WARNING}% | 강제청산: {EMERGENCY_DRAWDOWN_FORCE_EXIT}%\n"
+                f"간격: {EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분\n\n"
+                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                'success' if EMERGENCY_DRAWDOWN_ENABLED else 'warning'
+            )
+        
+        return jsonify({'status': 'success', 'enabled': EMERGENCY_DRAWDOWN_ENABLED}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/emergency-drawdown/config', methods=['POST'])
+def config_emergency_drawdown():
+    """EDP 파라미터 변경"""
+    global EMERGENCY_DRAWDOWN_WARNING, EMERGENCY_DRAWDOWN_FORCE_EXIT, EMERGENCY_DRAWDOWN_MONITOR_INTERVAL
+    try:
+        data = request.get_json()
+        changed = []
+        
+        if 'warning_threshold' in data:
+            EMERGENCY_DRAWDOWN_WARNING = float(data['warning_threshold'])
+            changed.append(f"경고={EMERGENCY_DRAWDOWN_WARNING}%")
+        if 'force_exit_threshold' in data:
+            EMERGENCY_DRAWDOWN_FORCE_EXIT = float(data['force_exit_threshold'])
+            changed.append(f"강제청산={EMERGENCY_DRAWDOWN_FORCE_EXIT}%")
+        if 'monitor_interval' in data:
+            EMERGENCY_DRAWDOWN_MONITOR_INTERVAL = int(data['monitor_interval'])
+            changed.append(f"간격={EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분")
+        
+        logger.info(f"🛡️ EDP 설정 변경: {', '.join(changed)}")
+        
+        return jsonify({
+            'status': 'success',
+            'warning_threshold': EMERGENCY_DRAWDOWN_WARNING,
+            'force_exit_threshold': EMERGENCY_DRAWDOWN_FORCE_EXIT,
+            'monitor_interval': EMERGENCY_DRAWDOWN_MONITOR_INTERVAL
+        }), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/emergency-drawdown/status', methods=['GET'])
+def emergency_drawdown_status():
+    """EDP 상태 조회"""
+    return jsonify({
+        'enabled': EMERGENCY_DRAWDOWN_ENABLED,
+        'running': emergency_drawdown_running,
+        'warning_threshold': EMERGENCY_DRAWDOWN_WARNING,
+        'force_exit_threshold': EMERGENCY_DRAWDOWN_FORCE_EXIT,
+        'monitor_interval': EMERGENCY_DRAWDOWN_MONITOR_INTERVAL,
+        'warned_symbols': list(emergency_drawdown_warned)
+    }), 200
+
 @app.route('/ai-performance', methods=['GET'])
 def ai_performance():
     """AI 거래 성과 조회"""
@@ -10943,6 +11199,10 @@ def initialize_bot():
     
     # AI 모니터링 자동 시작
     start_ai_monitoring()
+    
+    # 🆕 v7.8: Emergency Drawdown Protection 자동 시작
+    if EMERGENCY_DRAWDOWN_ENABLED:
+        start_emergency_drawdown_protection()
     
     # OpenAI API 테스트
     try:

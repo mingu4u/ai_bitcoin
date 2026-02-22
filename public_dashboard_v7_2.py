@@ -2586,8 +2586,98 @@ def main():
         
         st.markdown("---")
         
+        # ============ 🆕 v7.8: Emergency Drawdown Protection ============
+        st.header("🛡️ 긴급 낙폭 보호")
+        
+        if bot_online:
+            edp_status = None
+            try:
+                resp = requests.get(f"{TRADING_BOT_URL}/emergency-drawdown/status", timeout=3)
+                if resp.status_code == 200:
+                    edp_status = resp.json()
+            except:
+                pass
+            
+            if edp_status is not None:
+                edp_enabled = edp_status.get('enabled', False)
+                edp_running = edp_status.get('running', False)
+                warn_thresh = edp_status.get('warning_threshold', -25.0)
+                force_thresh = edp_status.get('force_exit_threshold', -50.0)
+                mon_interval = edp_status.get('monitor_interval', 15)
+                warned_syms = edp_status.get('warned_symbols', [])
+                
+                if edp_enabled:
+                    st.success(f"🟢 낙폭 보호 활성 {'(실행중)' if edp_running else ''}")
+                else:
+                    st.error("🔴 낙폭 보호 비활성")
+                
+                st.caption(f"⚠️ ROI ≤ {warn_thresh}% → AI 집중 모니터링 ({mon_interval}분)")
+                st.caption(f"🚨 ROI ≤ {force_thresh}% → 즉시 강제 청산")
+                
+                if warned_syms:
+                    st.warning(f"⚠️ 경고 중: {', '.join(warned_syms)}")
+                
+                col_edp_on, col_edp_off = st.columns(2)
+                with col_edp_on:
+                    if st.button("🛡️ ON", key="edp_on", use_container_width=True, disabled=edp_enabled):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/emergency-drawdown/toggle", json={'enabled': True}, timeout=5)
+                            if resp.status_code == 200:
+                                st.success("✅ 낙폭 보호 활성화!")
+                                time_module.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 실패: {e}")
+                with col_edp_off:
+                    if st.button("⛔ OFF", key="edp_off", use_container_width=True, disabled=not edp_enabled):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/emergency-drawdown/toggle", json={'enabled': False}, timeout=5)
+                            if resp.status_code == 200:
+                                st.warning("⛔ 낙폭 보호 비활성화!")
+                                time_module.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 실패: {e}")
+                
+                with st.expander("⚙️ 파라미터 설정"):
+                    new_warn = st.number_input(
+                        "경고 임계값 (%)", min_value=-80.0, max_value=-5.0,
+                        value=float(warn_thresh), step=5.0, key="edp_warn"
+                    )
+                    new_force = st.number_input(
+                        "강제청산 임계값 (%)", min_value=-95.0, max_value=-10.0,
+                        value=float(force_thresh), step=5.0, key="edp_force"
+                    )
+                    new_interval = st.number_input(
+                        "모니터링 간격 (분)", min_value=1, max_value=60,
+                        value=int(mon_interval), step=5, key="edp_interval"
+                    )
+                    
+                    if st.button("💾 설정 저장", key="edp_save", use_container_width=True):
+                        try:
+                            resp = requests.post(
+                                f"{TRADING_BOT_URL}/emergency-drawdown/config",
+                                json={
+                                    'warning_threshold': new_warn,
+                                    'force_exit_threshold': new_force,
+                                    'monitor_interval': new_interval
+                                }, timeout=5
+                            )
+                            if resp.status_code == 200:
+                                st.success(f"✅ 저장! 경고:{new_warn}% / 강제:{new_force}% / 간격:{new_interval}분")
+                                time_module.sleep(1)
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 실패: {e}")
+            else:
+                st.error("상태를 가져올 수 없습니다")
+        else:
+            st.warning("봇이 오프라인입니다")
+        
+        st.markdown("---")
+        
         # 정보
-        st.caption("Trading Dashboard v7.6 Complete")
+        st.caption("Trading Dashboard v7.8 Complete")
         st.caption("© 2025 Automated Trading System")
 
 if __name__ == "__main__":
