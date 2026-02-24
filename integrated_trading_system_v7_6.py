@@ -1670,6 +1670,51 @@ SYMBOL_CONFIG = {
         'ai_validation': True,
         'ai_monitoring': True
     },
+    'POL/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'SAND/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'GOAT/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'PARTI/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'FLOW/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -9842,6 +9887,16 @@ def webhook():
             'MANAUSDT.P': 'MANA/USDT',           
             'ZECUSDT': 'ZEC/USDT',
             'ZECUSDT.P': 'ZEC/USDT',
+            'POLUSDT': 'POL/USDT',
+            'POLUSDT.P': 'POL/USDT',
+            'SANDUSDT': 'SAND/USDT',
+            'SANDUSDT.P': 'SAND/USDT',            
+            'GOATUSDT': 'GOAT/USDT',
+            'GOATUSDT.P': 'GOAT/USDT',
+            'PARTIUSDT': 'PARTI/USDT',
+            'PARTIUSDT.P': 'PARTI/USDT',
+            'FLOWUSDT': 'FLOW/USDT',
+            'FLOWUSDT.P': 'FLOW/USDT',
         }
         
         original_symbol = symbol
