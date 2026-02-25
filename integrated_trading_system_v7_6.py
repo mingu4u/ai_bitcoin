@@ -8763,72 +8763,78 @@ def place_sl_tp_orders(user_exchange, symbol, action, sl_price, tp_price,
     sl_tp_side = 'SELL' if action.lower() == 'buy' else 'BUY'
     
     # ============ Stop Loss 주문 ============
-    try:
-        logger.info(f"[{user_name}] 🛡️ SL 주문 시도: STOP_MARKET {sl_tp_side} @ triggerPrice={sl_price:.5f}")
-        
-        sl_order = place_conditional_order(
-            user_exchange=user_exchange,
-            symbol=symbol,
-            side=sl_tp_side,
-            order_type='STOP_MARKET',
-            stop_price=sl_price,
-            close_position=True,
-            working_type='MARK_PRICE'
-        )
-        
-        if sl_order:
-            logger.info(f"[{user_name}] ✅ Stop Loss 설정 완료: ${sl_price:.5f} (algoId={sl_order.get('algoId', 'N/A')})")
-        else:
-            logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
+    if sl_price is not None:
+        try:
+            logger.info(f"[{user_name}] 🛡️ SL 주문 시도: STOP_MARKET {sl_tp_side} @ triggerPrice={sl_price:.5f}")
+            
             sl_order = place_conditional_order(
                 user_exchange=user_exchange,
                 symbol=symbol,
                 side=sl_tp_side,
                 order_type='STOP_MARKET',
                 stop_price=sl_price,
-                quantity=quantity,
-                reduce_only=True,
+                close_position=True,
                 working_type='MARK_PRICE'
             )
+            
             if sl_order:
-                logger.info(f"[{user_name}] ✅ Stop Loss 설정 완료 (reduceOnly): ${sl_price:.5f}")
-                
-    except Exception as e:
-        logger.error(f"[{user_name}] ❌ Stop Loss 설정 실패: {str(e)}")
+                logger.info(f"[{user_name}] ✅ Stop Loss 설정 완료: ${sl_price:.5f} (algoId={sl_order.get('algoId', 'N/A')})")
+            else:
+                logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
+                sl_order = place_conditional_order(
+                    user_exchange=user_exchange,
+                    symbol=symbol,
+                    side=sl_tp_side,
+                    order_type='STOP_MARKET',
+                    stop_price=sl_price,
+                    quantity=quantity,
+                    reduce_only=True,
+                    working_type='MARK_PRICE'
+                )
+                if sl_order:
+                    logger.info(f"[{user_name}] ✅ Stop Loss 설정 완료 (reduceOnly): ${sl_price:.5f}")
+                    
+        except Exception as e:
+            logger.error(f"[{user_name}] ❌ Stop Loss 설정 실패: {str(e)}")
+    else:
+        logger.info(f"[{user_name}] ℹ️ SL 가격 없음 - SL 주문 스킵")
     
     # ============ Take Profit 주문 ============
-    try:
-        logger.info(f"[{user_name}] 🎯 TP 주문 시도: TAKE_PROFIT_MARKET {sl_tp_side} @ triggerPrice={tp_price:.5f}")
-        
-        tp_order = place_conditional_order(
-            user_exchange=user_exchange,
-            symbol=symbol,
-            side=sl_tp_side,
-            order_type='TAKE_PROFIT_MARKET',
-            stop_price=tp_price,
-            close_position=True,
-            working_type='MARK_PRICE'
-        )
-        
-        if tp_order:
-            logger.info(f"[{user_name}] ✅ Take Profit 설정 완료: ${tp_price:.5f} (algoId={tp_order.get('algoId', 'N/A')})")
-        else:
-            logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
+    if tp_price is not None:
+        try:
+            logger.info(f"[{user_name}] 🎯 TP 주문 시도: TAKE_PROFIT_MARKET {sl_tp_side} @ triggerPrice={tp_price:.5f}")
+            
             tp_order = place_conditional_order(
                 user_exchange=user_exchange,
                 symbol=symbol,
                 side=sl_tp_side,
                 order_type='TAKE_PROFIT_MARKET',
                 stop_price=tp_price,
-                quantity=quantity,
-                reduce_only=True,
+                close_position=True,
                 working_type='MARK_PRICE'
             )
+            
             if tp_order:
-                logger.info(f"[{user_name}] ✅ Take Profit 설정 완료 (reduceOnly): ${tp_price:.5f}")
-                
-    except Exception as e:
-        logger.error(f"[{user_name}] ❌ Take Profit 설정 실패: {str(e)}")
+                logger.info(f"[{user_name}] ✅ Take Profit 설정 완료: ${tp_price:.5f} (algoId={tp_order.get('algoId', 'N/A')})")
+            else:
+                logger.warning(f"[{user_name}] closePosition 실패, reduceOnly 방식 재시도...")
+                tp_order = place_conditional_order(
+                    user_exchange=user_exchange,
+                    symbol=symbol,
+                    side=sl_tp_side,
+                    order_type='TAKE_PROFIT_MARKET',
+                    stop_price=tp_price,
+                    quantity=quantity,
+                    reduce_only=True,
+                    working_type='MARK_PRICE'
+                )
+                if tp_order:
+                    logger.info(f"[{user_name}] ✅ Take Profit 설정 완료 (reduceOnly): ${tp_price:.5f}")
+                    
+        except Exception as e:
+            logger.error(f"[{user_name}] ❌ Take Profit 설정 실패: {str(e)}")
+    else:
+        logger.info(f"[{user_name}] ℹ️ TP 가격 없음 - TP 주문 스킵")
     
     # ============ 🆕 Trailing Stop 주문 ============
     if trailing_callback_rate is not None and trailing_callback_rate > 0:
@@ -9101,14 +9107,24 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
             actual_entry = float(main_order['average']) if main_order.get('average') else current_price
             logger.info(f"[{user_name}] ✅ 메인 주문 체결: {symbol} {order_side} {amount:.6f} @ ${actual_entry:.4f}")
 
-            # 🆕 v7.6: 가격 검증 및 조정 (TP/SL이 있을 때만)
+            # 🆕 v7.6: 가격 검증 및 조정 (TP/SL 각각 독립 처리)
+            adjusted_sl = stop_loss_price    # None일 수 있음
+            adjusted_tp = take_profit_price  # None일 수 있음
+            
             if stop_loss_price is not None and take_profit_price is not None:
+                # 둘 다 있으면 기존 검증 로직
                 price_check = validate_and_adjust_prices(
                     user_exchange, symbol, action, current_price, 
                     stop_loss_price, take_profit_price
                 )
                 adjusted_sl = price_check['sl']
                 adjusted_tp = price_check['tp']
+            elif stop_loss_price is not None:
+                adjusted_sl = stop_loss_price
+                logger.info(f"[{user_name}] SL만 설정: ${adjusted_sl:.5f} (TP 없음)")
+            elif take_profit_price is not None:
+                adjusted_tp = take_profit_price
+                logger.info(f"[{user_name}] TP만 설정: ${adjusted_tp:.5f} (SL 없음)")
             
             # 🔄 현재 포지션의 전체 크기 조회 (여러 번 진입한 경우 대비)
             try:
@@ -9128,8 +9144,7 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                 logger.warning(f"[{user_name}] 포지션 조회 실패, 진입 수량 사용: {str(e)}")
                 total_position_amount = amount
             
-            # 🆕 v7.4: 새로운 Algo Order API 사용 (2025-12-09 바이낸스 API 변경 대응)
-            # TP/SL이 모두 있을 때만 Algo Order 설정
+            # 🆕 v7.8: Algo Order API - TP/SL/Trailing 각각 독립 주문
             sl_order = None
             tp_order = None
             trailing_order = None
@@ -9153,7 +9168,12 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                     ts_activate_price = None
                     logger.info(f"[{user_name}] 🔄 Trailing Stop: callbackRate={ts_callback_rate}%, activatePrice=즉시(미설정)")
             
-            if stop_loss_price is not None and take_profit_price is not None:
+            # 🆕 v7.8: TP/SL/Trailing 중 하나라도 있으면 Algo Order 설정
+            has_sl = adjusted_sl is not None
+            has_tp = adjusted_tp is not None
+            has_trailing = ts_callback_rate is not None and ts_callback_rate > 0
+            
+            if has_sl or has_tp or has_trailing:
                 sl_order, tp_order, trailing_order = place_sl_tp_with_algo_api(
                     user_exchange=user_exchange,
                     symbol=symbol,
