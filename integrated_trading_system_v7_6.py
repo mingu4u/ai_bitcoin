@@ -1715,6 +1715,69 @@ SYMBOL_CONFIG = {
         'ai_validation': True,
         'ai_monitoring': True
     },
+    'AAVE/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },   
+    'PUMP/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'XPL/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'TON/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'ICP/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'HBAR/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'ATOM/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -2180,12 +2243,11 @@ def sync_positions_from_exchange():
         removed_symbols = []
         for symbol in list(current_positions.keys()):
             if symbol not in new_positions:
-                # 종료된 포지션을 completed_trades에 기록
+                # 종료된 포지션을 completed_trades에 기록 (🆕 v7.8: 바이낸스 실제 데이터)
                 try:
-                    ticker = exchange.fetch_ticker(symbol)
-                    exit_price = ticker['last']
                     position_info = current_positions[symbol]
-                    record_completed_trade(symbol, position_info, exit_price, 'sync_detected_close')
+                    record_completed_trade_with_binance(symbol, position_info, 
+                                                        close_reason='sync_detected_close')
                     logger.info(f"✅ Closed position recorded for {symbol} (detected by sync)")
                 except Exception as e:
                     logger.error(f"Failed to record closed position for {symbol}: {e}")
@@ -2383,6 +2445,191 @@ def get_position_summary():
     return "\n".join(summary)
 
 # ============ SQLite 데이터베이스 초기화 ============
+def fetch_realized_pnl_from_binance(user_exchange, symbol, since_ms=None):
+    """
+    🆕 v7.8: 바이낸스에서 실제 실현 손익(Realized PnL) 조회
+    
+    Args:
+        user_exchange: CCXT exchange 인스턴스
+        symbol: 거래 심볼 (예: 'BTC/USDT')
+        since_ms: 조회 시작 시간 (밀리초 타임스탬프, None이면 최근 24시간)
+    
+    Returns:
+        dict: {
+            'realized_pnl': float,      # 바이낸스 실현 PnL (USDT)
+            'commission': float,         # 총 수수료
+            'entry_price_avg': float,    # 평균 진입가
+            'exit_price_avg': float,     # 평균 종료가
+            'total_qty': float,          # 총 수량
+            'trades': list               # 원본 거래 내역
+        }
+    """
+    try:
+        if since_ms is None:
+            since_ms = int((datetime.now() - timedelta(hours=24)).timestamp() * 1000)
+        
+        # 바이낸스 선물 거래 내역 조회
+        trades = user_exchange.fetch_my_trades(symbol, since=since_ms, limit=100)
+        
+        if not trades:
+            logger.warning(f"바이낸스 거래 내역 없음: {symbol}")
+            return None
+        
+        total_pnl = 0.0
+        total_commission = 0.0
+        buy_cost = 0.0
+        buy_qty = 0.0
+        sell_cost = 0.0
+        sell_qty = 0.0
+        
+        for t in trades:
+            info = t.get('info', {})
+            
+            # realizedPnl (바이낸스 선물 전용)
+            rpnl = float(info.get('realizedPnl', 0))
+            total_pnl += rpnl
+            
+            # 수수료
+            commission = float(t.get('fee', {}).get('cost', 0) or 0)
+            total_commission += abs(commission)
+            
+            # 평균 가격 계산용
+            price = float(t.get('price', 0))
+            qty = float(t.get('amount', 0))
+            
+            if t.get('side') == 'buy':
+                buy_cost += price * qty
+                buy_qty += qty
+            else:
+                sell_cost += price * qty
+                sell_qty += qty
+        
+        entry_avg = (buy_cost / buy_qty) if buy_qty > 0 else 0
+        exit_avg = (sell_cost / sell_qty) if sell_qty > 0 else 0
+        
+        result = {
+            'realized_pnl': total_pnl,
+            'commission': total_commission,
+            'entry_price_avg': entry_avg,
+            'exit_price_avg': exit_avg,
+            'total_qty': max(buy_qty, sell_qty),
+            'trade_count': len(trades)
+        }
+        
+        logger.info(f"📊 바이낸스 실제 PnL: {symbol} = ${total_pnl:+.4f} (수수료: ${total_commission:.4f}, 거래 {len(trades)}건)")
+        return result
+        
+    except Exception as e:
+        logger.error(f"바이낸스 PnL 조회 실패 ({symbol}): {e}")
+        return None
+
+
+def record_completed_trade_with_binance(symbol, position_info, close_reason='manual'):
+    """
+    🆕 v7.8: 포지션 종료 시 바이낸스 실제 데이터로 DB 기록
+    AI ON/OFF, 자동/수동 모두 동일하게 기록
+    
+    Args:
+        symbol: 거래 심볼
+        position_info: current_positions에서 가져온 포지션 정보
+        close_reason: 종료 사유
+    """
+    try:
+        entry_time = position_info.get('entry_time', datetime.now())
+        if isinstance(entry_time, str):
+            entry_time = datetime.fromisoformat(entry_time)
+        
+        since_ms = int(entry_time.timestamp() * 1000)
+        
+        # 바이낸스에서 실제 거래 데이터 조회
+        binance_data = fetch_realized_pnl_from_binance(exchange, symbol, since_ms=since_ms)
+        
+        conn = get_db_connection()
+        c = conn.cursor()
+        
+        entry_price = position_info.get('entry_price', 0)
+        amount = position_info.get('amount', 0)
+        side = position_info.get('side', 'long')
+        leverage = position_info.get('leverage', 10)
+        position_type = position_info.get('position_type', 'auto')
+        
+        exit_time = datetime.now()
+        holding_time_minutes = (exit_time - entry_time).total_seconds() / 60
+        
+        if binance_data and binance_data['realized_pnl'] != 0:
+            # ✅ 바이낸스 실제 데이터 사용
+            pnl_usdt = binance_data['realized_pnl']
+            commission = binance_data['commission']
+            
+            # 바이낸스 평균 가격 사용 (더 정확)
+            if binance_data['entry_price_avg'] > 0:
+                entry_price = binance_data['entry_price_avg']
+            
+            exit_price = binance_data['exit_price_avg'] if binance_data['exit_price_avg'] > 0 else entry_price
+            
+            position_size_usdt = amount * entry_price
+            pnl_percent = (pnl_usdt / position_size_usdt * 100) if position_size_usdt > 0 else 0
+            
+            logger.info(f"✅ 바이낸스 실제 데이터 사용: {symbol} PnL=${pnl_usdt:+.4f} ({pnl_percent:+.2f}%)")
+        else:
+            # ⚠️ 바이낸스 조회 실패 시 자체 계산 (fallback)
+            try:
+                ticker = exchange.fetch_ticker(symbol)
+                exit_price = ticker['last']
+            except:
+                exit_price = entry_price
+            
+            if side in ['long', 'buy']:
+                price_change_pct = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+            else:
+                price_change_pct = ((entry_price - exit_price) / entry_price * 100) if entry_price > 0 else 0
+            
+            pnl_percent = price_change_pct * leverage
+            position_size_usdt = amount * entry_price
+            pnl_usdt = position_size_usdt * pnl_percent / 100
+            commission = 0
+            pnl_usdt = pnl_usdt  # 바이낸스 데이터 없음 표시용
+            
+            logger.warning(f"⚠️ 자체 계산 사용 (바이낸스 조회 실패): {symbol} PnL≈${pnl_usdt:+.4f}")
+        
+        is_win = 1 if pnl_usdt > 0 else 0
+        realized_pnl_binance = binance_data['realized_pnl'] if binance_data else None
+        
+        # 중복 방지
+        if not is_duplicate_completed_trade(conn, symbol, entry_time, exit_time, time_window_seconds=5):
+            c.execute("""INSERT INTO completed_trades 
+                        (open_timestamp, close_timestamp, symbol, side, entry_price, exit_price,
+                         amount, pnl_usdt, pnl_percent, position_size_usdt, holding_time_minutes,
+                         close_reason, leverage, is_win, position_type, commission, realized_pnl_binance)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      (entry_time.isoformat(), exit_time.isoformat(), symbol, side,
+                       entry_price, exit_price, amount, pnl_usdt, pnl_percent, position_size_usdt,
+                       holding_time_minutes, close_reason, leverage, is_win, position_type,
+                       commission, realized_pnl_binance))
+            
+            conn.commit()
+            src = "바이낸스" if binance_data else "자체계산"
+            logger.info(f"✅ 거래 기록 완료 [{src}]: {symbol} ({position_type}) PnL=${pnl_usdt:+.2f} ({pnl_percent:+.2f}%) 사유={close_reason}")
+            
+            # Reflection 트리거
+            try:
+                c.execute("SELECT COUNT(*) FROM completed_trades WHERE close_timestamp >= datetime('now', '-1 hour')")
+                recent_count = c.fetchone()[0]
+                if recent_count > 0 and recent_count % 5 == 0:
+                    trigger_reflection_generation()
+            except Exception as refl_err:
+                logger.warning(f"Reflection trigger check failed: {refl_err}")
+        else:
+            logger.info(f"⏭️ 중복 거래 기록 스킵: {symbol}")
+        
+        conn.close()
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ 거래 기록 실패: {str(e)}", exc_info=True)
+        return False
+
+
 def record_completed_trade(symbol, position_info, exit_price, close_reason='manual'):
     """완료된 거래를 DB에 기록 (🆕 position_type 포함)"""
     try:
@@ -7591,22 +7838,21 @@ def execute_position_exit(symbol, decision):
         if failed_users:
             logger.warning(f"⚠️ 실패한 유저: {', '.join(failed_users)}")
         
-        # Primary User로 완료된 거래 DB 기록
+        # Primary User로 완료된 거래 DB 기록 (🆕 v7.8: 바이낸스 실제 데이터)
         try:
-            ticker = exchange.fetch_ticker(symbol)
-            exit_price = ticker['last']
-            
             if decision['decision'] == 'close':
                 # 전체 종료인 경우
-                record_completed_trade(symbol, position, exit_price, decision.get('exit_type', 'ai_exit'))
+                record_completed_trade_with_binance(symbol, position, 
+                                                    close_reason=decision.get('exit_type', 'ai_exit'))
                 logger.info(f"✅ Completed trade recorded for {symbol} ({position_type.upper()})")
                 del current_positions[symbol]
-                clear_peak_profit(symbol)  # 🆕 v7.1 peak profit 기록 삭제
+                clear_peak_profit(symbol)
             else:
                 # 부분 종료인 경우
                 partial_position = position.copy()
                 partial_position['amount'] = position['amount'] * (decision['percentage'] / 100)
-                record_completed_trade(symbol, partial_position, exit_price, 'partial_' + decision.get('exit_type', 'exit'))
+                record_completed_trade_with_binance(symbol, partial_position,
+                                                    close_reason='partial_' + decision.get('exit_type', 'exit'))
                 logger.info(f"✅ Partial trade recorded for {symbol} ({position_type.upper()})")
                 current_positions[symbol]['amount'] -= partial_position['amount']
                 
@@ -9917,6 +10163,20 @@ def webhook():
             'PARTIUSDT.P': 'PARTI/USDT',
             'FLOWUSDT': 'FLOW/USDT',
             'FLOWUSDT.P': 'FLOW/USDT',
+            'AAVEUSDT': 'AAVE/USDT',
+            'AAVEUSDT.P': 'AAVE/USDT',      
+            'PUMPUSDT': 'PUMP/USDT',
+            'PUMPUSDT.P': 'PUMP/USDT',  
+            'XPLUSDT': 'XPL/USDT',
+            'XPLUSDT.P': 'XPL/USDT',    
+            'TONUSDT': 'TON/USDT',
+            'TONUSDT.P': 'TON/USDT',
+            'ICPUSDT': 'ICP/USDT',
+            'ICPUSDT.P': 'ICP/USDT', 
+            'HBARUSDT': 'HBAR/USDT',
+            'HBARUSDT.P': 'HBAR/USDT',    
+            'ATOMUSDT': 'ATOM/USDT',
+            'ATOMUSDT.P': 'ATOM/USDT', 
         }
         
         original_symbol = symbol
@@ -10072,8 +10332,10 @@ def webhook():
                         except Exception as msg_error:
                             logger.error(f"메시지 전송 오류: {msg_error}")
                         
-                        # 포지션 추적에서 제거
+                        # 포지션 추적에서 제거 + 🆕 v7.8: DB 기록
                         if symbol in current_positions:
+                            record_completed_trade_with_binance(symbol, current_positions[symbol], 
+                                                               close_reason=data.get('exit_reason', 'webhook_close'))
                             del current_positions[symbol]
                             clear_peak_profit(symbol)  # 🆕 v7.1 peak profit 기록 삭제
                         
@@ -10196,8 +10458,10 @@ def webhook():
                         except Exception as msg_error:
                             logger.error(f"메시지 전송 오류: {msg_error}")
                         
-                        # current_positions 업데이트
+                        # current_positions 업데이트 + 🆕 v7.8: DB 기록
                         if symbol in current_positions:
+                            record_completed_trade_with_binance(symbol, current_positions[symbol],
+                                                               close_reason=data.get('exit_reason', 'webhook_close_no_ai'))
                             del current_positions[symbol]
                         
                         return jsonify({
@@ -10655,10 +10919,12 @@ def close_position_api():
                 logger.error(f"[{user_name}] 포지션 청산 실패: {str(e)}")
                 failed_users.append({'user': user_name, 'error': str(e)})
         
-        # 내부 포지션 추적에서도 제거
+        # 내부 포지션 추적에서도 제거 + 🆕 v7.8: DB 기록
         if symbol in current_positions:
+            record_completed_trade_with_binance(symbol, current_positions[symbol],
+                                               close_reason=reason)
             del current_positions[symbol]
-            logger.info(f"🗑️ {symbol} 내부 추적에서 제거")
+            logger.info(f"🗑️ {symbol} 내부 추적에서 제거 (DB 기록 완료)")
         
         # Peak profit 기록 삭제
         clear_peak_profit(symbol)
