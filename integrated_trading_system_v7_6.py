@@ -1778,6 +1778,96 @@ SYMBOL_CONFIG = {
         'ai_validation': True,
         'ai_monitoring': True
     }, 
+    'OM/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'SENTI/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'ALLO/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'AX/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'MIRA/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'RED/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'FOGO/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'YB/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'ROSE/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'SYRUP/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -10177,6 +10267,26 @@ def webhook():
             'HBARUSDT.P': 'HBAR/USDT',    
             'ATOMUSDT': 'ATOM/USDT',
             'ATOMUSDT.P': 'ATOM/USDT', 
+            'OMUSDT': 'OM/USDT',
+            'OMUSDT.P': 'OM/USDT', 
+            'SENTIUSDT': 'SENTI/USDT',
+            'SENTIUSDT.P': 'SENTI/USDT', 
+            'ALLOUSDT': 'ALLO/USDT',
+            'ALLOUSDT.P': 'ALLO/USDT', 
+            'AXUSDT': 'AX/USDT',
+            'AXUSDT.P': 'AX/USDT', 
+            'MIRAUSDT': 'MIRA/USDT',
+            'MIRAUSDT.P': 'MIRA/USDT', 
+            'REDUSDT': 'RED/USDT',
+            'REDUSDT.P': 'RED/USDT', 
+            'FOGOUSDT': 'FOGO/USDT',
+            'FOGOUSDT.P': 'FOGO/USDT', 
+            'YBUSDT': 'YB/USDT',
+            'YBUSDT.P': 'YB/USDT',
+            'ROSEUSDT': 'ROSE/USDT',
+            'ROSEUSDT.P': 'ROSE/USDT', 
+            'SYRUPUSDT': 'SYRUP/USDT',
+            'SYRUPUSDT.P': 'SYRUP/USDT', 
         }
         
         original_symbol = symbol
