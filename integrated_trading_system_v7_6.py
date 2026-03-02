@@ -8161,6 +8161,8 @@ def emergency_drawdown_check_force_exit():
                     if success_count > 0:
                         logger.info(f"🚨 {symbol} 강제 청산 완료: {success_count}명")
                         if symbol in current_positions:
+                            record_completed_trade_with_binance(symbol, current_positions[symbol],
+                                                               close_reason='edp_force_exit')
                             del current_positions[symbol]
                         emergency_drawdown_warned.discard(symbol)
                         
@@ -9523,10 +9525,10 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                 )
                 
                 # 결과 로깅
-                if not sl_order:
-                    logger.error(f"[{user_name}] 실패 상세 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
-                if not tp_order:
-                    logger.error(f"[{user_name}] 실패 상세 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}, 수량: {total_position_amount:.6f}")
+                if has_sl and not sl_order:
+                    logger.warning(f"[{user_name}] ⚠️ SL 주문 실패 - SL가격: ${adjusted_sl:.4f}, 현재가: ${current_price:.4f}")
+                if has_tp and not tp_order:
+                    logger.warning(f"[{user_name}] ⚠️ TP 주문 실패 - TP가격: ${adjusted_tp:.4f}, 현재가: ${current_price:.4f}")
             elif ts_callback_rate:
                 # TP/SL 없어도 Trailing Stop만 단독 설정 가능
                 sl_tp_side = 'SELL' if action.lower() == 'buy' else 'BUY'
@@ -10446,8 +10448,27 @@ def webhook():
                         if symbol in current_positions:
                             record_completed_trade_with_binance(symbol, current_positions[symbol], 
                                                                close_reason=data.get('exit_reason', 'webhook_close'))
+                            
+                            # 🆕 v7.8: trades 테이블에도 종료 기록
+                            try:
+                                conn = get_db_connection()
+                                c = conn.cursor()
+                                c.execute("""INSERT INTO trades 
+                                          (timestamp, symbol, action, ai_decision, confidence, reason, 
+                                           current_price, trade_type, reflection, percentage, entry_price)
+                                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                          (datetime.now().isoformat(), symbol, 'close',
+                                           'approve', ai_decision['confidence'],
+                                           f"Close: {data.get('exit_reason', 'webhook')} | AI_VALIDATED",
+                                           current_price, 'CLOSE_AI',
+                                           None, 0, current_positions[symbol].get('entry_price', 0)))
+                                conn.commit()
+                                conn.close()
+                            except Exception as db_err:
+                                logger.warning(f"trades 기록 실패 (무시): {db_err}")
+                            
                             del current_positions[symbol]
-                            clear_peak_profit(symbol)  # 🆕 v7.1 peak profit 기록 삭제
+                            clear_peak_profit(symbol)
                         
                         return jsonify({
                             'status': 'closed',
@@ -10572,6 +10593,25 @@ def webhook():
                         if symbol in current_positions:
                             record_completed_trade_with_binance(symbol, current_positions[symbol],
                                                                close_reason=data.get('exit_reason', 'webhook_close_no_ai'))
+                            
+                            # 🆕 v7.8: trades 테이블에도 종료 기록 (AI OFF)
+                            try:
+                                conn = get_db_connection()
+                                c = conn.cursor()
+                                c.execute("""INSERT INTO trades 
+                                          (timestamp, symbol, action, ai_decision, confidence, reason, 
+                                           current_price, trade_type, reflection, percentage, entry_price)
+                                          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                          (datetime.now().isoformat(), symbol, 'close',
+                                           'approve', 1.0,
+                                           f"Close: {data.get('exit_reason', 'webhook')} | NO_AI",
+                                           current_price, 'CLOSE_NO_AI',
+                                           None, 0, current_positions[symbol].get('entry_price', 0)))
+                                conn.commit()
+                                conn.close()
+                            except Exception as db_err:
+                                logger.warning(f"trades 기록 실패 (무시): {db_err}")
+                            
                             del current_positions[symbol]
                         
                         return jsonify({
@@ -10763,11 +10803,23 @@ def webhook():
                                orders['actual_entry'], orders['actual_entry'],
                                0, 0,  # 진입 시점 PnL은 0
                                position_size, position_size / symbol_config.get('leverage', 10),
-                               stop_loss_price if stop_loss_price is not None else 0))  # 청산가 대신 스탑로스 사용 (None이면 0)
+                               stop_loss_price if stop_loss_price is not None else 0))
+                    
+                    # 🆕 v7.8: trades 테이블에도 진입 기록 (AI ON/OFF 무관)
+                    ai_mode = "AI_VALIDATED" if use_ai else "NO_AI"
+                    c.execute("""INSERT INTO trades 
+                              (timestamp, symbol, action, ai_decision, confidence, reason, 
+                               current_price, trade_type, reflection, percentage, entry_price)
+                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              (datetime.now().isoformat(), symbol, action, 
+                               'approve', ai_decision.get('confidence', 0) if use_ai else 1.0,
+                               f"Entry: {action} @ ${orders['actual_entry']:.4f} | AI={ai_mode}",
+                               orders['actual_entry'], ai_mode,
+                               None, position_percent, orders['actual_entry']))
                     
                     conn.commit()
                     conn.close()
-                    logger.info(f"✅ Position entry recorded to DB: {symbol} {action}")
+                    logger.info(f"✅ Position entry recorded to DB: {symbol} {action} (mode={ai_mode})")
                 except Exception as db_error:
                     logger.error(f"❌ DB 기록 실패 (포지션은 정상 진입됨): {db_error}")
                     # DB 실패해도 포지션 추적은 계속
