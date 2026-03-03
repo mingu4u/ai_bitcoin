@@ -10663,8 +10663,8 @@ def webhook():
             position_percent = get_symbol_config(symbol).get('position_size_percent', 10)  # 🆕 v7.3: 정규화된 심볼 사용
         
         # 🆕 TP/SL 현실적 조정 (매물대 및 지지/저항선 기반)
-        # AI 검증 여부와 관계없이 항상 실행 — 단, TP/SL이 None이면 스킵
-        if action in ['buy', 'sell'] and stop_loss_price is not None and take_profit_price is not None:
+        # AUTO_TP_SL_GENERATION이 ON일 때만 실행, OFF이면 웹훅 원본 그대로 사용
+        if AUTO_TP_SL_GENERATION and action in ['buy', 'sell'] and stop_loss_price is not None and take_profit_price is not None:
             try:
                 # 현재가 가져오기
                 ticker = exchange.fetch_ticker(symbol)
