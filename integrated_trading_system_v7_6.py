@@ -1868,6 +1868,33 @@ SYMBOL_CONFIG = {
         'ai_validation': True,
         'ai_monitoring': True
     }, 
+    'ENSO/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'BERA/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'TAG/USDT': {
+        'leverage': 5,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -10289,6 +10316,12 @@ def webhook():
             'ROSEUSDT.P': 'ROSE/USDT', 
             'SYRUPUSDT': 'SYRUP/USDT',
             'SYRUPUSDT.P': 'SYRUP/USDT', 
+            'ENSOUSDT': 'ENSO/USDT',
+            'ENSOUSDT.P': 'ENSO/USDT', 
+            'BERAUSDT': 'BERA/USDT',
+            'BERAUSDT.P': 'BERA/USDT', 
+            'TAGUSDT': 'TAG/USDT',
+            'TAGUSDT.P': 'TAG/USDT', 
         }
         
         original_symbol = symbol
