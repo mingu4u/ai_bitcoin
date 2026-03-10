@@ -1931,6 +1931,15 @@ SYMBOL_CONFIG = {
         'ai_validation': True,
         'ai_monitoring': True
     },  
+    'DEGO/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },  
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -10380,7 +10389,9 @@ def webhook():
             'ANIMEUSDT': 'ANIME/USDT',
             'ANIMEUSDT.P': 'ANIME/USDT',    
             'RSRUSDT': 'RSR/USDT',
-            'RSRUSDT.P': 'RSR/USDT',       
+            'RSRUSDT.P': 'RSR/USDT',  
+            'DEGOUSDT': 'DEGO/USDT',
+            'DEGOUSDT.P': 'DEGO/USDT',     
         }
         
         original_symbol = symbol
