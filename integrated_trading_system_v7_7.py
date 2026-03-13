@@ -1940,6 +1940,42 @@ SYMBOL_CONFIG = {
         'ai_validation': True,
         'ai_monitoring': True
     },  
+    'PIXEL/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },
+    'PROM/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    },  
+    'TURBO/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
+    'BMT/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': True,
+        'ai_monitoring': True
+    }, 
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -10391,7 +10427,15 @@ def webhook():
             'RSRUSDT': 'RSR/USDT',
             'RSRUSDT.P': 'RSR/USDT',  
             'DEGOUSDT': 'DEGO/USDT',
-            'DEGOUSDT.P': 'DEGO/USDT',     
+            'DEGOUSDT.P': 'DEGO/USDT',   
+            'PIXELUSDT': 'PIXEL/USDT',
+            'PIXELUSDT.P': 'PIXEL/USDT',    
+            'PROMUSDT': 'PROM/USDT',
+            'PROMUSDT.P': 'PROM/USDT',      
+            'TURBOUSDT': 'TURBO/USDT',
+            'TURBOUSDT.P': 'TURBO/USDT',      
+            'BMTUSDT': 'BMT/USDT',
+            'BMTUSDT.P': 'BMT/USDT',     
         }
         
         original_symbol = symbol
