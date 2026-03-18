@@ -8223,166 +8223,187 @@ emergency_drawdown_warned = set()  # 경고 발송된 심볼 추적
 
 def emergency_drawdown_check_force_exit():
     """
-    🆕 v7.8: 2단계 강제 청산 전용 - 고빈도 체크 (1분 간격)
-    ROI <= FORCE_EXIT 시 즉시 강제 청산
+    🆕 v7.9: 2단계 강제 청산 전용 - 고빈도 체크 (1분 간격)
+    바이낸스 실제 PNL(레버리지 반영) 기준으로 판단
+    current_positions 의존 없이 바이낸스 직접 조회
     """
     global current_positions, emergency_drawdown_warned
     
-    if not EMERGENCY_DRAWDOWN_ENABLED or not current_positions:
+    if not EMERGENCY_DRAWDOWN_ENABLED:
         return
     
-    for symbol, position in current_positions.copy().items():
-        try:
-            ticker = exchange.fetch_ticker(symbol)
-            current_price = ticker['last']
-            entry_price = position.get('entry_price', 0)
-            side = position.get('side', 'long')
-            
-            if not entry_price or entry_price <= 0:
-                continue
-            
-            # 🆕 v7.9: side가 'buy'/'sell' 또는 'long'/'short' 모두 처리
-            if side in ['long', 'buy']:
-                roi = (current_price - entry_price) / entry_price * 100
-            else:
-                roi = (entry_price - current_price) / entry_price * 100
-            
-            # 🚨 강제 청산 임계값 체크
-            if roi <= EMERGENCY_DRAWDOWN_FORCE_EXIT:
-                logger.critical(f"🚨 FORCE EXIT: {symbol} ROI={roi:.2f}% <= {EMERGENCY_DRAWDOWN_FORCE_EXIT}%")
+    try:
+        # 🆕 바이낸스에서 직접 모든 활성 포지션 조회
+        positions = exchange.fetch_positions()
+        active_positions = [p for p in positions if float(p.get('contracts', 0)) != 0]
+        
+        if not active_positions:
+            return
+        
+        for pos in active_positions:
+            try:
+                symbol = pos['symbol']
+                # 바이낸스 실제 PNL% (레버리지 반영된 값)
+                roi = float(pos.get('percentage', 0))
+                entry_price = float(pos.get('entryPrice', 0))
+                current_price = float(pos.get('markPrice', 0)) or float(pos.get('liquidationPrice', 0))
+                side = pos.get('side', 'long')
+                leverage = int(pos.get('leverage', 10))
+                unrealized_pnl = float(pos.get('unrealizedPnl', 0))
                 
-                if ENABLE_TELEGRAM:
-                    send_telegram_notification(
-                        f"🚨🚨🚨 <b>긴급 강제 청산</b> 🚨🚨🚨\n\n"
-                        f"<b>심볼:</b> {symbol}\n"
-                        f"<b>방향:</b> {side.upper()}\n"
-                        f"<b>진입가:</b> ${entry_price:,.4f}\n"
-                        f"<b>현재가:</b> ${current_price:,.4f}\n"
-                        f"<b>ROI:</b> <b>{roi:+.2f}%</b>\n"
-                        f"<b>임계값:</b> {EMERGENCY_DRAWDOWN_FORCE_EXIT}%\n\n"
-                        f"⚠️ 긴급 낙폭 보호에 의해 즉시 청산!\n\n"
-                        f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                        'error'
-                    )
-                
-                try:
-                    success_count = close_position_for_all_users(symbol)
-                    if success_count > 0:
-                        logger.info(f"🚨 {symbol} 강제 청산 완료: {success_count}명")
-                        if symbol in current_positions:
-                            record_completed_trade_with_binance(symbol, current_positions[symbol],
-                                                               close_reason='edp_force_exit')
-                            del current_positions[symbol]
-                        emergency_drawdown_warned.discard(symbol)
-                        
-                        if ENABLE_TELEGRAM:
-                            send_telegram_notification(
-                                f"✅ <b>{symbol} 강제 청산 완료</b>\n"
-                                f"청산: {success_count}/{len(exchanges)}명\n"
-                                f"최종 ROI: {roi:+.2f}%",
-                                'success'
-                            )
-                except Exception as e:
-                    logger.error(f"🚨 {symbol} 강제 청산 실패: {e}")
+                # 🚨 강제 청산 임계값 체크
+                if roi <= EMERGENCY_DRAWDOWN_FORCE_EXIT:
+                    logger.critical(f"🚨 FORCE EXIT: {symbol} ROI={roi:.2f}% <= {EMERGENCY_DRAWDOWN_FORCE_EXIT}% (Binance PNL, {leverage}x)")
+                    
                     if ENABLE_TELEGRAM:
                         send_telegram_notification(
-                            f"❌ <b>{symbol} 강제 청산 실패!</b>\n오류: {str(e)}\n⚠️ 수동 확인 필요!",
+                            f"🚨🚨🚨 <b>긴급 강제 청산</b> 🚨🚨🚨\n\n"
+                            f"<b>심볼:</b> {symbol}\n"
+                            f"<b>방향:</b> {side.upper()}\n"
+                            f"<b>레버리지:</b> {leverage}x\n"
+                            f"<b>진입가:</b> ${entry_price:,.4f}\n"
+                            f"<b>현재가:</b> ${current_price:,.4f}\n"
+                            f"<b>ROI:</b> <b>{roi:+.2f}%</b> (바이낸스 실제)\n"
+                            f"<b>미실현 PnL:</b> ${unrealized_pnl:+.2f}\n"
+                            f"<b>임계값:</b> {EMERGENCY_DRAWDOWN_FORCE_EXIT}%\n\n"
+                            f"⚠️ 긴급 낙폭 보호에 의해 즉시 청산!\n\n"
+                            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
                             'error'
                         )
-            
-            time.sleep(0.5)
-            
-        except Exception as e:
-            logger.error(f"EDP force-exit 체크 오류 ({symbol}): {e}")
+                    
+                    try:
+                        success_count = close_position_for_all_users(symbol)
+                        if success_count > 0:
+                            logger.info(f"🚨 {symbol} 강제 청산 완료: {success_count}명")
+                            if symbol in current_positions:
+                                record_completed_trade_with_binance(symbol, current_positions[symbol],
+                                                                   close_reason='edp_force_exit')
+                                del current_positions[symbol]
+                            emergency_drawdown_warned.discard(symbol)
+                            
+                            if ENABLE_TELEGRAM:
+                                send_telegram_notification(
+                                    f"✅ <b>{symbol} 강제 청산 완료</b>\n"
+                                    f"청산: {success_count}/{len(exchanges)}명\n"
+                                    f"최종 ROI: {roi:+.2f}% (바이낸스)",
+                                    'success'
+                                )
+                    except Exception as e:
+                        logger.error(f"🚨 {symbol} 강제 청산 실패: {e}")
+                        if ENABLE_TELEGRAM:
+                            send_telegram_notification(
+                                f"❌ <b>{symbol} 강제 청산 실패!</b>\n오류: {str(e)}\n⚠️ 수동 확인 필요!",
+                                'error'
+                            )
+                
+                time.sleep(0.3)
+                
+            except Exception as e:
+                logger.error(f"EDP force-exit 체크 오류 ({pos.get('symbol', '?')}): {e}")
+    
+    except Exception as e:
+        logger.error(f"EDP force-exit 바이낸스 조회 오류: {e}")
 
 
 def emergency_drawdown_check_warning():
     """
-    🆕 v7.8: 1단계 경고 + AI 집중 모니터링 (설정 간격)
-    ROI <= WARNING 시 텔레그램 경고 + AI 모니터링
+    🆕 v7.9: 1단계 경고 + AI 집중 모니터링 (설정 간격)
+    바이낸스 실제 PNL(레버리지 반영) 기준으로 판단
+    current_positions 의존 없이 바이낸스 직접 조회
     """
     global current_positions, emergency_drawdown_warned
     
-    if not EMERGENCY_DRAWDOWN_ENABLED or not current_positions:
+    if not EMERGENCY_DRAWDOWN_ENABLED:
         return
     
-    logger.info(f"🛡️ EDP 경고 체크: {len(current_positions)}개 포지션 스캔")
-    
-    for symbol, position in current_positions.copy().items():
-        try:
-            ticker = exchange.fetch_ticker(symbol)
-            current_price = ticker['last']
-            entry_price = position.get('entry_price', 0)
-            side = position.get('side', 'long')
-            
-            if not entry_price or entry_price <= 0:
-                continue
-            
-            # 🆕 v7.9: side가 'buy'/'sell' 또는 'long'/'short' 모두 처리
-            if side in ['long', 'buy']:
-                roi = (current_price - entry_price) / entry_price * 100
-            else:
-                roi = (entry_price - current_price) / entry_price * 100
-            
-            # ⚠️ 경고 구간 (강제청산 구간은 force_exit 스레드가 처리)
-            if roi <= EMERGENCY_DRAWDOWN_WARNING and roi > EMERGENCY_DRAWDOWN_FORCE_EXIT:
-                # 최초 경고 시 텔레그램 알림
-                if symbol not in emergency_drawdown_warned:
-                    emergency_drawdown_warned.add(symbol)
-                    logger.warning(f"⚠️ EDP WARNING: {symbol} ROI={roi:.2f}%")
-                    
-                    if ENABLE_TELEGRAM:
-                        send_telegram_notification(
-                            f"⚠️ <b>낙폭 경고 - 긴급 모니터링 돌입</b>\n\n"
-                            f"<b>심볼:</b> {symbol}\n"
-                            f"<b>방향:</b> {side.upper()}\n"
-                            f"<b>진입가:</b> ${entry_price:,.4f}\n"
-                            f"<b>현재가:</b> ${current_price:,.4f}\n"
-                            f"<b>ROI:</b> <b>{roi:+.2f}%</b>\n\n"
-                            f"🔍 AI 집중 모니터링 활성화 ({EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분 간격)\n"
-                            f"🚨 {EMERGENCY_DRAWDOWN_FORCE_EXIT}% 도달 시 강제 청산 (1분 이내)\n\n"
-                            f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                            'warning'
-                        )
+    try:
+        # 🆕 바이낸스에서 직접 모든 활성 포지션 조회
+        positions = exchange.fetch_positions()
+        active_positions = [p for p in positions if float(p.get('contracts', 0)) != 0]
+        
+        if not active_positions:
+            return
+        
+        logger.info(f"🛡️ EDP 경고 체크: 바이낸스 {len(active_positions)}개 포지션 스캔")
+        
+        for pos in active_positions:
+            try:
+                symbol = pos['symbol']
+                # 바이낸스 실제 PNL% (레버리지 반영된 값)
+                roi = float(pos.get('percentage', 0))
+                entry_price = float(pos.get('entryPrice', 0))
+                current_price = float(pos.get('markPrice', 0))
+                side = pos.get('side', 'long')
+                leverage = int(pos.get('leverage', 10))
+                unrealized_pnl = float(pos.get('unrealizedPnl', 0))
                 
-                # AI 모니터링 실행
-                logger.info(f"🔍 {symbol} AI 집중 모니터링 (ROI: {roi:+.2f}%)")
-                try:
-                    decision = ai_monitor_position(symbol, position)
-                    if decision and decision.get('decision') in ['close', 'partial_close']:
-                        if decision.get('confidence', 0) >= 0.5 or decision.get('urgency') == 'immediate':
-                            logger.warning(f"🤖 AI 청산 권장: {symbol} (신뢰도: {decision['confidence']:.1%})")
-                            success = execute_position_exit(symbol, decision)
-                            if success:
-                                if symbol in current_positions:
-                                    del current_positions[symbol]
-                                emergency_drawdown_warned.discard(symbol)
-                                if ENABLE_TELEGRAM:
-                                    send_telegram_notification(
-                                        f"🤖 <b>AI 판단 청산: {symbol}</b>\n"
-                                        f"ROI: {roi:+.2f}% | 신뢰도: {decision['confidence']:.1%}\n"
-                                        f"사유: {decision.get('reason', 'AI decision')}",
-                                        'info'
-                                    )
-                except Exception as e:
-                    logger.error(f"EDP AI 모니터링 오류 ({symbol}): {e}")
-            
-            elif roi > EMERGENCY_DRAWDOWN_WARNING:
-                # 경고 구간에서 회복
-                if symbol in emergency_drawdown_warned:
-                    emergency_drawdown_warned.discard(symbol)
-                    logger.info(f"✅ {symbol} 낙폭 경고 해제 (ROI: {roi:+.2f}%)")
-                    if ENABLE_TELEGRAM:
-                        send_telegram_notification(
-                            f"✅ <b>{symbol} 낙폭 경고 해제</b>\n"
-                            f"현재 ROI: {roi:+.2f}% (임계값: {EMERGENCY_DRAWDOWN_WARNING}% 초과)",
-                            'success'
-                        )
-            
-            time.sleep(1)
-            
-        except Exception as e:
-            logger.error(f"EDP 경고 체크 오류 ({symbol}): {e}")
+                # ⚠️ 경고 구간 (강제청산 구간은 force_exit 스레드가 처리)
+                if roi <= EMERGENCY_DRAWDOWN_WARNING and roi > EMERGENCY_DRAWDOWN_FORCE_EXIT:
+                    # 최초 경고 시 텔레그램 알림
+                    if symbol not in emergency_drawdown_warned:
+                        emergency_drawdown_warned.add(symbol)
+                        logger.warning(f"⚠️ EDP WARNING: {symbol} ROI={roi:.2f}% (바이낸스, {leverage}x)")
+                        
+                        if ENABLE_TELEGRAM:
+                            send_telegram_notification(
+                                f"⚠️ <b>낙폭 경고 - 긴급 모니터링 돌입</b>\n\n"
+                                f"<b>심볼:</b> {symbol}\n"
+                                f"<b>방향:</b> {side.upper()}\n"
+                                f"<b>레버리지:</b> {leverage}x\n"
+                                f"<b>진입가:</b> ${entry_price:,.4f}\n"
+                                f"<b>현재가:</b> ${current_price:,.4f}\n"
+                                f"<b>ROI:</b> <b>{roi:+.2f}%</b> (바이낸스 실제)\n"
+                                f"<b>미실현 PnL:</b> ${unrealized_pnl:+.2f}\n\n"
+                                f"🔍 AI 집중 모니터링 활성화 ({EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분 간격)\n"
+                                f"🚨 {EMERGENCY_DRAWDOWN_FORCE_EXIT}% 도달 시 강제 청산 (1분 이내)\n\n"
+                                f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                                'warning'
+                            )
+                    
+                    # AI 모니터링 실행 (current_positions에 있는 경우만)
+                    if symbol in current_positions:
+                        logger.info(f"🔍 {symbol} AI 집중 모니터링 (ROI: {roi:+.2f}%, 바이낸스)")
+                        try:
+                            decision = ai_monitor_position(symbol, current_positions[symbol])
+                            if decision and decision.get('decision') in ['close', 'partial_close']:
+                                if decision.get('confidence', 0) >= 0.5 or decision.get('urgency') == 'immediate':
+                                    logger.warning(f"🤖 AI 청산 권장: {symbol} (신뢰도: {decision['confidence']:.1%})")
+                                    success = execute_position_exit(symbol, decision)
+                                    if success:
+                                        if symbol in current_positions:
+                                            del current_positions[symbol]
+                                        emergency_drawdown_warned.discard(symbol)
+                                        if ENABLE_TELEGRAM:
+                                            send_telegram_notification(
+                                                f"🤖 <b>AI 판단 청산: {symbol}</b>\n"
+                                                f"ROI: {roi:+.2f}% (바이낸스) | 신뢰도: {decision['confidence']:.1%}\n"
+                                                f"사유: {decision.get('reason', 'AI decision')}",
+                                                'info'
+                                            )
+                        except Exception as e:
+                            logger.error(f"EDP AI 모니터링 오류 ({symbol}): {e}")
+                    else:
+                        logger.warning(f"⚠️ {symbol} current_positions에 없음 - AI 모니터링 스킵 (텔레그램 경고는 발송됨)")
+                
+                elif roi > EMERGENCY_DRAWDOWN_WARNING:
+                    # 경고 구간에서 회복
+                    if symbol in emergency_drawdown_warned:
+                        emergency_drawdown_warned.discard(symbol)
+                        logger.info(f"✅ {symbol} 낙폭 경고 해제 (ROI: {roi:+.2f}%, 바이낸스)")
+                        if ENABLE_TELEGRAM:
+                            send_telegram_notification(
+                                f"✅ <b>{symbol} 낙폭 경고 해제</b>\n"
+                                f"현재 ROI: {roi:+.2f}% (바이낸스, 임계값: {EMERGENCY_DRAWDOWN_WARNING}% 초과)",
+                                'success'
+                            )
+                
+                time.sleep(0.5)
+                
+            except Exception as e:
+                logger.error(f"EDP 경고 체크 오류 ({pos.get('symbol', '?')}): {e}")
+    
+    except Exception as e:
+        logger.error(f"EDP 경고 바이낸스 조회 오류: {e}")
 
 
 def start_emergency_drawdown_protection():
@@ -8394,7 +8415,7 @@ def start_emergency_drawdown_protection():
         logger.info(f"🚨 EDP 강제청산 감시 시작 (1분 간격, 임계값: {EMERGENCY_DRAWDOWN_FORCE_EXIT}%)")
         while emergency_drawdown_running:
             try:
-                if EMERGENCY_DRAWDOWN_ENABLED and current_positions:
+                if EMERGENCY_DRAWDOWN_ENABLED:
                     emergency_drawdown_check_force_exit()
                 time.sleep(60)  # 1분 간격
             except Exception as e:
@@ -8406,7 +8427,7 @@ def start_emergency_drawdown_protection():
         logger.info(f"⚠️ EDP 경고 모니터링 시작 ({EMERGENCY_DRAWDOWN_MONITOR_INTERVAL}분 간격, 임계값: {EMERGENCY_DRAWDOWN_WARNING}%)")
         while emergency_drawdown_running:
             try:
-                if EMERGENCY_DRAWDOWN_ENABLED and current_positions:
+                if EMERGENCY_DRAWDOWN_ENABLED:
                     emergency_drawdown_check_warning()
                 time.sleep(EMERGENCY_DRAWDOWN_MONITOR_INTERVAL * 60)
             except Exception as e:
