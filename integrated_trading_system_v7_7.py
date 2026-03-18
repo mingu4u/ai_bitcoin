@@ -4976,7 +4976,7 @@ def check_trend_remaining_room(df_hourly, df_4h, position_side: str, pnl_percent
         patience_score = 0
         details = []
         
-        if position_side == 'long':
+        if position_side in ['long', 'buy']:
             # ===== LONG 포지션 추세 여력 판단 =====
             
             # 4H RSI 여력
@@ -5060,7 +5060,7 @@ def check_trend_remaining_room(df_hourly, df_4h, position_side: str, pnl_percent
         # RSI가 극단적 과열 상태이면 곧 반등/반락 가능성 높음
         # 손실 중이더라도 인내심 점수를 추가로 부여
         
-        if position_side == 'long':
+        if position_side in ['long', 'buy']:
             # LONG 포지션: 과매도 상태이면 반등 기대
             if rsi_4h < V76_RSI_EXTREME_OVERSOLD:
                 patience_score += 4
@@ -8241,7 +8241,8 @@ def emergency_drawdown_check_force_exit():
             if not entry_price or entry_price <= 0:
                 continue
             
-            if side == 'long':
+            # 🆕 v7.9: side가 'buy'/'sell' 또는 'long'/'short' 모두 처리
+            if side in ['long', 'buy']:
                 roi = (current_price - entry_price) / entry_price * 100
             else:
                 roi = (entry_price - current_price) / entry_price * 100
@@ -8317,7 +8318,8 @@ def emergency_drawdown_check_warning():
             if not entry_price or entry_price <= 0:
                 continue
             
-            if side == 'long':
+            # 🆕 v7.9: side가 'buy'/'sell' 또는 'long'/'short' 모두 처리
+            if side in ['long', 'buy']:
                 roi = (current_price - entry_price) / entry_price * 100
             else:
                 roi = (entry_price - current_price) / entry_price * 100
