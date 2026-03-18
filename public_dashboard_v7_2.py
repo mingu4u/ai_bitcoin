@@ -388,7 +388,7 @@ def calculate_period_performance(current_balance, initial_balance, days):
         SELECT 
             COUNT(*) as trades,
             SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
-            SUM(pnl_usdt) as total_pnl
+            SUM(pnl_usdt - COALESCE(commission, 0)) as total_pnl
         FROM completed_trades
         WHERE close_timestamp >= date('now', '-{days} days')
         """
@@ -432,7 +432,7 @@ def get_equity_history(current_balance, days=None, lifetime_start_balance=None):
             query = f"""
             SELECT 
                 close_timestamp,
-                SUM(pnl_usdt) OVER (ORDER BY close_timestamp) as cumulative_pnl
+                SUM(pnl_usdt - COALESCE(commission, 0)) OVER (ORDER BY close_timestamp) as cumulative_pnl
             FROM completed_trades
             WHERE close_timestamp >= date('now', '-{days} days')
             ORDER BY close_timestamp
@@ -441,7 +441,7 @@ def get_equity_history(current_balance, days=None, lifetime_start_balance=None):
             query = """
             SELECT 
                 close_timestamp,
-                SUM(pnl_usdt) OVER (ORDER BY close_timestamp) as cumulative_pnl
+                SUM(pnl_usdt - COALESCE(commission, 0)) OVER (ORDER BY close_timestamp) as cumulative_pnl
             FROM completed_trades
             ORDER BY close_timestamp
             """
@@ -863,12 +863,12 @@ def main():
                     COUNT(*) as total_trades,
                     SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
                     SUM(CASE WHEN is_win = 0 THEN 1 ELSE 0 END) as losses,
-                    SUM(pnl_usdt) as total_pnl,
+                    SUM(pnl_usdt - COALESCE(commission, 0)) as total_pnl,
                     AVG(pnl_percent) as avg_pnl_percent,
-                    MAX(pnl_usdt) as max_profit,
-                    MIN(pnl_usdt) as max_loss,
-                    AVG(CASE WHEN is_win = 1 THEN pnl_usdt END) as avg_win,
-                    AVG(CASE WHEN is_win = 0 THEN pnl_usdt END) as avg_loss
+                    MAX(pnl_usdt - COALESCE(commission, 0)) as max_profit,
+                    MIN(pnl_usdt - COALESCE(commission, 0)) as max_loss,
+                    AVG(CASE WHEN is_win = 1 THEN (pnl_usdt - COALESCE(commission, 0)) END) as avg_win,
+                    AVG(CASE WHEN is_win = 0 THEN (pnl_usdt - COALESCE(commission, 0)) END) as avg_loss
                 FROM completed_trades
                 WHERE close_timestamp >= date('now', '-30 days')
                 """
@@ -920,8 +920,8 @@ def main():
                     equity_query = """
                     SELECT 
                         close_timestamp,
-                        pnl_usdt,
-                        SUM(pnl_usdt) OVER (ORDER BY close_timestamp) as cumulative_pnl
+                        (pnl_usdt - COALESCE(commission, 0)) as pnl_usdt,
+                        SUM(pnl_usdt - COALESCE(commission, 0)) OVER (ORDER BY close_timestamp) as cumulative_pnl
                     FROM completed_trades
                     WHERE close_timestamp >= date('now', '-30 days')
                     ORDER BY close_timestamp
@@ -972,7 +972,7 @@ def main():
                             COUNT(*) as trades,
                             SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
                             ROUND(AVG(CASE WHEN is_win = 1 THEN 1.0 ELSE 0.0 END) * 100, 1) as win_rate,
-                            ROUND(SUM(pnl_usdt), 2) as total_pnl,
+                            ROUND(SUM(pnl_usdt - COALESCE(commission, 0)), 2) as total_pnl,
                             ROUND(AVG(pnl_percent), 2) as avg_pnl_pct
                         FROM completed_trades
                         WHERE close_timestamp >= date('now', '-30 days')
@@ -1033,12 +1033,12 @@ def main():
                         best_query = """
                         SELECT 
                             symbol,
-                            ROUND(pnl_usdt, 2) as pnl,
+                            ROUND(pnl_usdt - COALESCE(commission, 0), 2) as pnl,
                             ROUND(pnl_percent, 2) as pnl_pct,
                             close_timestamp
                         FROM completed_trades
                         WHERE close_timestamp >= date('now', '-30 days')
-                        ORDER BY pnl_usdt DESC
+                        ORDER BY (pnl_usdt - COALESCE(commission, 0)) DESC
                         LIMIT 5
                         """
                         
@@ -1055,12 +1055,12 @@ def main():
                         worst_query = """
                         SELECT 
                             symbol,
-                            ROUND(pnl_usdt, 2) as pnl,
+                            ROUND(pnl_usdt - COALESCE(commission, 0), 2) as pnl,
                             ROUND(pnl_percent, 2) as pnl_pct,
                             close_timestamp
                         FROM completed_trades
                         WHERE close_timestamp >= date('now', '-30 days')
-                        ORDER BY pnl_usdt ASC
+                        ORDER BY (pnl_usdt - COALESCE(commission, 0)) ASC
                         LIMIT 5
                         """
                         
@@ -1082,7 +1082,7 @@ def main():
                         st.subheader("📉 PnL Distribution")
                         
                         pnl_query = """
-                        SELECT pnl_usdt
+                        SELECT (pnl_usdt - COALESCE(commission, 0)) as pnl_usdt
                         FROM completed_trades
                         WHERE close_timestamp >= date('now', '-30 days')
                         """
@@ -1116,7 +1116,7 @@ def main():
                         duration_query = """
                         SELECT 
                             ROUND((julianday(close_timestamp) - julianday(open_timestamp)) * 24, 1) as hours,
-                            pnl_usdt
+                            (pnl_usdt - COALESCE(commission, 0)) as pnl_usdt
                         FROM completed_trades
                         WHERE close_timestamp >= date('now', '-30 days')
                             AND open_timestamp IS NOT NULL
@@ -1224,12 +1224,13 @@ def main():
                 entry_price,
                 exit_price,
                 amount,
-                pnl_usdt,
+                (pnl_usdt - COALESCE(commission, 0)) as pnl_usdt,
                 pnl_percent,
                 holding_time_minutes,
                 close_reason,
                 position_type,
-                realized_pnl_binance
+                realized_pnl_binance,
+                COALESCE(commission, 0) as commission
             FROM completed_trades
             {where_clause}
             ORDER BY close_timestamp DESC
@@ -1274,10 +1275,18 @@ def main():
                     lambda x: '✅' if pd.notna(x) else '📊'
                 )
                 
+                # 🆕 수수료 표시
+                if 'commission' in df_trades.columns:
+                    df_trades['fee'] = df_trades['commission'].apply(
+                        lambda x: f"${x:,.2f}" if pd.notna(x) and x > 0 else "-"
+                    )
+                
                 # 컬럼 선택 및 표시
                 display_columns = ['close_timestamp', 'symbol', 'side', 'entry_price', 
-                                 'exit_price', 'pnl_usdt', 'pnl_percent', 'holding_time', 
+                                 'exit_price', 'pnl_usdt', 'fee', 'pnl_percent', 'holding_time', 
                                  'close_reason', 'verified']
+                # fee 컬럼이 없으면 제외
+                display_columns = [c for c in display_columns if c in df_trades.columns]
                 
                 st.dataframe(
                     df_trades[display_columns],
@@ -1325,10 +1334,10 @@ def main():
                 COUNT(*) as total_trades,
                 SUM(CASE WHEN is_win = 1 THEN 1 ELSE 0 END) as wins,
                 ROUND(AVG(CASE WHEN is_win = 1 THEN 1.0 ELSE 0.0 END) * 100, 1) as win_rate,
-                ROUND(SUM(pnl_usdt), 2) as total_pnl,
-                ROUND(AVG(pnl_usdt), 2) as avg_pnl,
-                ROUND(MAX(pnl_usdt), 2) as max_win,
-                ROUND(MIN(pnl_usdt), 2) as max_loss,
+                ROUND(SUM(pnl_usdt - COALESCE(commission, 0)), 2) as total_pnl,
+                ROUND(AVG(pnl_usdt - COALESCE(commission, 0)), 2) as avg_pnl,
+                ROUND(MAX(pnl_usdt - COALESCE(commission, 0)), 2) as max_win,
+                ROUND(MIN(pnl_usdt - COALESCE(commission, 0)), 2) as max_loss,
                 ROUND(AVG(holding_time_minutes), 1) as avg_holding_time,
                 ROUND(SUM(amount * entry_price), 2) as total_volume,
                 ROUND(AVG(pnl_percent), 2) as avg_pnl_percent
@@ -1470,7 +1479,7 @@ def main():
                     strftime('%H', close_timestamp) as hour,
                     strftime('%w', close_timestamp) as day_of_week,
                     COUNT(*) as trades,
-                    SUM(pnl_usdt) as total_pnl
+                    SUM(pnl_usdt - COALESCE(commission, 0)) as total_pnl
                 FROM completed_trades
                 WHERE 1=1 {date_condition}
                 GROUP BY hour, day_of_week
