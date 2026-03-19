@@ -11295,11 +11295,26 @@ def webhook():
                 if action == 'hold':
                     return jsonify({'status': 'hold', 'reason': ai_decision['reason']}), 200
             
-            # AI가 승인하거나 수정한 경우 거래 실행
-            stop_loss_price = ai_decision['stop_loss_price']
-            take_profit_price = ai_decision['take_profit_price']
-            pl_ratio = ai_decision['pl_ratio']
-            position_percent = ai_decision['percentage']
+            # 🆕 v7.9: AI는 진입 여부만 판단, TP/SL은 웹훅 원본 유지
+            # TP/SL 설정은 AUTO_TP_SL_GENERATION 옵션에 따라 결정
+            ticker = exchange.fetch_ticker(symbol)
+            current_price = ticker['last']
+            
+            if AUTO_TP_SL_GENERATION:
+                if action == 'buy':
+                    stop_loss_price = stop_loss if stop_loss is not None else (current_price * 0.98)
+                    take_profit_price = take_profit if take_profit is not None else (current_price * 1.04)
+                else:
+                    stop_loss_price = stop_loss if stop_loss is not None else (current_price * 1.02)
+                    take_profit_price = take_profit if take_profit is not None else (current_price * 0.96)
+                logger.info(f"AI ON + TP/SL 자동생성 ON - SL: {stop_loss_price:.4f}, TP: {take_profit_price:.4f}")
+            else:
+                stop_loss_price = stop_loss  # None일 수 있음
+                take_profit_price = take_profit  # None일 수 있음
+                logger.info(f"AI ON + TP/SL 자동생성 OFF - SL: {stop_loss_price}, TP: {take_profit_price}")
+            
+            pl_ratio = 2.0
+            position_percent = get_symbol_config(symbol).get('position_size_percent', 10)
             
         else:
             # AI 검증 없이 처리
