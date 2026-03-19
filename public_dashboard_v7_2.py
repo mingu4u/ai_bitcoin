@@ -2685,8 +2685,103 @@ def main():
         
         st.markdown("---")
         
+        # ============ 🆕 v7.9: Market Shield ============
+        st.header("🛡️ Market Shield (멀티소스 방어)")
+        
+        try:
+            resp = requests.get(f"{TRADING_BOT_URL}/market-shield/status", timeout=3)
+            if resp.status_code == 200:
+                shield = resp.json()
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    status = "🟢 활성" if shield.get('enabled') else "🔴 비활성"
+                    st.metric("상태", status)
+                with col2:
+                    running = "✅ 실행중" if shield.get('running') else "⏸️ 대기"
+                    st.metric("스레드", running)
+                with col3:
+                    st.metric("경제 이벤트", f"{shield.get('calendar_events', 0)}건")
+                with col4:
+                    anomalies = shield.get('active_anomalies', {})
+                    blocked = shield.get('blocked_entries', {})
+                    st.metric("이상 감지 / 차단", f"{len(anomalies)} / {len(blocked)}")
+                
+                # ON/OFF 토글
+                col_on, col_off = st.columns(2)
+                with col_on:
+                    if st.button("🛡️ Shield 활성화", key="shield_on", use_container_width=True):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/market-shield/toggle", json={'enabled': True}, timeout=5)
+                            if resp.status_code == 200:
+                                st.success("✅ Market Shield 활성화!")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 실패: {e}")
+                with col_off:
+                    if st.button("⛔ Shield 비활성화", key="shield_off", use_container_width=True):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/market-shield/toggle", json={'enabled': False}, timeout=5)
+                            if resp.status_code == 200:
+                                st.warning("⛔ Market Shield 비활성화")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ 실패: {e}")
+                
+                # 파라미터 설정
+                with st.expander("⚙️ Market Shield 설정"):
+                    ms_col1, ms_col2 = st.columns(2)
+                    with ms_col1:
+                        block_before = st.number_input("이벤트 전 차단 (분)", 
+                                                       value=shield.get('block_before_min', 120),
+                                                       min_value=30, max_value=360, step=30, key="ms_before")
+                        zscore = st.number_input("Z-Score 임계값 (σ)", 
+                                                 value=float(shield.get('zscore_threshold', 3.0)),
+                                                 min_value=2.0, max_value=5.0, step=0.5, key="ms_zscore")
+                    with ms_col2:
+                        block_after = st.number_input("이벤트 후 차단 (분)", 
+                                                      value=shield.get('block_after_min', 60),
+                                                      min_value=15, max_value=180, step=15, key="ms_after")
+                        cooldown = st.number_input("이상 감지 후 차단 (초)", 
+                                                   value=shield.get('anomaly_cooldown_sec', 600),
+                                                   min_value=60, max_value=3600, step=60, key="ms_cooldown")
+                    
+                    if st.button("💾 Shield 설정 저장", key="ms_save", use_container_width=True):
+                        try:
+                            resp = requests.post(f"{TRADING_BOT_URL}/market-shield/config", json={
+                                'block_before': block_before,
+                                'block_after': block_after,
+                                'zscore_threshold': zscore,
+                                'anomaly_cooldown': cooldown
+                            }, timeout=5)
+                            if resp.status_code == 200:
+                                st.success("✅ 설정 저장 완료!")
+                        except Exception as e:
+                            st.error(f"❌ 저장 실패: {e}")
+                
+                # 실시간 상태 표시
+                if anomalies:
+                    st.subheader("⚡ 활성 이상 감지")
+                    for sym, info in anomalies.items():
+                        direction = "📈 급등" if info['direction'] == 'surge' else "📉 급락"
+                        st.warning(f"{direction} **{sym}** — 가격 Z={info['z_price']}σ, 거래량 Z={info['z_volume']}σ")
+                
+                if blocked:
+                    st.subheader("⛔ 진입 차단 중")
+                    for sym, info in blocked.items():
+                        st.error(f"**{sym}** — {info['reason']} (해제: {info['until'][:19]})")
+                
+            else:
+                st.error("Market Shield 상태를 가져올 수 없습니다")
+        except requests.exceptions.ConnectionError:
+            st.warning("봇이 오프라인입니다")
+        except Exception as e:
+            st.error(f"Market Shield 오류: {e}")
+        
+        st.markdown("---")
+        
         # 정보
-        st.caption("Trading Dashboard v7.8 Complete")
+        st.caption("Trading Dashboard v7.9 Complete")
         st.caption("© 2025 Automated Trading System")
 
 if __name__ == "__main__":
