@@ -615,7 +615,7 @@ def calculate_tight_tp_sl(current_price: float, action: str, atr_15m: float, atr
     tp_distance = base_atr * tp_multiplier
     
     # 최소 R:R 보장 (1.5)
-    if tp_distance / sl_distance < V75_MIN_RR_RATIO:
+    if sl_distance > 0 and tp_distance / sl_distance < V75_MIN_RR_RATIO:
         tp_distance = sl_distance * V75_MIN_RR_RATIO
     
     if action.lower() == 'buy':
@@ -2858,9 +2858,9 @@ def record_completed_trade(symbol, position_info, exit_price, close_reason='manu
         
         # 가격 변화율 계산
         if side == 'buy':
-            price_change_percent = ((exit_price - entry_price) / entry_price) * 100
+            price_change_percent = ((exit_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
         else:  # sell
-            price_change_percent = ((entry_price - exit_price) / entry_price) * 100
+            price_change_percent = ((entry_price - exit_price) / entry_price) * 100 if entry_price > 0 else 0
         
         # 레버리지 적용 - 실제 수익률
         pnl_percent = price_change_percent * leverage
@@ -2984,9 +2984,9 @@ def record_position_history(exchange):
             
             # 가격 변화율 계산
             if side == 'buy':
-                price_change_percent = ((current_price - entry_price) / entry_price) * 100
+                price_change_percent = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
             else:
-                price_change_percent = ((entry_price - current_price) / entry_price) * 100
+                price_change_percent = ((entry_price - current_price) / entry_price) * 100 if entry_price > 0 else 0
             
             # 레버리지 적용 - 실제 수익률
             pnl_percent = price_change_percent * leverage
@@ -7111,13 +7111,13 @@ def ai_monitor_position(symbol, position_info):
         
         # PnL 계산 (레버리지 반영)
         if side == 'buy':
-            price_change_percent = ((current_price - entry_price) / entry_price) * 100
-            distance_to_sl = ((current_price - stop_loss) / current_price) * 100 if stop_loss else 100
-            distance_to_tp = ((take_profit - current_price) / current_price) * 100 if take_profit else 100
+            price_change_percent = ((current_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
+            distance_to_sl = ((current_price - stop_loss) / current_price) * 100 if stop_loss and current_price > 0 else 100
+            distance_to_tp = ((take_profit - current_price) / current_price) * 100 if take_profit and current_price > 0 else 100
         else:  # sell
-            price_change_percent = ((entry_price - current_price) / entry_price) * 100
-            distance_to_sl = ((stop_loss - current_price) / current_price) * 100 if stop_loss else 100
-            distance_to_tp = ((current_price - take_profit) / current_price) * 100 if take_profit else 100
+            price_change_percent = ((entry_price - current_price) / entry_price) * 100 if entry_price > 0 else 0
+            distance_to_sl = ((stop_loss - current_price) / current_price) * 100 if stop_loss and current_price > 0 else 100
+            distance_to_tp = ((current_price - take_profit) / current_price) * 100 if take_profit and current_price > 0 else 100
         
         # 레버리지 적용 - 실제 수익률
         pnl_percent = price_change_percent * leverage
@@ -8910,7 +8910,7 @@ def start_market_shield():
     global market_shield_running, market_shield_thread
     
     def shield_loop():
-        global market_shield_running
+        global market_shield_running, market_shield_calendar_date
         market_shield_running = True
         logger.info(f"🛡️ Market Shield 시작 (Z-Score 임계값: {MARKET_SHIELD_ZSCORE_THRESHOLD}σ)")
         
@@ -8961,7 +8961,6 @@ def start_market_shield():
                         daily_alert_sent_date = today
                         try:
                             # 캐시 무효화 후 새로 로드
-                            global market_shield_calendar_date
                             market_shield_calendar_date = ""
                             events = market_shield_fetch_calendar()
                             upcoming_events = [e for e in events if e['time'] > now]
