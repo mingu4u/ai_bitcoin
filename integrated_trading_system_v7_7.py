@@ -8940,15 +8940,53 @@ def start_market_shield():
         except Exception as e:
             logger.warning(f"Market Shield 캘린더 초기 로드 실패: {e}")
         
+        # 🆕 v7.9: 매일 오전 8시 알림 추적
+        daily_alert_sent_date = ""
+        
         while market_shield_running:
             try:
                 if MARKET_SHIELD_ENABLED:
                     market_shield_check_anomaly()
                     
-                    # 자정 넘으면 캘린더 갱신
-                    today = datetime.now().strftime('%Y-%m-%d')
+                    now = datetime.now()
+                    today = now.strftime('%Y-%m-%d')
+                    
+                    # 자정 넘으면 캘린더 갱신 + 알림 리셋
                     if market_shield_calendar_date != today:
                         market_shield_fetch_calendar()
+                        daily_alert_sent_date = ""  # 새 날짜 → 알림 리셋
+                    
+                    # 🆕 매일 오전 8시 KST 경제 이벤트 알림
+                    if now.hour >= 8 and daily_alert_sent_date != today:
+                        daily_alert_sent_date = today
+                        try:
+                            # 캐시 무효화 후 새로 로드
+                            global market_shield_calendar_date
+                            market_shield_calendar_date = ""
+                            events = market_shield_fetch_calendar()
+                            upcoming_events = [e for e in events if e['time'] > now]
+                            
+                            if upcoming_events and ENABLE_TELEGRAM:
+                                event_list = '\n'.join([
+                                    f"  • {e['name']} ({e.get('country', 'US')}) @ {e['time'].strftime('%H:%M KST')}"
+                                    for e in upcoming_events[:5]
+                                ])
+                                send_telegram_notification(
+                                    f"📅 <b>Market Shield - 오늘의 예정 이벤트</b>\n\n"
+                                    f"{event_list}\n\n"
+                                    f"⛔ 이벤트 전 {MARKET_SHIELD_ENTRY_BLOCK_BEFORE}분 ~ 후 {MARKET_SHIELD_ENTRY_BLOCK_AFTER}분 진입 차단\n\n"
+                                    f"⏰ {now.strftime('%Y-%m-%d %H:%M KST')}",
+                                    'info'
+                                )
+                            elif ENABLE_TELEGRAM:
+                                send_telegram_notification(
+                                    f"📅 <b>Market Shield</b> - 오늘 예정된 고영향 경제 이벤트 없음\n\n"
+                                    f"⏰ {now.strftime('%Y-%m-%d %H:%M KST')}",
+                                    'info'
+                                )
+                            logger.info(f"📅 매일 오전 8시 경제 이벤트 알림 발송 완료 ({len(upcoming_events)}개)")
+                        except Exception as daily_err:
+                            logger.error(f"매일 알림 발송 실패: {daily_err}")
                 
                 time.sleep(60)  # 1분 간격
             except Exception as e:
