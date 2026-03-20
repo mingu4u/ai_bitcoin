@@ -8498,11 +8498,24 @@ def market_shield_fetch_calendar():
     ]
     
     events = []
+    now = datetime.now()
     
-    # 방법 1: FinancialModelingPrep 무료 API
+    # 🆕 v7.9: 알림 윈도우 = 오늘 08:00 KST ~ 내일 08:00 KST (24시간)
+    # 매일 8시에 체크하므로, 다음 알림(내일 8시)까지의 이벤트를 모두 포함
+    window_start = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    if now.hour < 8:
+        window_start = window_start - timedelta(days=1)  # 8시 전이면 어제 8시부터
+    window_end = window_start + timedelta(hours=24)  # 내일 8시까지
+    
+    # FMP는 UTC 기준이므로 KST 윈도우를 커버하려면 UTC 변환
+    # KST 08:00 = UTC 전날 23:00, KST 내일 08:00 = UTC 오늘 23:00
+    utc_from = (window_start - timedelta(hours=9)).strftime('%Y-%m-%d')
+    utc_to = (window_end - timedelta(hours=9)).strftime('%Y-%m-%d')
+    
+    # 방법 1: FinancialModelingPrep 무료 API (UTC 날짜 범위 조회)
     try:
         import requests
-        url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={today}&to={today}&apikey=demo"
+        url = f"https://financialmodelingprep.com/api/v3/economic_calendar?from={utc_from}&to={utc_to}&apikey=demo"
         resp = requests.get(url, timeout=10)
         if resp.status_code == 200:
             data = resp.json()
@@ -8518,10 +8531,13 @@ def market_shield_fetch_calendar():
                         event_time = datetime.fromisoformat(event_time_str.replace('Z', '+00:00'))
                         # 🆕 v7.9: UTC → KST 변환 (naive datetime으로)
                         if hasattr(event_time, 'tzinfo') and event_time.tzinfo:
-                            # UTC aware → naive KST (+9h)
                             event_time_kst = event_time.replace(tzinfo=None) + timedelta(hours=9)
                         else:
                             event_time_kst = event_time + timedelta(hours=9)
+                        
+                        # 🆕 KST 24시간 윈도우 필터 (오늘 8시 ~ 내일 8시)
+                        if event_time_kst < window_start or event_time_kst > window_end:
+                            continue
                         
                         events.append({
                             'name': event_name,
@@ -8543,17 +8559,18 @@ def market_shield_fetch_calendar():
             from openai import OpenAI
             client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
             if client.api_key:
+                tomorrow = (now + timedelta(days=1)).strftime('%Y-%m-%d')
                 response = client.chat.completions.create(
                     model="deepseek-chat",
                     messages=[{
                         "role": "user",
-                        "content": f"Today is exactly {today}. List ONLY economic events that are CONFIRMED and SCHEDULED "
-                                   f"for this SPECIFIC date ({today}). "
-                                   f"DO NOT include events from previous days or upcoming days. "
-                                   f"DO NOT guess or assume - if you are not certain an event is on {today}, exclude it. "
-                                   f"FOMC meetings, CPI releases, NFP etc. have specific scheduled dates - only include if actually on {today}. "
-                                   f"Return JSON: {{\"events\": [{{\"name\": \"event\", \"time_utc\": \"HH:MM\", \"impact\": \"High\"}}]}}. "
-                                   f"Return {{\"events\": []}} if no confirmed events for {today}."
+                        "content": f"Today is {today}. List ONLY major economic events CONFIRMED and SCHEDULED "
+                                   f"for {today} AND the morning of {tomorrow} (before 08:00 KST / before 23:00 UTC on {today}). "
+                                   f"DO NOT include events from previous days. "
+                                   f"DO NOT guess or assume - if you are not certain, exclude it. "
+                                   f"FOMC meetings, CPI releases, NFP etc. have specific scheduled dates - only include if actually scheduled. "
+                                   f"Return JSON: {{\"events\": [{{\"name\": \"event\", \"date\": \"YYYY-MM-DD\", \"time_utc\": \"HH:MM\", \"impact\": \"High\"}}]}}. "
+                                   f"Return {{\"events\": []}} if no confirmed events."
                     }],
                     response_format={'type': 'json_object'},
                     temperature=0.0, max_tokens=500
@@ -8563,12 +8580,18 @@ def market_shield_fetch_calendar():
                 for item in event_list:
                     try:
                         time_str = item.get('time_utc', '00:00')
-                        event_time_utc = datetime.strptime(f"{today} {time_str}", '%Y-%m-%d %H:%M')
-                        # 🆕 v7.9: UTC → KST 변환
+                        event_date = item.get('date', today)
+                        event_time_utc = datetime.strptime(f"{event_date} {time_str}", '%Y-%m-%d %H:%M')
+                        # UTC → KST 변환
                         event_time_kst = event_time_utc + timedelta(hours=9)
+                        
+                        # 윈도우 필터 (오늘 8시 ~ 내일 8시)
+                        if event_time_kst < window_start or event_time_kst > window_end:
+                            continue
+                        
                         events.append({
                             'name': item.get('name', 'Unknown'),
-                            'time': event_time_kst,  # KST로 저장
+                            'time': event_time_kst,
                             'impact': 'High',
                             'country': 'US'
                         })
@@ -8927,14 +8950,14 @@ def start_market_shield():
                     for e in upcoming_events[:5]
                 ])
                 send_telegram_notification(
-                    f"📅 <b>Market Shield - 오늘의 예정 이벤트</b>\n\n"
+                    f"📅 <b>Market Shield - 향후 24시간 예정 이벤트</b>\n\n"
                     f"{event_list}\n\n"
                     f"⛔ 이벤트 전 {MARKET_SHIELD_ENTRY_BLOCK_BEFORE}분 ~ 후 {MARKET_SHIELD_ENTRY_BLOCK_AFTER}분 진입 차단",
                     'info'
                 )
             elif ENABLE_TELEGRAM:
                 send_telegram_notification(
-                    f"📅 <b>Market Shield</b> - 오늘 예정된 고영향 경제 이벤트 없음",
+                    f"📅 <b>Market Shield</b> - 향후 24시간 고영향 경제 이벤트 없음",
                     'info'
                 )
         except Exception as e:
@@ -8971,7 +8994,7 @@ def start_market_shield():
                                     for e in upcoming_events[:5]
                                 ])
                                 send_telegram_notification(
-                                    f"📅 <b>Market Shield - 오늘의 예정 이벤트</b>\n\n"
+                                    f"📅 <b>Market Shield - 향후 24시간 예정 이벤트</b>\n\n"
                                     f"{event_list}\n\n"
                                     f"⛔ 이벤트 전 {MARKET_SHIELD_ENTRY_BLOCK_BEFORE}분 ~ 후 {MARKET_SHIELD_ENTRY_BLOCK_AFTER}분 진입 차단\n\n"
                                     f"⏰ {now.strftime('%Y-%m-%d %H:%M KST')}",
@@ -8979,7 +9002,7 @@ def start_market_shield():
                                 )
                             elif ENABLE_TELEGRAM:
                                 send_telegram_notification(
-                                    f"📅 <b>Market Shield</b> - 오늘 예정된 고영향 경제 이벤트 없음\n\n"
+                                    f"📅 <b>Market Shield</b> - 향후 24시간 고영향 경제 이벤트 없음\n\n"
                                     f"⏰ {now.strftime('%Y-%m-%d %H:%M KST')}",
                                     'info'
                                 )
