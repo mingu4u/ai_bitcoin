@@ -494,8 +494,8 @@ def check_hedge_position_conflict(symbol: str, new_side: str) -> dict:
                     return {'has_conflict': False, 'reason': 'Same direction'}
                 
                 # 반대 방향 포지션 존재
-                pnl_percent = float(pos.get('percentage', 0))
-                leverage = int(pos.get('leverage', 20))
+                pnl_percent = float(pos.get('percentage') or 0)
+                leverage = int(float(pos.get('leverage') or 20))
                 
                 # 수수료 기준 계산: 0.05% * 2 * leverage
                 fee_threshold = V75_BASE_FEE_RATE * V75_HEDGE_PROFIT_THRESHOLD_MULTIPLIER * leverage
@@ -538,8 +538,8 @@ def manage_hedge_positions(symbol: str, leverage: int = 20) -> dict:
         
         profitable_positions = []
         for pos in positions:
-            if pos['symbol'] == symbol and pos['contracts'] > 0:
-                pnl_percent = float(pos.get('percentage', 0))
+            if pos['symbol'] == symbol and float(pos.get('contracts') or 0) > 0:
+                pnl_percent = float(pos.get('percentage') or 0)
                 side = 'buy' if pos['side'] == 'long' else 'sell'
                 
                 fee_threshold = V75_BASE_FEE_RATE * V75_HEDGE_PROFIT_THRESHOLD_MULTIPLIER * leverage
@@ -2601,7 +2601,7 @@ def cleanup_orphan_orders():
                         has_position = False
                         
                         for pos in positions:
-                            if float(pos.get('contracts', 0)) != 0:
+                            if float(pos.get('contracts') or 0) != 0:
                                 has_position = True
                                 break
                         
@@ -8007,7 +8007,7 @@ def execute_position_exit(symbol, decision):
                 active_position = None
                 
                 for pos in positions:
-                    if float(pos.get('contracts', 0)) != 0:
+                    if float(pos.get('contracts') or 0) != 0:
                         active_position = pos
                         break
                 
@@ -8236,11 +8236,101 @@ emergency_drawdown_thread = None
 emergency_drawdown_warned = set()  # 경고 발송된 심볼 추적
 
 
+def _safe_float(value, default=0):
+    """None-safe float 변환 (ccxt 필드가 None일 수 있음)"""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value, default=0):
+    """None-safe int 변환"""
+    if value is None:
+        return default
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_active_positions(positions):
+    """
+    🆕 v7.9: ccxt fetch_positions 결과에서 활성 포지션만 안전하게 추출
+    contracts=None 시에도 크래시하지 않음
+    """
+    active = []
+    for p in positions:
+        try:
+            contracts = _safe_float(p.get('contracts'), 0)
+            if contracts != 0:
+                active.append(p)
+        except Exception:
+            continue
+    return active
+
+
+def _extract_position_data(pos):
+    """
+    🆕 v7.9: ccxt 포지션에서 EDP에 필요한 데이터를 안전하게 추출
+    percentage=None 시 raw info에서 직접 ROI 계산
+    심볼은 normalize_symbol() 적용
+    """
+    raw_symbol = pos.get('symbol', '')
+    symbol = normalize_symbol(raw_symbol)  # 🔧 BUG3 수정: BTC/USDT:USDT → BTC/USDT
+    side = pos.get('side', 'long')
+    
+    # ROI 계산 (percentage=None 방어) - 🔧 BUG2 수정
+    pct = pos.get('percentage')
+    if pct is not None:
+        roi = _safe_float(pct, 0)
+    else:
+        # percentage가 None → raw info에서 직접 계산
+        info = pos.get('info', {})
+        unrealized_pnl = _safe_float(info.get('unRealizedProfit'), 0)
+        entry_price_raw = _safe_float(info.get('entryPrice'), 0)
+        position_amt = abs(_safe_float(info.get('positionAmt'), 0))
+        leverage_raw = _safe_int(info.get('leverage'), 10)
+        
+        initial_margin = (position_amt * entry_price_raw / leverage_raw) if (leverage_raw > 0 and entry_price_raw > 0) else 0
+        roi = (unrealized_pnl / initial_margin * 100) if initial_margin > 0 else 0
+    
+    entry_price = _safe_float(pos.get('entryPrice'), 0)
+    if entry_price == 0:
+        entry_price = _safe_float(pos.get('info', {}).get('entryPrice'), 0)
+    
+    current_price = _safe_float(pos.get('markPrice'), 0)
+    if current_price == 0:
+        current_price = _safe_float(pos.get('info', {}).get('markPrice'), 0)
+    
+    leverage = _safe_int(pos.get('leverage'), 10)
+    if leverage == 0:
+        leverage = _safe_int(pos.get('info', {}).get('leverage'), 10)
+    
+    unrealized_pnl = _safe_float(pos.get('unrealizedPnl'), 0)
+    if unrealized_pnl == 0:
+        unrealized_pnl = _safe_float(pos.get('info', {}).get('unRealizedProfit'), 0)
+    
+    return {
+        'symbol': symbol,              # 정규화된 심볼 (BTC/USDT)
+        'raw_symbol': raw_symbol,       # 원본 심볼 (BTC/USDT:USDT) - 거래소 API용
+        'roi': roi,
+        'entry_price': entry_price,
+        'current_price': current_price,
+        'side': side,
+        'leverage': leverage,
+        'unrealized_pnl': unrealized_pnl,
+    }
+
+
 def emergency_drawdown_check_force_exit():
     """
     🆕 v7.9: 2단계 강제 청산 전용 - 고빈도 체크 (1분 간격)
     바이낸스 실제 PNL(레버리지 반영) 기준으로 판단
     current_positions 의존 없이 바이낸스 직접 조회
+    🔧 v7.9 bugfix: contracts/percentage None 방어, 심볼 정규화 적용
     """
     global current_positions, emergency_drawdown_warned
     
@@ -8248,23 +8338,23 @@ def emergency_drawdown_check_force_exit():
         return
     
     try:
-        # 🆕 바이낸스에서 직접 모든 활성 포지션 조회
+        # 바이낸스에서 직접 모든 활성 포지션 조회
         positions = exchange.fetch_positions()
-        active_positions = [p for p in positions if float(p.get('contracts', 0)) != 0]
+        active_positions = _parse_active_positions(positions)  # 🔧 BUG1 수정
         
         if not active_positions:
             return
         
         for pos in active_positions:
             try:
-                symbol = pos['symbol']
-                # 바이낸스 실제 PNL% (레버리지 반영된 값)
-                roi = float(pos.get('percentage', 0))
-                entry_price = float(pos.get('entryPrice', 0))
-                current_price = float(pos.get('markPrice', 0)) or float(pos.get('liquidationPrice', 0))
-                side = pos.get('side', 'long')
-                leverage = int(pos.get('leverage', 10))
-                unrealized_pnl = float(pos.get('unrealizedPnl', 0))
+                data = _extract_position_data(pos)  # 🔧 BUG2+3 수정
+                symbol = data['symbol']          # 정규화된 심볼
+                roi = data['roi']
+                entry_price = data['entry_price']
+                current_price = data['current_price']
+                side = data['side']
+                leverage = data['leverage']
+                unrealized_pnl = data['unrealized_pnl']
                 
                 # 🚨 강제 청산 임계값 체크
                 if roi <= EMERGENCY_DRAWDOWN_FORCE_EXIT:
@@ -8290,6 +8380,7 @@ def emergency_drawdown_check_force_exit():
                         success_count = close_position_for_all_users(symbol)
                         if success_count > 0:
                             logger.info(f"🚨 {symbol} 강제 청산 완료: {success_count}명")
+                            # 🔧 BUG3 수정: 정규화된 심볼로 current_positions 접근
                             if symbol in current_positions:
                                 record_completed_trade_with_binance(symbol, current_positions[symbol],
                                                                    close_reason='edp_force_exit')
@@ -8325,6 +8416,7 @@ def emergency_drawdown_check_warning():
     🆕 v7.9: 1단계 경고 + AI 집중 모니터링 (설정 간격)
     바이낸스 실제 PNL(레버리지 반영) 기준으로 판단
     current_positions 의존 없이 바이낸스 직접 조회
+    🔧 v7.9 bugfix: contracts/percentage None 방어, 심볼 정규화 적용
     """
     global current_positions, emergency_drawdown_warned
     
@@ -8332,9 +8424,9 @@ def emergency_drawdown_check_warning():
         return
     
     try:
-        # 🆕 바이낸스에서 직접 모든 활성 포지션 조회
+        # 바이낸스에서 직접 모든 활성 포지션 조회
         positions = exchange.fetch_positions()
-        active_positions = [p for p in positions if float(p.get('contracts', 0)) != 0]
+        active_positions = _parse_active_positions(positions)  # 🔧 BUG1 수정
         
         if not active_positions:
             return
@@ -8343,14 +8435,14 @@ def emergency_drawdown_check_warning():
         
         for pos in active_positions:
             try:
-                symbol = pos['symbol']
-                # 바이낸스 실제 PNL% (레버리지 반영된 값)
-                roi = float(pos.get('percentage', 0))
-                entry_price = float(pos.get('entryPrice', 0))
-                current_price = float(pos.get('markPrice', 0))
-                side = pos.get('side', 'long')
-                leverage = int(pos.get('leverage', 10))
-                unrealized_pnl = float(pos.get('unrealizedPnl', 0))
+                data = _extract_position_data(pos)  # 🔧 BUG2+3 수정
+                symbol = data['symbol']          # 정규화된 심볼
+                roi = data['roi']
+                entry_price = data['entry_price']
+                current_price = data['current_price']
+                side = data['side']
+                leverage = data['leverage']
+                unrealized_pnl = data['unrealized_pnl']
                 
                 # ⚠️ 경고 구간 (강제청산 구간은 force_exit 스레드가 처리)
                 if roi <= EMERGENCY_DRAWDOWN_WARNING and roi > EMERGENCY_DRAWDOWN_FORCE_EXIT:
@@ -8375,7 +8467,7 @@ def emergency_drawdown_check_warning():
                                 'warning'
                             )
                     
-                    # AI 모니터링 실행 (current_positions에 있는 경우만)
+                    # 🔧 BUG3 수정: 정규화된 심볼로 current_positions 접근
                     if symbol in current_positions:
                         logger.info(f"🔍 {symbol} AI 집중 모니터링 (ROI: {roi:+.2f}%, 바이낸스)")
                         try:
@@ -10169,8 +10261,8 @@ def execute_trade_for_all_users(symbol, action, amount_primary, stop_loss_price,
                 positions = user_exchange.fetch_positions([symbol])
                 total_position_amount = 0
                 for pos in positions:
-                    if float(pos.get('contracts', 0)) != 0:
-                        total_position_amount = abs(float(pos.get('contracts', 0)))
+                    if float(pos.get('contracts') or 0) != 0:
+                        total_position_amount = abs(float(pos.get('contracts') or 0))
                         break
                 
                 # 포지션이 없으면 진입 예정 수량 사용
@@ -10289,7 +10381,7 @@ def close_position_for_all_users(symbol):
             active_position = None
             
             for pos in positions:
-                if float(pos.get('contracts', 0)) != 0:
+                if float(pos.get('contracts') or 0) != 0:
                     active_position = pos
                     break
             
@@ -11820,7 +11912,7 @@ def close_position_api():
                 active_position = None
                 
                 for pos in positions:
-                    if float(pos.get('contracts', 0)) != 0:
+                    if float(pos.get('contracts') or 0) != 0:
                         active_position = pos
                         break
                 
@@ -11952,7 +12044,7 @@ def list_positions_api():
                 positions = user_exchange.fetch_positions()
                 
                 for pos in positions:
-                    if float(pos.get('contracts', 0)) != 0:
+                    if float(pos.get('contracts') or 0) != 0:
                         symbol = pos['symbol']
                         
                         if symbol not in all_positions:
@@ -11964,11 +12056,11 @@ def list_positions_api():
                         all_positions[symbol]['users'].append({
                             'user': user_name,
                             'side': pos['side'],
-                            'contracts': float(pos['contracts']),
-                            'entry_price': float(pos.get('entryPrice', 0)),
-                            'mark_price': float(pos.get('markPrice', 0)),
-                            'unrealized_pnl': float(pos.get('unrealizedPnl', 0)),
-                            'leverage': int(pos.get('leverage', 10))
+                            'contracts': float(pos.get('contracts') or 0),
+                            'entry_price': float(pos.get('entryPrice') or 0),
+                            'mark_price': float(pos.get('markPrice') or 0),
+                            'unrealized_pnl': float(pos.get('unrealizedPnl') or 0),
+                            'leverage': int(float(pos.get('leverage') or 10))
                         })
                         
             except Exception as e:
