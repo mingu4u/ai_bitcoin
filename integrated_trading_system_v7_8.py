@@ -1146,7 +1146,7 @@ class EmergencyTradingDecision(BaseModel):
 # ============ 다중 종목 설정 ============
 SYMBOL_CONFIG = {
     'BTC/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1155,7 +1155,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SAHARA/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1164,7 +1164,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ETH/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1173,7 +1173,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RESOLV/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1182,7 +1182,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'BIO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1191,7 +1191,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'UNI/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1200,7 +1200,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PENGU/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1209,7 +1209,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'UMA/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1218,7 +1218,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'COMP/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1227,7 +1227,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'XLM/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1236,7 +1236,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DOT/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1245,7 +1245,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ENA/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1254,7 +1254,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RLC/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1263,7 +1263,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ETHFI/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1272,7 +1272,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SOL/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1281,7 +1281,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PYTH/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1290,7 +1290,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'LINK/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1299,7 +1299,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ADA/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1308,7 +1308,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'XRP/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1317,7 +1317,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'BNB/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1326,7 +1326,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DOGE/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1335,7 +1335,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ACH/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1344,7 +1344,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'CRV/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1353,7 +1353,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RONIN/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1362,7 +1362,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'BCH/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1371,7 +1371,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'LSK/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1380,7 +1380,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'HBAR/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1389,7 +1389,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'AGLD/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1398,7 +1398,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ONDO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1407,7 +1407,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'HOME/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1416,7 +1416,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'TRX/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1425,7 +1425,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ASTER/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1434,7 +1434,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DASH/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1443,7 +1443,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'TRUMP/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1452,7 +1452,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SUI/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1461,7 +1461,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'WLD/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1470,7 +1470,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'GIGGLE/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1479,7 +1479,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'LTC/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1488,7 +1488,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'DUSK/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1497,7 +1497,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'FET/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1506,7 +1506,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PENDLE/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1515,7 +1515,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'FIL/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1524,7 +1524,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'AR/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1533,7 +1533,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'OG/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1542,7 +1542,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'F/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1551,7 +1551,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'TAO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1560,7 +1560,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'RAYSOL/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1569,7 +1569,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'COTI/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1578,7 +1578,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SOON/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1587,7 +1587,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'KERNEL/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1596,7 +1596,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SYN/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1605,7 +1605,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'HYPE/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1614,7 +1614,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'API3/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1623,7 +1623,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'KAITO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1632,7 +1632,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'AERO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1641,7 +1641,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'APT/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1650,7 +1650,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PIPPIN/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1659,7 +1659,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'NEAR/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1668,7 +1668,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'MANA/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1677,7 +1677,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'ZEC/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1686,7 +1686,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'POL/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1695,7 +1695,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'SAND/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1704,7 +1704,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'GOAT/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1713,7 +1713,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PARTI/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1722,7 +1722,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'FLOW/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1731,7 +1731,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'AAVE/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1740,7 +1740,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },   
     'PUMP/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1749,7 +1749,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'XPL/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1758,7 +1758,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'TON/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1767,7 +1767,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'ICP/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1776,7 +1776,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'HBAR/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1785,7 +1785,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'ATOM/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1794,7 +1794,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'OM/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1803,7 +1803,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'SENTI/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1812,7 +1812,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'ALLO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1821,7 +1821,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'AX/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1830,7 +1830,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'MIRA/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1839,7 +1839,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'RED/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1848,7 +1848,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'FOGO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1857,7 +1857,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'YB/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1866,7 +1866,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'ROSE/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1875,7 +1875,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'SYRUP/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1884,7 +1884,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'ENSO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1893,7 +1893,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'BERA/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1902,7 +1902,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'TAG/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1911,7 +1911,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'SENT/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1920,7 +1920,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'GMX/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1929,7 +1929,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },  
     'ANIME/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1938,7 +1938,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },  
     'RSR/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1947,7 +1947,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },  
     'DEGO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1956,7 +1956,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },  
     'PIXEL/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1965,7 +1965,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },
     'PROM/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1974,7 +1974,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     },  
     'TURBO/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
@@ -1983,7 +1983,7 @@ SYMBOL_CONFIG = {
         'ai_monitoring': True
     }, 
     'BMT/USDT': {
-        'leverage': 10,
+        'leverage': 5,
         'position_size_percent': 40,
         'min_position_size': 10,
         'max_position_size': 100000,
