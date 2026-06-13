@@ -278,18 +278,18 @@ USER_CONFIGS = {
         'secret_key_env': 'BINANCE_SECRET_KEY',
         'is_primary': True,  # AI 검증, DB, 텔레그램
     },
-    'USER2': {
-        'name': 'Hyun',
-        'api_key_env': 'BINANCE_API_KEY_HYUN',
-        'secret_key_env': 'BINANCE_SECRET_KEY_HYUN',
-        'is_primary': False,  # 주문만 실행
-    },
-    'USER3': {
-        'name': 'Hyuk',
-        'api_key_env': 'BINANCE_API_KEY_HYUK',
-        'secret_key_env': 'BINANCE_SECRET_KEY_HYUK',
-        'is_primary': False,  # 주문만 실행
-    }
+    # 'USER2': {
+    #     'name': 'Hyun',
+    #     'api_key_env': 'BINANCE_API_KEY_HYUN',
+    #     'secret_key_env': 'BINANCE_SECRET_KEY_HYUN',
+    #     'is_primary': False,  # 주문만 실행
+    # },
+    # 'USER3': {
+    #     'name': 'Hyuk',
+    #     'api_key_env': 'BINANCE_API_KEY_HYUK',
+    #     'secret_key_env': 'BINANCE_SECRET_KEY_HYUK',
+    #     'is_primary': False,  # 주문만 실행
+    # }
 }
 
 SERVER_PORT = 5000  # 하나의 서버에서 모든 유저 관리
