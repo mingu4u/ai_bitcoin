@@ -501,13 +501,14 @@ def main():
         st.stop()
     
     # 탭 생성
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📊 Trading Overview", 
         "📈 Performance Analysis", 
         "📜 Trade History",
         "🎯 Symbol Analytics",
         "🤖 AI Monitoring",
-        "🧠 AI Reflection"
+        "🧠 AI Reflection",
+        "⚙️ Position Control"
     ])
     
     # ==========================================
@@ -2364,6 +2365,159 @@ def main():
             import traceback
             st.text(traceback.format_exc())
     
+    # ==========================================
+    # Tab 7: Position Control (레버리지 / 진입 비중 조절)
+    # ==========================================
+    with tab7:
+        st.header("⚙️ Position Control")
+        st.caption("심볼별 또는 통합으로 레버리지와 진입 비중(자본 대비 %)을 조절합니다. 변경 즉시 봇에 반영되며, 레버리지는 거래소에도 적용됩니다.")
+
+        # 봇에서 현재 설정 로드
+        bot_config = {}
+        bot_online = False
+        try:
+            cfg_resp = requests.get(f"{TRADING_BOT_URL}/config", timeout=4)
+            if cfg_resp.status_code == 200:
+                bot_config = cfg_resp.json()
+                bot_online = True
+        except Exception:
+            bot_online = False
+
+        if not bot_online:
+            st.error("🔴 봇이 오프라인이거나 /config 응답이 없습니다. 봇 실행 상태를 확인하세요.")
+        elif not bot_config:
+            st.warning("심볼 설정이 비어 있습니다.")
+        else:
+            enabled_symbols = [s for s, c in bot_config.items() if c.get('enabled', False)]
+            st.success(f"🟢 봇 연결됨 · 전체 {len(bot_config)}개 심볼 (거래 활성 {len(enabled_symbols)}개)")
+
+            # ---------- (A) 통합 일괄 조절 ----------
+            st.markdown("---")
+            st.subheader("🌐 통합 일괄 조절")
+            st.caption("모든 심볼에 동일한 값을 한 번에 적용합니다.")
+
+            col_bulk1, col_bulk2, col_bulk3 = st.columns([1, 1, 1])
+            with col_bulk1:
+                bulk_scope = st.radio(
+                    "적용 대상",
+                    ["거래 활성 심볼만", "전체 심볼"],
+                    key="bulk_scope",
+                    help="거래 활성 심볼만: enabled=True인 심볼에만 적용"
+                )
+            with col_bulk2:
+                bulk_leverage = st.slider("레버리지 (배)", min_value=1, max_value=50, value=5, step=1, key="bulk_leverage")
+            with col_bulk3:
+                bulk_position = st.slider("진입 비중 (%)", min_value=1, max_value=100, value=40, step=1, key="bulk_position",
+                                          help="자본 대비 1회 진입에 사용할 비율")
+
+            col_bulk_apply1, col_bulk_apply2 = st.columns(2)
+            with col_bulk_apply1:
+                apply_lev = st.checkbox("레버리지 적용", value=True, key="bulk_apply_lev")
+            with col_bulk_apply2:
+                apply_pos = st.checkbox("진입 비중 적용", value=True, key="bulk_apply_pos")
+
+            if st.button("🚀 통합 적용", key="bulk_apply_btn", use_container_width=True, type="primary"):
+                if not apply_lev and not apply_pos:
+                    st.warning("적용할 항목을 최소 하나 선택하세요.")
+                else:
+                    target_symbols = enabled_symbols if bulk_scope == "거래 활성 심볼만" else list(bot_config.keys())
+                    payload = {}
+                    for sym in target_symbols:
+                        s_settings = {}
+                        if apply_lev:
+                            s_settings['leverage'] = int(bulk_leverage)
+                        if apply_pos:
+                            s_settings['position_size_percent'] = int(bulk_position)
+                        if s_settings:
+                            payload[sym] = s_settings
+                    try:
+                        resp = requests.post(f"{TRADING_BOT_URL}/config", json=payload, timeout=15)
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            st.success(f"✅ {len(payload)}개 심볼에 적용 완료!")
+                            lev_applied = data.get('leverage_applied', {})
+                            failed = [s for s, v in lev_applied.items() if v is None]
+                            if failed:
+                                st.warning(f"⚠️ 레버리지 거래소 반영 실패: {', '.join(failed[:10])}{' 외' if len(failed) > 10 else ''}")
+                            time_module.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(f"❌ 적용 실패 (HTTP {resp.status_code}): {resp.text[:200]}")
+                    except Exception as e:
+                        st.error(f"❌ 적용 오류: {e}")
+
+            # ---------- (B) 심볼별 개별 조절 ----------
+            st.markdown("---")
+            st.subheader("🎯 심볼별 개별 조절")
+
+            only_enabled = st.checkbox("거래 활성 심볼만 표시", value=True, key="indiv_only_enabled")
+            display_symbols = enabled_symbols if only_enabled else list(bot_config.keys())
+
+            search_q = st.text_input("🔍 심볼 검색", value="", key="indiv_search", placeholder="예: BTC").upper().strip()
+            if search_q:
+                display_symbols = [s for s in display_symbols if search_q in s.upper()]
+
+            if not display_symbols:
+                st.info("표시할 심볼이 없습니다.")
+            else:
+                st.caption(f"{len(display_symbols)}개 심볼 · 각 행에서 값을 조절하고 '저장'을 누르세요.")
+
+                # 헤더
+                h1, h2, h3, h4 = st.columns([2, 2, 2, 1])
+                h1.markdown("**심볼**")
+                h2.markdown("**레버리지 (배)**")
+                h3.markdown("**진입 비중 (%)**")
+                h4.markdown("**저장**")
+
+                for sym in display_symbols:
+                    cfg = bot_config.get(sym, {})
+                    cur_lev = int(cfg.get('leverage', 5))
+                    cur_pos = int(cfg.get('position_size_percent', 40))
+                    is_enabled = cfg.get('enabled', False)
+
+                    c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+                    with c1:
+                        badge = "🟢" if is_enabled else "⚪"
+                        st.markdown(f"{badge} `{sym}`")
+                    with c2:
+                        new_lev = st.number_input(
+                            "lev", min_value=1, max_value=50, value=cur_lev, step=1,
+                            key=f"lev_{sym}", label_visibility="collapsed"
+                        )
+                    with c3:
+                        new_pos = st.number_input(
+                            "pos", min_value=1, max_value=100, value=cur_pos, step=1,
+                            key=f"pos_{sym}", label_visibility="collapsed"
+                        )
+                    with c4:
+                        if st.button("💾", key=f"save_{sym}", use_container_width=True,
+                                     help=f"{sym} 설정 저장"):
+                            payload = {sym: {'leverage': int(new_lev), 'position_size_percent': int(new_pos)}}
+                            try:
+                                resp = requests.post(f"{TRADING_BOT_URL}/config", json=payload, timeout=10)
+                                if resp.status_code == 200:
+                                    data = resp.json()
+                                    lev_ok = data.get('leverage_applied', {}).get(sym, None)
+                                    if lev_ok is None:
+                                        st.warning(f"⚠️ {sym} 저장됨 (레버리지 거래소 반영은 실패 — 포지션 보유 중일 수 있음)")
+                                    else:
+                                        st.success(f"✅ {sym} 저장 완료 (레버리지 {lev_ok}x)")
+                                    time_module.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error(f"❌ 실패 (HTTP {resp.status_code})")
+                            except Exception as e:
+                                st.error(f"❌ 오류: {e}")
+
+            st.markdown("---")
+            st.info(
+                "ℹ️ **참고**\n"
+                "- 레버리지 변경은 **해당 심볼에 포지션이 없을 때** 거래소에 정상 반영됩니다. "
+                "포지션 보유 중에는 봇 설정값만 갱신되고 다음 진입부터 적용됩니다.\n"
+                "- 진입 비중은 다음 신호부터 적용되며, 이미 열린 포지션에는 영향을 주지 않습니다.\n"
+                "- 변경 값은 봇 메모리에 저장됩니다. 봇 재시작 시 코드의 기본값으로 돌아가니, 영구 적용은 `SYMBOL_CONFIG`도 함께 수정하세요."
+            )
+
     # 사이드바 - 설정 및 정보
     with st.sidebar:
         st.header("⚙️ Dashboard Settings")
