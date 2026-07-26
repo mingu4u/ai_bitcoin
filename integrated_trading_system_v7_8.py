@@ -2056,6 +2056,15 @@ SYMBOL_CONFIG = {
         'ai_validation': False,
         'ai_monitoring': False
     },
+    'AKE/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': False,
+        'ai_monitoring': False
+    },
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -11285,6 +11294,8 @@ def webhook():
             'MEGAUSDT.P': 'MEGA/USDT',  
             'AKTUSDT': 'AKT/USDT',
             'AKTUSDT.P': 'AKT/USDT',
+            'AKEUSDT': 'AKE/USDT',
+            'AKEUSDT.P': 'AKE/USDT',
         }
         
         original_symbol = symbol
