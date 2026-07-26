@@ -2065,6 +2065,51 @@ SYMBOL_CONFIG = {
         'ai_validation': False,
         'ai_monitoring': False
     },
+    'EUL/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': False,
+        'ai_monitoring': False
+    },
+    'CL/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': False,
+        'ai_monitoring': False
+    },
+    'US/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': False,
+        'ai_monitoring': False
+    },
+    'TRIA/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': False,
+        'ai_monitoring': False
+    },
+    'TAC/USDT': {
+        'leverage': 10,
+        'position_size_percent': 40,
+        'min_position_size': 10,
+        'max_position_size': 100000,
+        'enabled': True,
+        'ai_validation': False,
+        'ai_monitoring': False
+    },
 }
 
 # 🆕 v7.3: 심볼 정규화 함수
@@ -11296,6 +11341,16 @@ def webhook():
             'AKTUSDT.P': 'AKT/USDT',
             'AKEUSDT': 'AKE/USDT',
             'AKEUSDT.P': 'AKE/USDT',
+            'EULUSDT': 'EUL/USDT',
+            'EULUSDT.P': 'EUL/USDT',
+            'CLUUSDT': 'CL/USDT',
+            'CLUUSDT.P': 'CL/USDT',
+            'USUSDT': 'US/USDT',
+            'USUSDT.P': 'US/USDT',
+            'TRIAUSDT': 'TRIA/USDT',
+            'TRIAUSDT.P': 'TRIA/USDT',
+            'TACUSDT': 'TAC/USDT',
+            'TACUSDT.P': 'TAC/USDT',
         }
         
         original_symbol = symbol
