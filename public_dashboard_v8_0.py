@@ -2764,17 +2764,73 @@ def main():
         # 현재 시간
         st.info(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
-        # 봇 상태 확인
+        # 봇 상태 확인 (🆕 v8.0: /health 우선 — 내부 상태와 무관하게 생존 판정)
         bot_online = False
         try:
-            response = requests.get(f"{TRADING_BOT_URL}/status", timeout=2)
-            if response.status_code == 200:
-                st.success("🤖 Trading Bot: Online")
+            hresp = requests.get(f"{TRADING_BOT_URL}/health", timeout=3)
+            if hresp.status_code == 200:
+                hdata = hresp.json()
                 bot_online = True
+                if hdata.get('degraded'):
+                    st.warning("🟡 Trading Bot: Online (초기화 일부 실패)")
+                    st.error(f"초기화 오류: {hdata.get('startup_error')}")
+                    st.caption("서버의 bot.log 파일에서 전체 스택트레이스를 확인하세요.")
+                else:
+                    st.success(f"🤖 Trading Bot: Online  ·  {hdata.get('version', '')}")
+                st.caption(f"봇 서버 시각: {hdata.get('server_time', '-')}")
             else:
-                st.warning("🤖 Trading Bot: Error")
-        except:
-            st.error("🤖 Trading Bot: Offline")
+                st.warning(f"🤖 Trading Bot: Error (HTTP {hresp.status_code})")
+        except requests.exceptions.ConnectionError:
+            st.error("🤖 Trading Bot: Offline — 연결할 수 없습니다")
+            with st.expander("🔍 문제 해결 가이드", expanded=True):
+                st.markdown(f"""
+**확인 순서**
+
+1. **봇 프로세스 생존 확인**
+   ```
+   ps aux | grep integrated_trading_system
+   ```
+2. **시작 로그에서 원인 확인** (v8.0은 `bot.log`에 기록)
+   ```
+   tail -100 bot.log
+   ```
+3. **포트 점유 확인** — 이전 프로세스가 남아 있으면 새 프로세스가 바인딩 실패
+   ```
+   lsof -i :5000
+   kill -9 <PID>   # 남아있는 구 프로세스 종료 후 재실행
+   ```
+4. **직접 호출 테스트**
+   ```
+   curl {TRADING_BOT_URL}/health
+   ```
+5. **주소 확인** — 현재 대시보드가 보는 주소: `{TRADING_BOT_URL}`
+   봇이 다른 호스트/포트면 `TRADING_BOT_URL`을 수정하세요.
+
+> v8.0부터는 초기화가 실패해도 서버는 기동되어 `/health`가 응답합니다.
+> 그래도 Offline이면 **프로세스가 아예 뜨지 않은 것**이므로 `bot.log` 마지막 줄을 확인하세요.
+                """)
+        except Exception as e:
+            st.error(f"🤖 Trading Bot: Offline — {type(e).__name__}: {e}")
+
+        # 상세 상태(/status)는 온라인일 때만 조회
+        if bot_online:
+            try:
+                sresp = requests.get(f"{TRADING_BOT_URL}/status", timeout=4)
+                if sresp.status_code == 200:
+                    sdata = sresp.json()
+                    rg = sdata.get('repaint_guard', {})
+                    if rg:
+                        rc1, rc2, rc3 = st.columns(3)
+                        with rc1:
+                            st.metric("🛡️ 리페인팅 방어", "ON" if rg.get('enabled') else "OFF")
+                        with rc2:
+                            st.metric("차단 중", f"{rg.get('blocked_now', 0)}개")
+                        with rc3:
+                            st.metric("누적 감지", f"{rg.get('anomaly_count', 0)}건")
+                else:
+                    st.caption(f"⚠️ /status 응답 이상 (HTTP {sresp.status_code}) — 봇은 살아있음")
+            except Exception as e:
+                st.caption(f"⚠️ /status 조회 실패: {e} (봇은 살아있음)")
         
         st.markdown("---")
         

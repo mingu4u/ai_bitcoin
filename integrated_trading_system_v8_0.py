@@ -1070,6 +1070,16 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - [Multi-User Server] - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# 🆕 v8.0: 파일 로깅 추가 — 시작 실패 시 원인을 파일에서 확인 가능
+try:
+    _fh = logging.FileHandler('bot.log', encoding='utf-8')
+    _fh.setLevel(logging.INFO)
+    _fh.setFormatter(logging.Formatter(
+        '%(asctime)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s'))
+    logging.getLogger().addHandler(_fh)
+except Exception as _e:
+    print(f"파일 로깅 설정 실패(무시): {_e}")
+
 # Flask 로깅 레벨 조정
 import logging as flask_logging
 flask_logging.getLogger('werkzeug').setLevel(flask_logging.WARNING)
@@ -3609,8 +3619,9 @@ def init_db_once():
                  ON balance_history(timestamp DESC)''')
     
     conn.commit()
+    conn.close()   # 🆕 v8.0: 신규 DB 경로에서 연결이 닫히지 않던 누수 수정
     logger.info("✅ DB 초기화 완료 (프로그램 시작, position_type 지원)")
-    return conn
+    return None
 
 # ============ Technical Indicators 추가 ============
 def add_indicators(df):
@@ -12504,6 +12515,27 @@ def force_monitor():
 # ============================================================================
 # 🆕 v8.0: 이상 현상(리페인팅) API — 대시보드 연동
 # ============================================================================
+# ============================================================================
+# 🆕 v8.0: 초경량 헬스체크 — 어떤 내부 상태에도 의존하지 않음
+#   /status는 DB·거래소·전역상태를 참조하므로 그중 하나만 문제여도 500이 난다.
+#   대시보드의 온라인 판정은 이 엔드포인트를 우선 사용한다.
+# ============================================================================
+@app.route('/health', methods=['GET'])
+def health_check():
+    try:
+        startup_error = app.config.get('STARTUP_ERROR')
+    except Exception:
+        startup_error = None
+    return jsonify({
+        'status': 'ok',
+        'alive': True,
+        'server_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'startup_error': startup_error,          # 초기화 실패 시 원인 노출
+        'degraded': startup_error is not None,
+        'version': 'v8.0'
+    }), 200
+
+
 @app.route('/anomalies', methods=['GET'])
 def get_anomalies():
     """이상 현상 로그 조회 (대시보드 '이상 감지' 탭용)"""
@@ -13758,5 +13790,36 @@ def initialize_bot():
         send_telegram_notification(startup_message, 'success')
 
 if __name__ == '__main__':
-    initialize_bot()
+    # 🆕 v8.0: 초기화 중 예외가 나도 서버는 반드시 기동시킨다.
+    #   기존에는 initialize_bot()에서 예외가 나면 프로세스가 죽어
+    #   대시보드에 "Trading Bot: Offline"만 뜨고 원인을 알 수 없었음.
+    #   이제 실패해도 Flask가 떠서 /health·/status로 상태와 원인을 확인 가능.
+    startup_error = None
+    try:
+        initialize_bot()
+        logger.info("✅ 봇 초기화 완료")
+    except Exception as e:
+        import traceback
+        startup_error = f"{type(e).__name__}: {e}"
+        logger.error("=" * 70)
+        logger.error(f"❌ 봇 초기화 실패 (서버는 계속 기동합니다): {startup_error}")
+        logger.error(traceback.format_exc())
+        logger.error("=" * 70)
+        try:
+            if ENABLE_TELEGRAM:
+                send_telegram_notification(
+                    f"❌ <b>봇 초기화 실패</b>\n\n"
+                    f"<b>오류:</b> {startup_error}\n\n"
+                    f"서버는 기동되었으나 일부 기능이 동작하지 않을 수 있습니다.\n"
+                    f"bot.log를 확인하세요.\n\n"
+                    f"⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    'error'
+                )
+        except Exception:
+            pass
+
+    # 초기화 실패 원인을 /health 로 노출
+    app.config['STARTUP_ERROR'] = startup_error
+
+    logger.info(f"🚀 서버 기동: 0.0.0.0:{SERVER_PORT}")
     app.run(host='0.0.0.0', port=SERVER_PORT, debug=False, threaded=True)  # 명시적 멀티스레드 설정
