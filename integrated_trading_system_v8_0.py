@@ -1070,9 +1070,15 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - [Multi-User Server] - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# 🆕 v8.0: DB 경로 절대화 — 실행 위치(cwd)가 달라도 항상 같은 파일을 보게 함
+#   기존: 'integrated_trades.db' 상대경로 → 봇과 대시보드를 서로 다른 폴더에서 실행하면
+#         각자 다른 DB 파일을 만들어 "no such table: completed_trades" 발생
+DB_PATH = os.getenv('DB_PATH') or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'integrated_trades.db')
+
 # 🆕 v8.0: 파일 로깅 추가 — 시작 실패 시 원인을 파일에서 확인 가능
 try:
-    _fh = logging.FileHandler('bot.log', encoding='utf-8')
+    _fh = logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'bot.log'), encoding='utf-8')
     _fh.setLevel(logging.INFO)
     _fh.setFormatter(logging.Formatter(
         '%(asctime)s - %(levelname)s - [%(funcName)s:%(lineno)d] - %(message)s'))
@@ -3486,42 +3492,30 @@ def record_position_history(exchange):
 
 def get_db_connection():
     """DB 연결 반환 (초기화 메시지 없음)"""
-    return sqlite3.connect('integrated_trades.db')
+    return sqlite3.connect(DB_PATH)
 
 # init_db 별칭 (호환성 유지)
 init_db = get_db_connection
 
 def init_db_once():
     """DB 초기화 - 프로그램 시작 시 1회만 실행 (🆕 position_type 지원)"""
-    conn = sqlite3.connect('integrated_trades.db')
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
-    # 테이블 존재 여부 확인
-    c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table'")
-    table_count = c.fetchone()[0]
-    
-    if table_count >= 4:  # 이미 초기화됨
-        # 🆕 기존 테이블에 position_type 컬럼이 없으면 추가 (마이그레이션)
-        try:
-            c.execute("SELECT position_type FROM completed_trades LIMIT 1")
-        except sqlite3.OperationalError:
-            logger.info("🔧 completed_trades 테이블에 position_type 컬럼 추가 중...")
-            c.execute("ALTER TABLE completed_trades ADD COLUMN position_type TEXT DEFAULT 'auto'")
-            conn.commit()
-            logger.info("✅ position_type 컬럼 추가 완료")
-        
-        # 🆕 v7.1 대시보드 호환: realized_pnl_binance 컬럼 추가
-        try:
-            c.execute("SELECT realized_pnl_binance FROM completed_trades LIMIT 1")
-        except sqlite3.OperationalError:
-            logger.info("🔧 completed_trades 테이블에 realized_pnl_binance 컬럼 추가 중...")
-            c.execute("ALTER TABLE completed_trades ADD COLUMN realized_pnl_binance REAL DEFAULT NULL")
-            conn.commit()
-            logger.info("✅ realized_pnl_binance 컬럼 추가 완료 (대시보드 호환)")
-        
-        conn.close()
-        return
-    
+    logger.info(f"📂 DB 경로: {DB_PATH}")
+
+    # ========================================================================
+    # 🆕 v8.0 [중요 버그 수정] 완전 멱등화
+    #   기존 문제: 'table_count >= 4'이면 테이블 생성을 통째로 건너뛰고
+    #   곧바로 ALTER TABLE completed_trades 를 실행했음.
+    #   → 테이블이 일부만 존재하는 DB(예: 다른 도구가 만든 파일, 생성 중단 등)에서는
+    #     SELECT가 OperationalError로 잡히고 그 안의 ALTER가 다시
+    #     "no such table: completed_trades" 예외를 던지는데 이건 잡히지 않아
+    #     initialize_bot()이 죽고 서버가 기동되지 않았다.
+    #   → 이제 CREATE TABLE IF NOT EXISTS 를 '항상' 실행하고,
+    #     마이그레이션은 테이블 존재를 확인한 뒤에만 시도한다.
+    # ========================================================================
+    # (마이그레이션은 테이블 생성 이후에 수행 — 아래 run_migrations 참조)
+
     # 1. 실시간 거래 테이블 (기존)
     c.execute('''CREATE TABLE IF NOT EXISTS trades
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3619,8 +3613,53 @@ def init_db_once():
                  ON balance_history(timestamp DESC)''')
     
     conn.commit()
+
+    # ========================================================================
+    # 🆕 v8.0: 안전한 스키마 마이그레이션 (테이블 존재 확인 후에만 ALTER)
+    # ========================================================================
+    def _table_exists(cur, name):
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (name,))
+        return cur.fetchone() is not None
+
+    def _column_exists(cur, table, column):
+        try:
+            cur.execute(f"PRAGMA table_info({table})")
+            return any(row[1] == column for row in cur.fetchall())
+        except sqlite3.OperationalError:
+            return False
+
+    migrations = [
+        ('completed_trades', 'position_type', "TEXT DEFAULT 'auto'"),
+        ('completed_trades', 'realized_pnl_binance', "REAL DEFAULT NULL"),
+    ]
+    for tbl, col, coldef in migrations:
+        try:
+            if not _table_exists(c, tbl):
+                logger.warning(f"⚠️ 마이그레이션 건너뜀: {tbl} 테이블 없음")
+                continue
+            if _column_exists(c, tbl, col):
+                continue
+            logger.info(f"🔧 {tbl}.{col} 컬럼 추가 중...")
+            c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} {coldef}")
+            conn.commit()
+            logger.info(f"✅ {tbl}.{col} 추가 완료")
+        except Exception as e:
+            logger.error(f"❌ 마이그레이션 실패({tbl}.{col}) — 계속 진행: {e}")
+
+    # 최종 검증
+    try:
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        tables = [r[0] for r in c.fetchall()]
+        logger.info(f"✅ DB 테이블 {len(tables)}개: {', '.join(tables)}")
+        required = ['trades', 'completed_trades', 'balance_history']
+        missing = [t for t in required if t not in tables]
+        if missing:
+            logger.error(f"❌ 필수 테이블 누락: {missing}")
+    except Exception as e:
+        logger.warning(f"⚠️ 테이블 검증 생략: {e}")
+
     conn.close()   # 🆕 v8.0: 신규 DB 경로에서 연결이 닫히지 않던 누수 수정
-    logger.info("✅ DB 초기화 완료 (프로그램 시작, position_type 지원)")
+    logger.info("✅ DB 초기화 완료 (멱등 실행, 안전 마이그레이션)")
     return None
 
 # ============ Technical Indicators 추가 ============

@@ -50,6 +50,13 @@ EVENT_POLL_INTERVAL = 2
 AUTO_REFRESH_INTERVAL = 3
 TRADING_BOT_URL = "http://localhost:5000"
 
+# 🆕 v8.0: DB 경로 통일 — 봇과 반드시 같은 파일을 보게 함
+#   기존엔 'integrated_trades.db' 상대경로라 대시보드를 다른 폴더에서 실행하면
+#   빈 DB를 새로 만들어 "no such table: completed_trades" 오류가 났음.
+#   봇과 동일하게 DB_PATH 환경변수를 우선 사용한다.
+DB_PATH = os.getenv('DB_PATH') or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'integrated_trades.db')
+
 # ============================================================================
 # 🆕 v8.0: 반응성 개선 인프라 (캐싱 + 프래그먼트)
 # ============================================================================
@@ -105,10 +112,10 @@ def bot_api_post(path, payload=None, timeout=8):
 
 
 @st.cache_data(ttl=CACHE_TTL_SLOW, show_spinner=False)
-def cached_db_query(query, db_path='integrated_trades.db'):
+def cached_db_query(query, db_path=None):
     """DB 조회 결과 캐시 (집계 쿼리 재실행 제거)"""
     try:
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path or DB_PATH)
         df = pd.read_sql_query(query, conn)
         conn.close()
         return df
@@ -398,7 +405,7 @@ def close_position_api(symbol, reason="Manual close from dashboard"):
 def get_or_set_initial_balance():
     """초기 잔고 가져오기 또는 설정"""
     try:
-        conn = sqlite3.connect('integrated_trades.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         
         c.execute("""
@@ -427,7 +434,7 @@ def get_or_set_initial_balance():
 def get_or_set_lifetime_start_balance():
     """전체 기간 시작 잔고"""
     try:
-        conn = sqlite3.connect('integrated_trades.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         
         c.execute("""
@@ -460,7 +467,7 @@ def get_or_set_lifetime_start_balance():
 def calculate_lifetime_performance(current_balance, lifetime_start_balance):
     """Lifetime 성과 계산"""
     try:
-        conn = sqlite3.connect('integrated_trades.db')
+        conn = sqlite3.connect(DB_PATH)
         
         query = """
         SELECT 
@@ -502,7 +509,7 @@ def calculate_lifetime_performance(current_balance, lifetime_start_balance):
 def calculate_period_performance(current_balance, initial_balance, days):
     """특정 기간 성과 계산"""
     try:
-        conn = sqlite3.connect('integrated_trades.db')
+        conn = sqlite3.connect(DB_PATH)
         
         query = f"""
         SELECT 
@@ -546,7 +553,7 @@ def calculate_period_performance(current_balance, initial_balance, days):
 def get_equity_history(current_balance, days=None, lifetime_start_balance=None):
     """자산 추이 데이터 가져오기"""
     try:
-        conn = sqlite3.connect('integrated_trades.db')
+        conn = sqlite3.connect(DB_PATH)
         
         if days:
             query = f"""
@@ -1001,7 +1008,7 @@ def main():
                 # ===================================
                 # 30일 통계 (v6)
                 # ===================================
-                conn = sqlite3.connect('integrated_trades.db')
+                conn = sqlite3.connect(DB_PATH)
                 
                 stats_query = """
                 SELECT 
@@ -1340,7 +1347,7 @@ def main():
         st.header("📜 Trade History")
         
         try:
-            conn = sqlite3.connect('integrated_trades.db')
+            conn = sqlite3.connect(DB_PATH)
             
             # 기간 필터
             col1, col2 = st.columns([1, 3])
@@ -1453,7 +1460,7 @@ def main():
         st.header("🎯 Symbol Analytics")
         
         try:
-            conn = sqlite3.connect('integrated_trades.db')
+            conn = sqlite3.connect(DB_PATH)
             
             # 기간 선택
             col1, col2 = st.columns([1, 3])
@@ -1879,7 +1886,7 @@ def main():
             st.subheader("📊 최근 AI 모니터링 기록")
             
             try:
-                conn = sqlite3.connect('integrated_trades.db')
+                conn = sqlite3.connect(DB_PATH)
                 
                 ai_query = """
                 SELECT 
@@ -1943,7 +1950,7 @@ def main():
             st.subheader("📈 AI 통계")
             
             try:
-                conn = sqlite3.connect('integrated_trades.db')
+                conn = sqlite3.connect(DB_PATH)
                 
                 # AI 통계 조회
                 stats_query = """
@@ -2013,7 +2020,7 @@ def main():
             """)
         
         try:
-            conn = sqlite3.connect('integrated_trades.db')
+            conn = sqlite3.connect(DB_PATH)
             
             # ==========================================
             # 🆕 v7.7: 종합 분석 섹션 (reflection_history 테이블)
